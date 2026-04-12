@@ -233,6 +233,10 @@ code.inline-code{background:rgba(124,58,237,.15);color:#c4b5fd;padding:1px 6px;b
     </optgroup>
   </select>
   <div class="topbar-right">
+    <div id="gw-indicator" title="Hermes Gateway 状态" style="display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:12px;background:var(--bg-card);border:1px solid var(--border);font-size:11px;color:var(--text-muted);cursor:default">
+      <div id="gw-dot" style="width:7px;height:7px;border-radius:50%;background:var(--text-muted);transition:background .3s"></div>
+      <span id="gw-label">Gateway...</span>
+    </div>
     <div id="status-dot" title="API 状态"></div>
     <span id="status-label">检测中...</span>
     <button id="login-btn" onclick="openLogin()">登录</button>
@@ -485,6 +489,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadConfig()
 })
 
+async function checkGatewayStatus() {
+  try {
+    const data = await fetch('/api/gateway/health').then(r => r.json())
+    const running = data.running
+    document.getElementById('gw-dot').style.background = running ? 'var(--green)' : 'var(--red)'
+    document.getElementById('gw-label').textContent = running ? '⚡ Hermes Gateway' : '⚠ Gateway 未运行'
+    document.getElementById('gw-indicator').title = running
+      ? '消息通过 Hermes Agent Gateway (port 8642) 发送'
+      : 'Hermes Agent Gateway 未运行！请重新启动或返回安装向导配置。'
+    document.getElementById('gw-indicator').style.borderColor = running ? 'var(--border)' : 'var(--red)'
+    // also update gateway tab card
+    const procStatus = document.getElementById('gw-proc-status')
+    const procDot = document.getElementById('gw-proc-dot')
+    if (procStatus) procStatus.textContent = running ? '运行中 (port 8642)' : '未运行'
+    if (procDot) procDot.className = 'sc-dot ' + (running ? 'ok' : 'err')
+  } catch(e) {
+    document.getElementById('gw-label').textContent = 'Gateway 离线'
+  }
+}
+
 async function loadConfig() {
   try {
     const data = await fetch('/api/config/read').then(r => r.json())
@@ -495,6 +519,8 @@ async function loadConfig() {
     if (!hasKey) {
       document.getElementById('status-dot').className = 'err'
     }
+    // check gateway
+    checkGatewayStatus()
 
     // fill settings form
     const m = data.model || {}
@@ -545,9 +571,9 @@ function syncTopSelect(m) {
 }
 
 async function loadGatewayStatus() {
+  checkGatewayStatus()
   try {
     const data = await fetch('/api/status').then(r => r.json())
-    setDot('gw-proc-dot', 'gw-proc-status', data.gateway_running, '运行中', '已停止')
     setDot('gw-weixin-dot', 'gw-weixin-status', data.weixin_connected, '已连接', '未连接')
   } catch(e) {
     document.getElementById('gw-proc-status').textContent = '无法检测'

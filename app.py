@@ -37,6 +37,7 @@ if sys.platform == "win32":
 else:
     HERMES_PYTHON = HERMES_AGENT / "venv" / "bin" / "python3"
 HERMES_REPO = "https://github.com/nousresearch/hermes-agent"
+HERMES_GATEWAY_URL = "http://127.0.0.1:8642"   # Hermes Agent API server
 
 ILINK_BASE = "https://ilinkai.weixin.qq.com"
 ILINK_HEADERS = {
@@ -725,131 +726,46 @@ async def api_config_advanced(cfg: AdvancedConfig):
 
 
 # ---------------------------------------------------------------------------
-# POST /api/chat/stream  — SSE streaming chat
+# Hermes Gateway helpers
 # ---------------------------------------------------------------------------
 
-
-class ChatRequest(BaseModel):
-    messages: list  # [{"role": "user"/"assistant", "content": "..."}]
-    reasoning_effort: str = "medium"
-    system_prompt: str = ""
-
-
-async def _stream_anthropic_gen(
-    req: ChatRequest, model_name: str, base_url: str, api_key: str, provider: str
-) -> AsyncGenerator[str, None]:
-    """Stream via Anthropic Messages API (MiniMax / Anthropic compatible)."""
-    headers = {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-    }
-    is_minimax = "minimax.io" in base_url or "minimaxi.com" in base_url
-    if is_minimax:
-        headers["Authorization"] = f"Bearer {api_key}"
-    else:
-        headers["x-api-key"] = api_key
-        headers["anthropic-beta"] = "interleaved-thinking-2025-05-14"
-
-    messages = [m for m in req.messages if str(m.get("content", "")).strip()]
-
-    body: dict = {
-        "model": model_name,
-        "max_tokens": 8192,
-        "messages": messages,
-        "stream": True,
-    }
-    if req.system_prompt:
-        body["system"] = req.system_prompt
-
-    effort_map = {"low": 4000, "medium": 8000, "high": 16000}
-    if req.reasoning_effort != "off" and not is_minimax:
-        body["thinking"] = {
-            "type": "enabled",
-            "budget_tokens": effort_map.get(req.reasoning_effort, 8000),
-        }
-        body["temperature"] = 1
-
-    url = base_url.rstrip("/") + "/v1/messages"
-
+async def _hermes_gateway_running() -> bool:
+    """Return True if the Hermes API server is reachable on port 8642."""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                headers=headers,
-                json=body,
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                if resp.status != 200:
-                    err = await resp.text()
-                    yield f"data: {json.dumps({'type':'error','message':f'API错误 {resp.status}: {err[:300]}'})}\n\n"
-                    return
-
-                async for raw_line in resp.content:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        evt = json.loads(data_str)
-                    except Exception:
-                        continue
-
-                    evt_type = evt.get("type", "")
-
-                    if evt_type == "content_block_delta":
-                        delta = evt.get("delta", {})
-                        if delta.get("type") == "thinking_delta":
-                            text = delta.get("thinking", "")
-                            if text:
-                                yield f"data: {json.dumps({'type':'reasoning_delta','text':text})}\n\n"
-                        elif delta.get("type") == "text_delta":
-                            text = delta.get("text", "")
-                            if text:
-                                yield f"data: {json.dumps({'type':'text_delta','text':text})}\n\n"
-                    elif evt_type == "message_stop":
-                        break
-
-                    await asyncio.sleep(0)
-
-                yield f"data: {json.dumps({'type':'done'})}\n\n"
-    except Exception as exc:
-        yield f"data: {json.dumps({'type':'error','message':str(exc)})}\n\n"
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                f"{HERMES_GATEWAY_URL}/health",
+                timeout=aiohttp.ClientTimeout(total=2),
+            ) as r:
+                return r.status == 200
+    except Exception:
+        return False
 
 
-async def _stream_openai_gen(
-    req: ChatRequest, model_name: str, base_url: str, api_key: str
-) -> AsyncGenerator[str, None]:
-    """Stream via OpenAI-compatible Chat Completions API."""
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+async def _stream_hermes_gen(req: "ChatRequest") -> AsyncGenerator[str, None]:
+    """Route chat through Hermes Agent's OpenAI-compatible gateway (port 8642)."""
     messages = [m for m in req.messages if str(m.get("content", "")).strip()]
     if req.system_prompt:
         messages = [{"role": "system", "content": req.system_prompt}] + messages
 
     body = {
-        "model": model_name,
+        "model": "hermes-agent",
         "messages": messages,
         "stream": True,
         "max_tokens": 8192,
     }
 
-    url = base_url.rstrip("/") + "/chat/completions"
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                url,
-                headers=headers,
+                f"{HERMES_GATEWAY_URL}/v1/chat/completions",
+                headers={"Content-Type": "application/json"},
                 json=body,
-                timeout=aiohttp.ClientTimeout(total=120),
+                timeout=aiohttp.ClientTimeout(total=300),
             ) as resp:
                 if resp.status != 200:
                     err = await resp.text()
-                    yield f"data: {json.dumps({'type':'error','message':f'API错误 {resp.status}: {err[:300]}'})}\n\n"
+                    yield f"data: {json.dumps({'type':'error','message':f'Hermes Gateway 错误 {resp.status}: {err[:300]}'})}\n\n"
                     return
 
                 async for raw_line in resp.content:
@@ -864,7 +780,10 @@ async def _stream_openai_gen(
                     except Exception:
                         continue
 
-                    delta = evt.get("choices", [{}])[0].get("delta", {})
+                    choices = evt.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
                     text = delta.get("content", "")
                     if text:
                         yield f"data: {json.dumps({'type':'text_delta','text':text})}\n\n"
@@ -876,44 +795,38 @@ async def _stream_openai_gen(
         yield f"data: {json.dumps({'type':'error','message':str(exc)})}\n\n"
 
 
+# ---------------------------------------------------------------------------
+# POST /api/chat/stream  — SSE streaming chat
+# ---------------------------------------------------------------------------
+
+
+class ChatRequest(BaseModel):
+    messages: list  # [{"role": "user"/"assistant", "content": "..."}]
+    reasoning_effort: str = "medium"
+    system_prompt: str = ""
+
+
+
+@app.get("/api/gateway/health")
+async def api_gateway_health():
+    """Check if Hermes Agent gateway (port 8642) is running."""
+    running = await _hermes_gateway_running()
+    return {"running": running, "url": HERMES_GATEWAY_URL}
+
+
 @app.post("/api/chat/stream")
 async def api_chat_stream(req: ChatRequest):
-    config: dict = {}
-    if HERMES_CONFIG.exists():
-        try:
-            config = yaml.safe_load(HERMES_CONFIG.read_text()) or {}
-        except Exception:
-            pass
-    env = read_env()
-    model_cfg = config.get("model", {})
-    provider = model_cfg.get("provider", "minimax")
-    model_name = model_cfg.get("default", "MiniMax-M2.5")
-    base_url = model_cfg.get("base_url", "https://api.minimax.io/anthropic")
-    api_mode = model_cfg.get("api_mode", "anthropic_messages")
+    # 所有请求必须经过 Hermes Agent Gateway（port 8642）
+    if not await _hermes_gateway_running():
+        async def _no_gateway() -> AsyncGenerator[str, None]:
+            yield f"data: {json.dumps({'type':'error','message':'⚠️ Hermes Agent Gateway 未运行（port 8642）。\\n\\n请重新启动 Hermes Agent，或返回安装向导重新配置。'})}\n\n"
+        return StreamingResponse(
+            _no_gateway(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
-    key_map: dict[str, list[str]] = {
-        "minimax": ["MINIMAX_API_KEY", "MINIMAX_PORTAL_API_KEY"],
-        "minimax-cn": ["MINIMAX_CN_API_KEY"],
-        "anthropic": ["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"],
-        "openrouter": ["OPENROUTER_API_KEY"],
-    }
-    api_key = ""
-    for k in key_map.get(provider, ["MINIMAX_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"]):
-        v = env.get(k, "").strip()
-        if v:
-            api_key = v
-            break
-
-    if not api_key:
-        async def _no_key() -> AsyncGenerator[str, None]:
-            yield f"data: {json.dumps({'type':'error','message':'未配置 API Key，请在左下角设置中添加'})}\n\n"
-        return StreamingResponse(_no_key(), media_type="text/event-stream")
-
-    if api_mode == "anthropic_messages":
-        gen = _stream_anthropic_gen(req, model_name, base_url, api_key, provider)
-    else:
-        gen = _stream_openai_gen(req, model_name, base_url, api_key)
-
+    gen = _stream_hermes_gen(req)
     return StreamingResponse(
         gen,
         media_type="text/event-stream",
