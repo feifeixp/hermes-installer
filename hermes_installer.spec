@@ -55,14 +55,15 @@ if IS_WIN:
 
 # ── Analysis ───────────────────────────────────────────────────────────────
 a = Analysis(
-    ["main.py"],
+    ["main.py", "app.py"],      # explicitly analyse app.py so it's bundled
     pathex=["."],
     binaries=[],
     datas=[
         ("index.html", "."),    # installer wizard UI
         ("chat.html",  "."),    # chat interface UI
+        ("app.py",     "."),    # fallback: include as raw file too
     ],
-    hiddenimports=HIDDEN_IMPORTS,
+    hiddenimports=HIDDEN_IMPORTS + ["app"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

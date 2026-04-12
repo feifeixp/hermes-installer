@@ -10,12 +10,16 @@ import socket
 from pathlib import Path
 
 # ── PyInstaller bundle path fix ────────────────────────────────────────────
-# When frozen by PyInstaller, resources live in sys._MEIPASS (one-dir mode).
+# sys._MEIPASS is where onefile extracts; __file__'s parent for dev mode.
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys._MEIPASS)
-    sys.path.insert(0, str(BASE_DIR))
+    # Insert at position 0 so local app.py is found before any installed 'app'
+    if str(BASE_DIR) not in sys.path:
+        sys.path.insert(0, str(BASE_DIR))
 else:
     BASE_DIR = Path(__file__).parent
+    if str(BASE_DIR) not in sys.path:
+        sys.path.insert(0, str(BASE_DIR))
 
 os.environ["HERMES_INSTALLER_BASE_DIR"] = str(BASE_DIR)
 
@@ -25,7 +29,20 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import uvicorn
-from app import app as fastapi_app
+try:
+    from app import app as fastapi_app
+except ModuleNotFoundError as _e:
+    import traceback, tkinter.messagebox as _mb
+    _msg = (
+        f"启动失败：无法加载 app 模块\n\n{_e}\n\n"
+        f"BASE_DIR: {BASE_DIR}\n"
+        f"sys.path[0]: {sys.path[0]}"
+    )
+    try:
+        _mb.showerror("Hermes Installer — 启动错误", _msg)
+    except Exception:
+        print(_msg, file=sys.stderr)
+    sys.exit(1)
 
 PORT = 7891
 
