@@ -2,8 +2,8 @@
 """
 PyInstaller spec for Hermes Agent Installer.
 Produces:
-  macOS  → dist/Hermes Installer.app  (+ .dmg via build.sh)
-  Windows → dist/Hermes Installer/Hermes Installer.exe  (+ .zip via build.bat)
+  macOS   → dist/Hermes Installer.app  (+ .dmg via build.sh)
+  Windows → dist/Hermes Installer.exe  (single file, via build.bat)
 """
 
 import sys
@@ -59,7 +59,8 @@ a = Analysis(
     pathex=["."],
     binaries=[],
     datas=[
-        ("index.html", "."),    # UI HTML bundled alongside executable
+        ("index.html", "."),    # installer wizard UI
+        ("chat.html",  "."),    # chat interface UI
     ],
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
@@ -75,38 +76,61 @@ a = Analysis(
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 # ── EXE ───────────────────────────────────────────────────────────────────
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name="Hermes Installer",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,                          # No black terminal window
-    disable_windowed_traceback=False,
-    argv_emulation=IS_MAC,                  # macOS open-with file association
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon="icon.icns" if (IS_MAC and Path("icon.icns").exists()) else (
-         "icon.ico"  if (IS_WIN and Path("icon.ico").exists())  else None
-    ),
-)
+# Windows → onefile (single .exe, no _internal folder)
+# macOS   → onedir  (needed for .app bundle structure)
+if IS_WIN:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,     # embed everything into one file on Windows
+        a.zipfiles,
+        a.datas,
+        exclude_binaries=False,
+        name="Hermes Installer",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon="icon.ico" if Path("icon.ico").exists() else None,
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name="Hermes Installer",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=IS_MAC,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon="icon.icns" if (IS_MAC and Path("icon.icns").exists()) else None,
+    )
 
-# ── COLLECT (shared folder) ────────────────────────────────────────────────
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="Hermes Installer",
-)
+# ── COLLECT (onedir — macOS only) ─────────────────────────────────────────
+if IS_MAC:
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name="Hermes Installer",
+    )
 
 # ── BUNDLE (.app) — macOS only ─────────────────────────────────────────────
 if IS_MAC:
