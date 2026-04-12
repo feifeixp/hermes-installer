@@ -28,3 +28,6 @@ secrets.yaml
 
 # PyInstaller
 *.manifest
+
+# Static assets (unused placeholder)
+static/
