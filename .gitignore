@@ -1,0 +1,30 @@
+# Build artifacts
+dist/
+build/
+*.spec.bak
+
+# Python virtual environments
+.build_venv/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.claude/
+.vscode/
+.idea/
+
+# Secrets (never commit these!)
+.env
+*.env
+secrets.yaml
+
+# PyInstaller
+*.manifest

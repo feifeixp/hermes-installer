@@ -1,0 +1,136 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""
+PyInstaller spec for Hermes Agent Installer.
+Produces:
+  macOS  → dist/Hermes Installer.app  (+ .dmg via build.sh)
+  Windows → dist/Hermes Installer/Hermes Installer.exe  (+ .zip via build.bat)
+"""
+
+import sys
+from pathlib import Path
+
+block_cipher = None
+IS_MAC     = sys.platform == "darwin"
+IS_WIN     = sys.platform == "win32"
+
+# ── Hidden imports ─────────────────────────────────────────────────────────
+HIDDEN_IMPORTS = [
+    # uvicorn
+    "uvicorn", "uvicorn.main", "uvicorn.config", "uvicorn.logging",
+    "uvicorn.loops", "uvicorn.loops.auto", "uvicorn.loops.asyncio",
+    "uvicorn.protocols", "uvicorn.protocols.http", "uvicorn.protocols.http.auto",
+    "uvicorn.protocols.http.h11_impl", "uvicorn.protocols.http.httptools_impl",
+    "uvicorn.protocols.websockets", "uvicorn.protocols.websockets.auto",
+    "uvicorn.protocols.websockets.wsproto_impl",
+    "uvicorn.lifespan", "uvicorn.lifespan.off", "uvicorn.lifespan.on",
+    # fastapi / starlette
+    "fastapi", "fastapi.responses", "fastapi.staticfiles",
+    "fastapi.middleware", "fastapi.middleware.cors",
+    "starlette", "starlette.responses", "starlette.routing", "starlette.middleware",
+    # async
+    "anyio", "anyio._backends._asyncio",
+    # http
+    "aiohttp", "aiohttp.connector", "aiohttp.client",
+    "h11", "httptools",
+    # QR / image
+    "qrcode", "qrcode.image.pil",
+    "PIL", "PIL.Image", "PIL.ImageDraw",
+    # config
+    "yaml", "dotenv", "pydantic", "pydantic_core",
+    # webview — platform-specific backends
+    "webview",
+]
+
+if IS_MAC:
+    HIDDEN_IMPORTS += ["webview.platforms.cocoa"]
+if IS_WIN:
+    HIDDEN_IMPORTS += [
+        "webview.platforms.edgechromium",
+        "webview.platforms.winforms",
+        "clr",          # pythonnet (Windows WebView2 bridge)
+        "asyncio",
+        "asyncio.windows_events",
+        "asyncio.windows_utils",
+    ]
+
+# ── Analysis ───────────────────────────────────────────────────────────────
+a = Analysis(
+    ["main.py"],
+    pathex=["."],
+    binaries=[],
+    datas=[
+        ("index.html", "."),    # UI HTML bundled alongside executable
+    ],
+    hiddenimports=HIDDEN_IMPORTS,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=["tkinter", "test", "unittest", "_pytest"],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+# ── EXE ───────────────────────────────────────────────────────────────────
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="Hermes Installer",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,                          # No black terminal window
+    disable_windowed_traceback=False,
+    argv_emulation=IS_MAC,                  # macOS open-with file association
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon="icon.icns" if (IS_MAC and Path("icon.icns").exists()) else (
+         "icon.ico"  if (IS_WIN and Path("icon.ico").exists())  else None
+    ),
+)
+
+# ── COLLECT (shared folder) ────────────────────────────────────────────────
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="Hermes Installer",
+)
+
+# ── BUNDLE (.app) — macOS only ─────────────────────────────────────────────
+if IS_MAC:
+    app_bundle = BUNDLE(
+        coll,
+        name="Hermes Installer.app",
+        icon="icon.icns" if Path("icon.icns").exists() else None,
+        bundle_identifier="com.nousresearch.hermes-installer",
+        version="1.0.0",
+        info_plist={
+            "CFBundleName": "Hermes Installer",
+            "CFBundleDisplayName": "Hermes Agent 安装向导",
+            "CFBundleVersion": "1.0.0",
+            "CFBundleShortVersionString": "1.0.0",
+            "NSPrincipalClass": "NSApplication",
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "11.0",
+            "NSAppleEventsUsageDescription": "Hermes Installer automates setup steps.",
+            "NSDesktopFolderUsageDescription": "Hermes Installer reads config files.",
+            "NSDocumentsFolderUsageDescription": "Hermes Installer may access documents.",
+            "NSDownloadsFolderUsageDescription": "Hermes Installer saves downloaded files.",
+            "NSNetworkVolumesUsageDescription": "Hermes Installer connects to AI APIs.",
+            # Hardened Runtime exceptions (required for pywebview + uvicorn)
+            "com.apple.security.cs.allow-unsigned-executable-memory": True,
+            "com.apple.security.cs.disable-library-validation": True,
+        },
+    )

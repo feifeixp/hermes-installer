@@ -1,0 +1,1314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hermes Agent 安装向导</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --bg-deep:    #0f0f1a;
+      --bg-card:    #16162a;
+      --bg-input:   #1e1e2e;
+      --border:     #2e2e4a;
+      --border-focus: #7c3aed;
+      --purple:     #7c3aed;
+      --purple-dark: #6d28d9;
+      --purple-light: #a855f7;
+      --green:      #22c55e;
+      --red:        #ef4444;
+      --text:       #e2e8f0;
+      --text-muted: #94a3b8;
+      --terminal-bg: #0a0a0f;
+      --terminal-green: #4ade80;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      background: var(--bg-deep);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      overflow: hidden;
+    }
+
+    /* ── Layout ── */
+    #app {
+      display: flex;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 260px;
+      min-width: 260px;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    #sidebar-header {
+      padding: 28px 24px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #sidebar-header h1 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin: 0;
+      background: linear-gradient(135deg, var(--purple-light), #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1.3;
+    }
+
+    #sidebar-header p {
+      margin: 4px 0 0;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    #step-list {
+      padding: 16px 0;
+      flex: 1;
+    }
+
+    .step-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 24px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+
+    .step-item:hover {
+      background: rgba(124, 58, 237, 0.08);
+    }
+
+    .step-item.active {
+      background: rgba(124, 58, 237, 0.15);
+    }
+
+    .step-item.active::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: var(--purple);
+      border-radius: 0 2px 2px 0;
+    }
+
+    .step-dot {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 600;
+      flex-shrink: 0;
+      transition: all 0.2s ease;
+      color: var(--text-muted);
+    }
+
+    .step-item.active .step-dot {
+      border-color: var(--purple);
+      background: var(--purple);
+      color: white;
+    }
+
+    .step-item.completed .step-dot {
+      border-color: var(--green);
+      background: var(--green);
+      color: white;
+    }
+
+    .step-label {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      transition: color 0.2s ease;
+    }
+
+    .step-item.active .step-label { color: var(--text); }
+    .step-item.completed .step-label { color: var(--green); }
+
+    /* ── Main Content ── */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #content-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 40px 48px;
+    }
+
+    /* ── Step Panels ── */
+    .step-panel {
+      display: none;
+      animation: fadeSlideIn 0.35s ease;
+      max-width: 700px;
+    }
+
+    .step-panel.active {
+      display: block;
+    }
+
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(18px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── Typography ── */
+    .panel-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin: 0 0 6px;
+      color: var(--text);
+    }
+
+    .panel-subtitle {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin: 0 0 28px;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+
+    /* ── Check items ── */
+    .check-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .check-item:last-child { border-bottom: none; }
+
+    .check-icon {
+      font-size: 1.1rem;
+      width: 24px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .check-name {
+      flex: 1;
+      font-weight: 500;
+    }
+
+    .check-version {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      background: rgba(255,255,255,0.05);
+      padding: 2px 8px;
+      border-radius: 99px;
+    }
+
+    .badge-ok   { color: var(--green); }
+    .badge-fail { color: var(--red); }
+
+    /* ── Terminal log ── */
+    #log-terminal {
+      background: var(--terminal-bg);
+      color: var(--terminal-green);
+      font-family: 'Menlo', 'Courier New', monospace;
+      font-size: 0.8rem;
+      padding: 14px 16px;
+      border-radius: 10px;
+      height: 260px;
+      overflow-y: auto;
+      border: 1px solid #1a1a2a;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-line-error { color: #f87171; }
+
+    /* ── Form inputs ── */
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .form-hint {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .input-wrap {
+      position: relative;
+    }
+
+    .form-input {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 10px 14px;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+
+    .form-input:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
+    }
+
+    .form-input.with-toggle {
+      padding-right: 44px;
+    }
+
+    .eye-toggle {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      padding: 2px;
+      font-size: 1rem;
+      line-height: 1;
+    }
+
+    .eye-toggle:hover { color: var(--text); }
+
+    .configured-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.75rem;
+      color: var(--green);
+      margin-left: 8px;
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 24px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+
+    .btn:active { transform: scale(0.97); }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--purple), var(--purple-dark));
+      color: white;
+      box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: linear-gradient(135deg, var(--purple-light), var(--purple));
+      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.45);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255,255,255,0.1);
+    }
+
+    .btn-ghost {
+      background: none;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      padding: 6px 12px;
+    }
+
+    .btn-ghost:hover { color: var(--text); }
+
+    .btn-danger {
+      background: rgba(239,68,68,0.15);
+      color: #f87171;
+      border: 1px solid rgba(239,68,68,0.3);
+    }
+
+    .btn-danger:hover {
+      background: rgba(239,68,68,0.25);
+    }
+
+    /* ── QR code area ── */
+    #qr-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      margin: 24px 0;
+    }
+
+    #qr-img-wrap {
+      background: white;
+      padding: 16px;
+      border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      display: none;
+    }
+
+    #qr-img {
+      display: block;
+      min-width: 200px;
+      min-height: 200px;
+      max-width: 260px;
+    }
+
+    #qr-placeholder {
+      width: 232px;
+      height: 232px;
+      border: 2px dashed var(--border);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      text-align: center;
+      padding: 16px;
+    }
+
+    #qr-status-text {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      text-align: center;
+      min-height: 24px;
+    }
+
+    /* ── Success animation ── */
+    .success-circle {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.5rem;
+      margin: 0 auto 20px;
+      animation: popIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+      box-shadow: 0 8px 32px rgba(34, 197, 94, 0.35);
+    }
+
+    @keyframes popIn {
+      from { opacity: 0; transform: scale(0.3); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+
+    /* ── Confetti particles ── */
+    .confetti-wrap {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+      z-index: 50;
+    }
+
+    .confetti-particle {
+      position: absolute;
+      top: -20px;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      animation: confettiFall linear forwards;
+    }
+
+    @keyframes confettiFall {
+      to { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+    }
+
+    /* ── Summary table ── */
+    .summary-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.88rem;
+    }
+    .summary-row:last-child { border-bottom: none; }
+
+    .summary-key { color: var(--text-muted); }
+    .summary-val-ok   { color: var(--green); font-weight: 500; }
+    .summary-val-warn { color: #f59e0b; font-weight: 500; }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Dots animation ── */
+    .dots::after {
+      content: '';
+      animation: dots 1.5s steps(4, end) infinite;
+    }
+
+    @keyframes dots {
+      0%   { content: ''; }
+      25%  { content: '.'; }
+      50%  { content: '..'; }
+      75%  { content: '...'; }
+      100% { content: ''; }
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+    /* ── Tag / version pill ── */
+    .version-pill {
+      display: inline-flex;
+      align-items: center;
+      background: rgba(124, 58, 237, 0.15);
+      border: 1px solid rgba(124, 58, 237, 0.3);
+      color: var(--purple-light);
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 9px;
+      border-radius: 99px;
+      letter-spacing: 0.02em;
+    }
+
+    .repo-url {
+      font-family: 'Menlo', monospace;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-bottom: 16px;
+      word-break: break-all;
+    }
+
+    /* step-5 instructions */
+    .instruction-block {
+      background: var(--bg-input);
+      border-left: 3px solid var(--purple);
+      border-radius: 0 8px 8px 0;
+      padding: 14px 16px;
+      margin: 10px 0;
+    }
+
+    .instruction-block h4 {
+      margin: 0 0 6px;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+
+    .instruction-block p {
+      margin: 0;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    code {
+      background: rgba(124,58,237,0.15);
+      color: var(--purple-light);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: 'Menlo', monospace;
+      font-size: 0.82em;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- ══════════════════ SIDEBAR ══════════════════ -->
+  <nav id="sidebar">
+    <div id="sidebar-header">
+      <h1>⚡ Hermes Agent<br>安装向导</h1>
+      <p>一键部署您的 AI 助手</p>
+    </div>
+    <div id="step-list">
+      <div class="step-item" id="nav-1" onclick="goToStep(1)">
+        <div class="step-dot" id="dot-1">1</div>
+        <span class="step-label">环境检测</span>
+      </div>
+      <div class="step-item" id="nav-2" onclick="goToStep(2)">
+        <div class="step-dot" id="dot-2">2</div>
+        <span class="step-label">安装 Hermes</span>
+      </div>
+      <div class="step-item" id="nav-3" onclick="goToStep(3)">
+        <div class="step-dot" id="dot-3">3</div>
+        <span class="step-label">配置 API 密钥</span>
+      </div>
+      <div class="step-item" id="nav-4" onclick="goToStep(4)">
+        <div class="step-dot" id="dot-4">4</div>
+        <span class="step-label">连接微信</span>
+      </div>
+      <div class="step-item" id="nav-5" onclick="goToStep(5)">
+        <div class="step-dot" id="dot-5">5</div>
+        <span class="step-label">完成</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ══════════════════ MAIN ══════════════════ -->
+  <main id="main">
+    <div id="content-area">
+
+      <!-- ────────── STEP 1 ────────── -->
+      <div class="step-panel" id="panel-1">
+        <h2 class="panel-title">环境检测</h2>
+        <p class="panel-subtitle">检查系统依赖是否满足 Hermes Agent 的运行需求</p>
+
+        <div class="card" id="check-list">
+          <div style="display:flex;align-items:center;gap:10px;color:var(--text-muted);font-size:0.85rem;">
+            <span class="spinner"></span>
+            <span>正在检测系统环境...</span>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;margin-top:24px;">
+          <button class="btn btn-primary" id="btn-step1-next" onclick="goToStep(2)" disabled>
+            下一步 →
+          </button>
+          <button class="btn btn-secondary" onclick="runChecks()">重新检测</button>
+        </div>
+      </div>
+
+      <!-- ────────── STEP 2 ────────── -->
+      <div class="step-panel" id="panel-2">
+        <h2 class="panel-title">安装 Hermes</h2>
+        <p class="panel-subtitle">从 GitHub 克隆仓库并安装依赖包</p>
+
+        <div class="card">
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;">仓库地址</div>
+          <div class="repo-url">https://github.com/nousresearch/hermes-agent</div>
+          <button class="btn btn-primary" id="btn-start-install" onclick="startInstall()">
+            开始安装
+          </button>
+        </div>
+
+        <div id="log-section" style="display:none;margin-top:8px;">
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;">安装日志</div>
+          <div id="log-terminal"></div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;margin-top:20px;">
+          <button class="btn btn-primary" id="btn-step2-next" onclick="goToStep(3)" disabled>
+            下一步 →
+          </button>
+          <button class="btn btn-ghost" onclick="goToStep(1)">← 返回</button>
+        </div>
+      </div>
+
+      <!-- ────────── STEP 3 ────────── -->
+      <div class="step-panel" id="panel-3">
+        <h2 class="panel-title">配置 API 密钥</h2>
+        <p class="panel-subtitle">填写所需的 API 密钥，将安全保存至 <code>~/.hermes/.env</code></p>
+
+        <div class="card">
+          <!-- MiniMax -->
+          <div class="form-group">
+            <label class="form-label">
+              MiniMax API Key
+              <span class="configured-badge" id="badge-minimax" style="display:none">✓ 已配置</span>
+              <span style="color:var(--red);font-size:0.75rem;margin-left:4px;">* 必填</span>
+            </label>
+            <div class="input-wrap">
+              <input
+                class="form-input with-toggle"
+                type="password"
+                id="minimax-key"
+                placeholder="sk-cp-..."
+                autocomplete="off"
+              />
+              <button class="eye-toggle" onclick="toggleVisibility('minimax-key', this)">👁</button>
+            </div>
+            <div class="form-hint">在 <a href="https://minimax.io" target="_blank" style="color:var(--purple-light)">minimax.io</a> 获取您的 API Key</div>
+          </div>
+
+          <!-- OpenRouter -->
+          <div class="form-group">
+            <label class="form-label">
+              OpenRouter API Key
+              <span class="configured-badge" id="badge-openrouter" style="display:none">✓ 已配置</span>
+              <span style="color:var(--text-muted);font-size:0.75rem;margin-left:4px;">可选</span>
+            </label>
+            <div class="input-wrap">
+              <input
+                class="form-input with-toggle"
+                type="password"
+                id="openrouter-key"
+                placeholder="sk-or-..."
+                autocomplete="off"
+              />
+              <button class="eye-toggle" onclick="toggleVisibility('openrouter-key', this)">👁</button>
+            </div>
+            <div class="form-hint">在 <a href="https://openrouter.ai" target="_blank" style="color:var(--purple-light)">openrouter.ai</a> 获取</div>
+          </div>
+
+          <!-- Anthropic -->
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">
+              Anthropic API Key
+              <span class="configured-badge" id="badge-anthropic" style="display:none">✓ 已配置</span>
+              <span style="color:var(--text-muted);font-size:0.75rem;margin-left:4px;">可选</span>
+            </label>
+            <div class="input-wrap">
+              <input
+                class="form-input with-toggle"
+                type="password"
+                id="anthropic-key"
+                placeholder="sk-ant-..."
+                autocomplete="off"
+              />
+              <button class="eye-toggle" onclick="toggleVisibility('anthropic-key', this)">👁</button>
+            </div>
+            <div class="form-hint">在 <a href="https://console.anthropic.com" target="_blank" style="color:var(--purple-light)">console.anthropic.com</a> 获取</div>
+          </div>
+        </div>
+
+        <div id="keys-error" style="display:none;color:var(--red);font-size:0.85rem;margin-bottom:12px;"></div>
+
+        <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+          <button class="btn btn-primary" id="btn-save-keys" onclick="saveKeys()">
+            保存并继续
+          </button>
+          <button class="btn btn-ghost" onclick="goToStep(2)">← 返回</button>
+        </div>
+      </div>
+
+      <!-- ────────── STEP 4 ────────── -->
+      <div class="step-panel" id="panel-4">
+        <h2 class="panel-title">连接微信</h2>
+        <p class="panel-subtitle">扫描二维码，将您的微信账号与 Hermes 绑定</p>
+
+        <div class="card" style="text-align:center;padding:28px 24px;">
+          <div id="qr-container">
+            <div id="qr-placeholder">
+              <div>
+                <div style="font-size:2rem;margin-bottom:8px;">📱</div>
+                <div>点击下方按钮<br>获取登录二维码</div>
+              </div>
+            </div>
+            <div id="qr-img-wrap">
+              <img id="qr-img" src="" alt="微信登录二维码" />
+            </div>
+            <div id="qr-status-text"></div>
+          </div>
+
+          <div id="weixin-login-btns" style="display:flex;flex-direction:column;align-items:center;gap:10px;">
+            <button class="btn btn-primary" id="btn-start-weixin" onclick="startWeixinLogin()">
+              开始扫码登录
+            </button>
+            <button class="btn btn-ghost" onclick="skipWeixin()">跳过 →（稍后再连接）</button>
+          </div>
+
+          <div id="weixin-success" style="display:none;">
+            <div class="success-circle">✓</div>
+            <div style="font-size:1rem;font-weight:600;color:var(--green);margin-bottom:6px;">微信登录成功！</div>
+            <div id="weixin-account-text" style="font-size:0.82rem;color:var(--text-muted);margin-bottom:20px;"></div>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
+          <button class="btn btn-primary" id="btn-step4-next" onclick="goToStep(5)" disabled>
+            下一步 →
+          </button>
+          <button class="btn btn-ghost" onclick="goToStep(3)">← 返回</button>
+        </div>
+      </div>
+
+      <!-- ────────── STEP 5 ────────── -->
+      <div class="step-panel" id="panel-5">
+        <div style="text-align:center;margin-bottom:28px;">
+          <div class="success-circle">🎉</div>
+          <h2 class="panel-title" style="text-align:center">安装完成！</h2>
+          <p class="panel-subtitle" style="text-align:center">Hermes Agent 已成功配置，可以开始使用了</p>
+        </div>
+
+        <!-- Summary -->
+        <div class="card" style="margin-bottom:20px;">
+          <div style="font-size:0.82rem;font-weight:600;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">配置摘要</div>
+          <div id="summary-rows">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
+        <!-- Instructions -->
+        <div style="margin-bottom:20px;">
+          <div style="font-size:0.85rem;font-weight:600;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">使用方式</div>
+          <div class="instruction-block">
+            <h4>微信聊天</h4>
+            <p>打开微信，直接向已绑定的账号发送消息，Hermes Agent 会自动响应。</p>
+          </div>
+          <div class="instruction-block">
+            <h4>命令行</h4>
+            <p>在终端运行 <code>hermes chat</code> 开始对话，或 <code>hermes --help</code> 查看所有命令。</p>
+          </div>
+          <div class="instruction-block">
+            <h4>配置文件</h4>
+            <p>API 密钥保存在 <code>~/.hermes/.env</code>，配置在 <code>~/.hermes/config.yaml</code>。</p>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="btn-start-gateway" onclick="startGateway()">
+            启动 Gateway
+          </button>
+          <button class="btn btn-secondary" onclick="window.close()">关闭安装向导</button>
+          <div id="gateway-status-msg" style="font-size:0.82rem;color:var(--text-muted);"></div>
+        </div>
+      </div>
+
+    </div><!-- /content-area -->
+  </main>
+</div>
+
+<!-- Confetti container -->
+<div class="confetti-wrap" id="confetti-wrap"></div>
+
+<script>
+/* ══════════════════════════════════════
+   State
+══════════════════════════════════════ */
+let currentStep = 1;
+let checkData = null;
+let weixinEventSource = null;
+
+/* ══════════════════════════════════════
+   Navigation
+══════════════════════════════════════ */
+function goToStep(n) {
+  // Hide all panels
+  document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
+  // Show target panel
+  const target = document.getElementById('panel-' + n);
+  if (!target) return;
+  target.classList.add('active');
+
+  // Update sidebar
+  for (let i = 1; i <= 5; i++) {
+    const nav = document.getElementById('nav-' + i);
+    const dot = document.getElementById('dot-' + i);
+    nav.classList.remove('active', 'completed');
+    if (i < n) {
+      nav.classList.add('completed');
+      dot.innerHTML = '✓';
+    } else if (i === n) {
+      nav.classList.add('active');
+      dot.innerHTML = i;
+    } else {
+      dot.innerHTML = i;
+    }
+  }
+
+  currentStep = n;
+
+  // Step-specific on-enter logic
+  if (n === 1) runChecks();
+  if (n === 3) prefillKeys();
+  if (n === 5) loadSummary();
+}
+
+/* ══════════════════════════════════════
+   Step 1 — Environment checks
+══════════════════════════════════════ */
+async function runChecks() {
+  const list = document.getElementById('check-list');
+  const nextBtn = document.getElementById('btn-step1-next');
+  nextBtn.disabled = true;
+
+  list.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;color:var(--text-muted);font-size:0.85rem;">
+      <span class="spinner"></span>
+      <span>正在检测系统环境...</span>
+    </div>`;
+
+  let data;
+  try {
+    const resp = await fetch('/api/check');
+    data = await resp.json();
+    checkData = data;
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--red);">无法连接到安装服务：${e.message}</div>`;
+    return;
+  }
+
+  const items = [
+    {
+      key: 'python',
+      label: 'Python 3.10+',
+      ok: data.python.ok,
+      detail: data.python.version ? `v${data.python.version}` : '未找到',
+    },
+    {
+      key: 'git',
+      label: 'Git',
+      ok: data.git.ok,
+      detail: data.git.version ? `v${data.git.version}` : '未找到',
+    },
+    {
+      key: 'uv',
+      label: 'uv (Python 包管理器)',
+      ok: data.uv.ok,
+      detail: data.uv.version ? `v${data.uv.version}` : '未找到，请先安装 uv',
+    },
+    {
+      key: 'hermes',
+      label: 'Hermes Agent',
+      ok: data.hermes_installed,
+      detail: data.hermes_installed
+        ? `已安装 v${data.hermes_version}`
+        : '未安装（将在下一步安装）',
+    },
+  ];
+
+  list.innerHTML = items.map(item => `
+    <div class="check-item">
+      <span class="check-icon ${item.ok ? 'badge-ok' : 'badge-fail'}">${item.ok ? '✓' : '✗'}</span>
+      <span class="check-name">${item.label}</span>
+      <span class="check-version">${item.detail}</span>
+    </div>
+  `).join('');
+
+  const requiredOk = data.python.ok && data.git.ok && data.uv.ok;
+
+  if (requiredOk) {
+    nextBtn.disabled = false;
+    if (data.hermes_installed) {
+      // Skip install step
+      setTimeout(() => goToStep(3), 600);
+    }
+  } else {
+    list.innerHTML += `
+      <div style="margin-top:14px;padding:12px;background:rgba(239,68,68,0.1);border-radius:8px;border:1px solid rgba(239,68,68,0.25);font-size:0.83rem;color:#fca5a5;">
+        请先安装缺失的依赖后重新检测。<br>
+        uv 安装命令：<code>curl -LsSf https://astral.sh/uv/install.sh | sh</code>
+      </div>`;
+  }
+}
+
+/* ══════════════════════════════════════
+   Step 2 — Install
+══════════════════════════════════════ */
+function startInstall() {
+  const installBtn = document.getElementById('btn-start-install');
+  const nextBtn = document.getElementById('btn-step2-next');
+  const logSection = document.getElementById('log-section');
+  const terminal = document.getElementById('log-terminal');
+
+  installBtn.disabled = true;
+  installBtn.innerHTML = '<span class="spinner"></span> 安装中...';
+  logSection.style.display = 'block';
+  terminal.innerHTML = '';
+
+  const es = new EventSource('/api/install');
+
+  es.onmessage = (e) => {
+    let event;
+    try { event = JSON.parse(e.data); } catch { return; }
+
+    if (event.type === 'log') {
+      appendLog(terminal, event.message, event.level === 'error');
+    } else if (event.type === 'already_installed') {
+      appendLog(terminal, `Hermes 已安装 (版本: ${event.version || '未知'})，跳过安装步骤。`, false);
+    } else if (event.type === 'done') {
+      es.close();
+      if (event.success) {
+        installBtn.innerHTML = '✓ 安装完成';
+        installBtn.style.background = 'linear-gradient(135deg,#22c55e,#16a34a)';
+        nextBtn.disabled = false;
+        appendLog(terminal, '✓ 安装成功！', false);
+      } else {
+        installBtn.disabled = false;
+        installBtn.innerHTML = '重试安装';
+        appendLog(terminal, `✗ 安装失败: ${event.message || ''}`, true);
+      }
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    appendLog(terminal, '连接中断，请重试。', true);
+    installBtn.disabled = false;
+    installBtn.innerHTML = '重试安装';
+  };
+}
+
+function appendLog(terminal, message, isError) {
+  const line = document.createElement('div');
+  line.textContent = message;
+  if (isError) line.className = 'log-line-error';
+  terminal.appendChild(line);
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+/* ══════════════════════════════════════
+   Step 3 — API Keys
+══════════════════════════════════════ */
+function prefillKeys() {
+  if (!checkData) return;
+  const keys = checkData.env_keys || {};
+
+  if (keys.MINIMAX_API_KEY) {
+    document.getElementById('badge-minimax').style.display = 'inline-flex';
+  }
+  if (keys.OPENROUTER_API_KEY) {
+    document.getElementById('badge-openrouter').style.display = 'inline-flex';
+  }
+  if (keys.ANTHROPIC_API_KEY) {
+    document.getElementById('badge-anthropic').style.display = 'inline-flex';
+  }
+}
+
+function toggleVisibility(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁';
+  }
+}
+
+async function saveKeys() {
+  const btn = document.getElementById('btn-save-keys');
+  const errEl = document.getElementById('keys-error');
+  errEl.style.display = 'none';
+
+  const minimax = document.getElementById('minimax-key').value.trim();
+  const openrouter = document.getElementById('openrouter-key').value.trim();
+  const anthropic = document.getElementById('anthropic-key').value.trim();
+
+  const hasExistingMinimax = checkData && checkData.env_keys && checkData.env_keys.MINIMAX_API_KEY;
+
+  if (!minimax && !hasExistingMinimax) {
+    errEl.textContent = '请填写 MiniMax API Key（必填）';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 保存中...';
+
+  try {
+    // Save keys
+    const keysResp = await fetch('/api/config/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        MINIMAX_API_KEY: minimax,
+        OPENROUTER_API_KEY: openrouter,
+        ANTHROPIC_API_KEY: anthropic,
+      }),
+    });
+    if (!keysResp.ok) throw new Error('保存密钥失败');
+
+    // Save model config
+    const modelResp = await fetch('/api/config/model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'minimax',
+        model: 'MiniMax-M2.5',
+        base_url: 'https://api.minimax.io/anthropic',
+        api_mode: 'anthropic_messages',
+      }),
+    });
+    if (!modelResp.ok) throw new Error('保存模型配置失败');
+
+    btn.innerHTML = '✓ 已保存';
+    btn.style.background = 'linear-gradient(135deg,#22c55e,#16a34a)';
+    setTimeout(() => goToStep(4), 400);
+  } catch (e) {
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.innerHTML = '保存并继续';
+  }
+}
+
+/* ══════════════════════════════════════
+   Step 4 — WeChat QR
+══════════════════════════════════════ */
+function showQR(dataUrl) {
+  const placeholder = document.getElementById('qr-placeholder');
+  const imgWrap = document.getElementById('qr-img-wrap');
+  const img = document.getElementById('qr-img');
+  placeholder.style.display = 'none';
+  imgWrap.style.display = 'block';
+  img.src = dataUrl;
+}
+
+function updateQrStatus(message) {
+  const el = document.getElementById('qr-status-text');
+  el.textContent = message;
+}
+
+function skipWeixin() {
+  document.getElementById('btn-step4-next').disabled = false;
+  if (weixinEventSource) {
+    weixinEventSource.close();
+    weixinEventSource = null;
+  }
+  goToStep(5);
+}
+
+function startWeixinLogin() {
+  const loginBtns = document.getElementById('weixin-login-btns');
+  const startBtn = document.getElementById('btn-start-weixin');
+  startBtn.disabled = true;
+  startBtn.innerHTML = '<span class="spinner"></span> 获取二维码...';
+
+  updateQrStatus('正在获取二维码...');
+
+  if (weixinEventSource) {
+    weixinEventSource.close();
+  }
+
+  const es = new EventSource('/api/weixin/login');
+  weixinEventSource = es;
+
+  es.onmessage = (e) => {
+    let event;
+    try { event = JSON.parse(e.data); } catch { return; }
+
+    if (event.type === 'qr') {
+      showQR(event.image);
+      startBtn.innerHTML = '重新获取';
+      startBtn.disabled = false;
+      updateQrStatus('请用微信扫描上方二维码');
+    } else if (event.type === 'status') {
+      updateQrStatus(event.message);
+    } else if (event.type === 'error') {
+      updateQrStatus('⚠ ' + event.message);
+      startBtn.disabled = false;
+      startBtn.innerHTML = '重试';
+    } else if (event.type === 'done') {
+      es.close();
+      weixinEventSource = null;
+      if (event.success) {
+        weixinLoginSuccess(event.account_id);
+      } else {
+        startBtn.disabled = false;
+        startBtn.innerHTML = '重新扫码';
+      }
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    weixinEventSource = null;
+    updateQrStatus('连接中断，请重试');
+    startBtn.disabled = false;
+    startBtn.innerHTML = '重新获取';
+  };
+}
+
+function weixinLoginSuccess(accountId) {
+  document.getElementById('weixin-login-btns').style.display = 'none';
+  document.getElementById('qr-placeholder').style.display = 'none';
+
+  const successEl = document.getElementById('weixin-success');
+  successEl.style.display = 'block';
+
+  if (accountId) {
+    document.getElementById('weixin-account-text').textContent = `账号 ID: ${accountId}`;
+  }
+
+  document.getElementById('qr-status-text').textContent = '';
+  document.getElementById('btn-step4-next').disabled = false;
+
+  launchConfetti();
+}
+
+/* ══════════════════════════════════════
+   Step 5 — Finish
+══════════════════════════════════════ */
+async function loadSummary() {
+  let status;
+  try {
+    const resp = await fetch('/api/status');
+    status = await resp.json();
+  } catch (e) {
+    status = {};
+  }
+
+  const rows = [
+    {
+      label: 'Hermes Agent',
+      val: status.hermes_installed ? `已安装 v${status.hermes_version || ''}` : '未安装',
+      ok: status.hermes_installed,
+    },
+    {
+      label: 'MiniMax API Key',
+      val: status.env_keys && status.env_keys.MINIMAX_API_KEY ? '已配置' : '未配置',
+      ok: status.env_keys && status.env_keys.MINIMAX_API_KEY,
+    },
+    {
+      label: 'OpenRouter API Key',
+      val: status.env_keys && status.env_keys.OPENROUTER_API_KEY ? '已配置' : '未配置（可选）',
+      ok: status.env_keys && status.env_keys.OPENROUTER_API_KEY,
+      optional: true,
+    },
+    {
+      label: 'Anthropic API Key',
+      val: status.env_keys && status.env_keys.ANTHROPIC_API_KEY ? '已配置' : '未配置（可选）',
+      ok: status.env_keys && status.env_keys.ANTHROPIC_API_KEY,
+      optional: true,
+    },
+    {
+      label: '微信连接',
+      val: status.weixin_connected ? '已连接' : '未连接（可稍后配置）',
+      ok: status.weixin_connected,
+      optional: true,
+    },
+    {
+      label: 'Gateway',
+      val: status.gateway_running ? '运行中' : '未启动',
+      ok: status.gateway_running,
+      optional: true,
+    },
+  ];
+
+  const container = document.getElementById('summary-rows');
+  container.innerHTML = rows.map(r => `
+    <div class="summary-row">
+      <span class="summary-key">${r.label}</span>
+      <span class="${r.ok ? 'summary-val-ok' : (r.optional ? 'summary-val-warn' : 'summary-val-warn')}">${r.val}</span>
+    </div>
+  `).join('');
+
+  launchConfetti();
+}
+
+async function startGateway() {
+  const btn = document.getElementById('btn-start-gateway');
+  const msg = document.getElementById('gateway-status-msg');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 启动中...';
+  msg.textContent = '';
+
+  try {
+    const resp = await fetch('/api/gateway/restart', { method: 'POST' });
+    const data = await resp.json();
+    if (data.success) {
+      btn.innerHTML = '✓ Gateway 已启动';
+      btn.style.background = 'linear-gradient(135deg,#22c55e,#16a34a)';
+      msg.style.color = 'var(--green)';
+      msg.textContent = 'Gateway 正在运行';
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = '重试启动';
+      msg.style.color = 'var(--red)';
+      msg.textContent = data.output || '启动失败';
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.innerHTML = '重试启动';
+    msg.style.color = 'var(--red)';
+    msg.textContent = '请求失败: ' + e.message;
+  }
+}
+
+/* ══════════════════════════════════════
+   Confetti
+══════════════════════════════════════ */
+function launchConfetti() {
+  const wrap = document.getElementById('confetti-wrap');
+  wrap.innerHTML = '';
+  const colors = ['#7c3aed','#a855f7','#22c55e','#3b82f6','#f59e0b','#ec4899','#06b6d4'];
+  const count = 80;
+
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div');
+    p.className = 'confetti-particle';
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const left = Math.random() * 100;
+    const delay = Math.random() * 1.5;
+    const duration = 2 + Math.random() * 2;
+    const size = 6 + Math.random() * 8;
+    const rotate = Math.random() * 360;
+    p.style.cssText = `
+      left: ${left}%;
+      width: ${size}px;
+      height: ${size}px;
+      background: ${color};
+      border-radius: ${Math.random() > 0.5 ? '50%' : '2px'};
+      animation-duration: ${duration}s;
+      animation-delay: ${delay}s;
+      transform: rotate(${rotate}deg);
+      opacity: 0.9;
+    `;
+    wrap.appendChild(p);
+  }
+
+  setTimeout(() => { wrap.innerHTML = ''; }, 5000);
+}
+
+/* ══════════════════════════════════════
+   Init
+══════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', () => {
+  goToStep(1);
+});
+</script>
+</body>
+</html>
