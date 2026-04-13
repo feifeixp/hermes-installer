@@ -134,17 +134,19 @@ def check_python() -> dict:
     ]
     for candidate in candidates:
         ok, out = _run([candidate, "--version"])
-        if ok:
-            m = re.search(r"(\d+\.\d+[\.\d]*)", out)
-            version = m.group(1) if m else "?"
-            parts = version.split(".")
-            major, minor = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
-            if (major, minor) >= (3, 10):
-                return {"ok": True, "version": version}
+        if not ok:
+            continue
+        m = re.search(r"(\d+)\.(\d+)", out)
+        if not m:
+            continue
+        major, minor = int(m.group(1)), int(m.group(2))
+        version = m.group(0)
+        if (major, minor) >= (3, 10):
+            return {"ok": True, "version": version}
     # Return the system Python version even if < 3.10
     ok, out = _run([sys.executable, "--version"])
-    m = re.search(r"(\d+\.\d+[\.\d]*)", out) if ok else None
-    return {"ok": False, "version": m.group(1) if m else None}
+    m = re.search(r"(\d+\.\d+)", out) if ok else None
+    return {"ok": False, "version": m.group(0) if m else None}
 
 
 def check_git() -> dict:
