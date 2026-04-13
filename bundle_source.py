@@ -1,6 +1,8 @@
 """
 Build helper: clone hermes-agent and create hermes_agent_bundle.zip
 Run this before PyInstaller:  python bundle_source.py
+
+Auto-retries with CN mirrors if GitHub is unreachable.
 """
 import os
 import stat
@@ -10,7 +12,16 @@ import pathlib
 import sys
 import shutil
 
-REPO_URL  = "https://github.com/NousResearch/hermes-agent"
+REPO_PATH = "NousResearch/hermes-agent"
+
+# Mirror list — tried in order until one succeeds
+CLONE_URLS = [
+    f"https://github.com/{REPO_PATH}",                          # original
+    f"https://ghproxy.com/https://github.com/{REPO_PATH}",      # CN mirror 1
+    f"https://mirror.ghproxy.com/https://github.com/{REPO_PATH}", # CN mirror 2
+    f"https://gitclone.com/github.com/{REPO_PATH}",             # CN mirror 3
+]
+
 CLONE_DIR = pathlib.Path("hermes_agent_bundle")
 ZIP_PATH  = pathlib.Path("hermes_agent_bundle.zip")
 
@@ -25,9 +36,26 @@ def _remove_readonly(func, path, _exc):
 
 
 def _rmtree(path: pathlib.Path):
-    """Cross-platform rmtree that handles Windows read-only files in .git."""
     if path.exists():
         shutil.rmtree(path, onerror=_remove_readonly)
+
+
+def _try_clone() -> bool:
+    """Try each mirror in order. Return True on success."""
+    for i, url in enumerate(CLONE_URLS):
+        label = "GitHub" if i == 0 else f"镜像 {i}"
+        print(f"  → 尝试 {label}: {url} ...")
+        _rmtree(CLONE_DIR)   # clean before each attempt
+        result = subprocess.run(
+            ["git", "clone", "--depth=1", url, str(CLONE_DIR)],
+            check=False,
+            timeout=120,
+        )
+        if result.returncode == 0:
+            print(f"  ✓ 克隆成功（{label}）")
+            return True
+        print(f"  ✗ {label} 失败，尝试下一个...")
+    return False
 
 
 def main():
@@ -37,17 +65,15 @@ def main():
     if ZIP_PATH.exists():
         ZIP_PATH.unlink()
 
-    # ── Clone (shallow, no history needed) ────────────────────────────────
-    print(f"  → 克隆 {REPO_URL} ...")
-    result = subprocess.run(
-        ["git", "clone", "--depth=1", REPO_URL, str(CLONE_DIR)],
-        check=False,
-    )
-    if result.returncode != 0:
-        print("  ❌ git clone 失败，请检查网络连接和 git 是否已安装")
+    # ── Clone with mirror fallback ─────────────────────────────────────────
+    if not _try_clone():
+        print()
+        print("  ❌ 所有镜像均无法访问。")
+        print("     请检查网络，或手动克隆后再运行：")
+        print(f"     git clone --depth=1 {CLONE_URLS[0]} {CLONE_DIR}")
         sys.exit(1)
 
-    # ── Zip (exclude .git to keep size small) ─────────────────────────────
+    # ── Zip (exclude .git) ────────────────────────────────────────────────
     print("  → 创建 bundle zip ...")
     count = 0
     with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:

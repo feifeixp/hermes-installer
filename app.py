@@ -346,17 +346,34 @@ async def _install_generator() -> AsyncGenerator[str, None]:
                 yield _fail(f"解压失败: {exc}")
                 return
         else:
-            # Fallback: git clone (requires network)
-            yield _log("未找到内置包，正在从 GitHub 克隆（需要网络）...")
-            rc = [0]
-            async for e in _run_step(
-                ["git", "clone", "--depth=1",
-                 "https://github.com/NousResearch/hermes-agent", str(HERMES_AGENT)],
-                rc_box=rc,
-            ):
-                yield e
-            if rc[0] != 0:
-                yield _fail("git clone 失败，请检查网络连接")
+            # Fallback: git clone，自动尝试多个镜像
+            _REPO_PATH = "NousResearch/hermes-agent"
+            _MIRRORS = [
+                f"https://github.com/{_REPO_PATH}",
+                f"https://ghproxy.com/https://github.com/{_REPO_PATH}",
+                f"https://mirror.ghproxy.com/https://github.com/{_REPO_PATH}",
+                f"https://gitclone.com/github.com/{_REPO_PATH}",
+            ]
+            cloned = False
+            for _i, _url in enumerate(_MIRRORS):
+                _label = "GitHub" if _i == 0 else f"镜像{_i}"
+                yield _log(f"正在尝试 {_label} 克隆：{_url}")
+                rc = [0]
+                async for e in _run_step(
+                    ["git", "clone", "--depth=1", _url, str(HERMES_AGENT)],
+                    rc_box=rc,
+                ):
+                    yield e
+                if rc[0] == 0:
+                    cloned = True
+                    break
+                yield _log(f"✗ {_label} 失败，尝试下一个镜像...")
+                # clean partial clone before retry
+                if HERMES_AGENT.exists():
+                    import shutil
+                    shutil.rmtree(HERMES_AGENT, ignore_errors=True)
+            if not cloned:
+                yield _fail("所有镜像均无法访问，请检查网络后重试")
                 return
     else:
         yield _log("源码已存在，跳过解压...")
