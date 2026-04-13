@@ -67,9 +67,10 @@ os.environ["HERMES_INSTALLER_BASE_DIR"] = str(BASE_DIR)
 log.info("BASE_DIR=%s", BASE_DIR)
 
 # ── Windows event-loop policy ──────────────────────────────────────────────
-if sys.platform == "win32":
-    import asyncio
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# Python 3.8+ defaults to ProactorEventLoop on Windows, which supports both
+# uvicorn (h11/asyncio mode) AND asyncio.create_subprocess_exec().
+# DO NOT switch to WindowsSelectorEventLoopPolicy — SelectorEventLoop does
+# NOT support subprocess creation and will raise NotImplementedError.
 
 # ── Import FastAPI app ─────────────────────────────────────────────────────
 try:
