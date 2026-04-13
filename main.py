@@ -2,6 +2,11 @@
 Hermes Agent Installer — cross-platform entry point (macOS + Windows).
 Starts FastAPI server in background thread, opens pywebview native window.
 """
+# MUST be the very first executable lines — prevents infinite process
+# spawning on Windows (PyInstaller onefile + multiprocessing spawn mode).
+import multiprocessing
+multiprocessing.freeze_support()
+
 import sys
 import os
 import threading
