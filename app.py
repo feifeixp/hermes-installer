@@ -166,9 +166,17 @@ def check_uv() -> dict:
 
 
 def check_hermes_installed() -> tuple[bool, str]:
-    """Return (installed, version_string)."""
+    """Return (installed, version_string).
+
+    Requires BOTH conditions to be true:
+    1. pyproject.toml exists  — repo was cloned
+    2. HERMES_PYTHON exists   — venv was created AND pip install succeeded
+    """
     marker = HERMES_AGENT / "pyproject.toml"
     if not marker.exists():
+        return False, ""
+    # venv Python must also exist — otherwise pip install never finished
+    if not HERMES_PYTHON.exists():
         return False, ""
     # Try to read version from pyproject.toml
     try:
