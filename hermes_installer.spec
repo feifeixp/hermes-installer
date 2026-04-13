@@ -59,9 +59,10 @@ a = Analysis(
     pathex=["."],
     binaries=[],
     datas=[
-        ("index.html", "."),    # installer wizard UI
-        ("chat.html",  "."),    # chat interface UI
-        ("app.py",     "."),    # fallback: include as raw file too
+        ("index.html",              "."),   # installer wizard UI
+        ("chat.html",               "."),   # chat interface UI
+        ("app.py",                  "."),   # fallback: include as raw file too
+        ("hermes_agent_bundle.zip", "."),   # pre-bundled hermes-agent source
     ],
     hiddenimports=HIDDEN_IMPORTS + ["app"],
     hookspath=[],

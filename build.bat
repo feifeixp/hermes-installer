@@ -70,6 +70,16 @@ if errorlevel 1 (
 )
 echo  ✓ 依赖安装完成
 
+REM ── 3.5 Bundle hermes-agent source into the installer ────────────────────
+echo  → 打包 hermes-agent 源码（内置到安装器，用户无需 git clone）...
+python bundle_source.py
+if errorlevel 1 (
+    echo  ❌ 源码打包失败，请检查网络连接和 git 配置后重试
+    pause
+    exit /b 1
+)
+echo  ✓ hermes-agent 源码打包完成
+
 REM ── 4. Clean previous build ───────────────────────────────────────────────
 echo  → 清理旧构建...
 if exist build rmdir /s /q build

@@ -286,8 +286,11 @@ async def _install_generator() -> AsyncGenerator[str, None]:
     def _log(msg: str) -> str:
         return f"data: {json.dumps({'type':'log','level':'info','message':msg})}\n\n"
 
-    # _stream_subprocess already yields a {"type":"returncode","code":N} event last.
-    # We forward log events to the client and capture the returncode via rc_box.
+    def _fail(msg: str) -> str:
+        return f"data: {json.dumps({'type':'done','success':False,'message':msg})}\n\n"
+
+    # _stream_subprocess yields {"type":"returncode","code":N} as the last event.
+    # We forward log lines to the browser and capture rc via rc_box.
     async def _run_step(cmd: list[str], cwd: Optional[Path] = None, rc_box: Optional[list] = None):
         async for event in _stream_subprocess(cmd, cwd):
             try:
@@ -295,47 +298,69 @@ async def _install_generator() -> AsyncGenerator[str, None]:
                 if data.get("type") == "returncode":
                     if rc_box is not None:
                         rc_box[0] = data.get("code", 1)
-                    continue          # don't forward returncode event to browser
+                    continue
             except Exception:
                 pass
             yield event
 
-    # ── Step 1: Clone or update ───────────────────────────────────────────
-    rc = [0]
-    if not HERMES_AGENT.exists():
-        yield _log("正在克隆 hermes-agent 仓库...")
-        async for e in _run_step(
-            ["git", "clone", "--depth=1",
-             "https://github.com/NousResearch/hermes-agent", str(HERMES_AGENT)],
-            rc_box=rc,
-        ):
-            yield e
-        if rc[0] != 0:
-            yield f"data: {json.dumps({'type':'done','success':False,'message':'git clone 失败，请检查网络连接'})}\n\n"
-            return
+    # ── Step 1: Get source code ───────────────────────────────────────────
+    # Priority: extract bundled zip (no network) → git clone (fallback)
+    need_source = not HERMES_AGENT.exists() or not (HERMES_AGENT / "pyproject.toml").exists()
+
+    if need_source:
+        # Locate the bundle zip embedded in the installer
+        _base = Path(os.environ.get("HERMES_INSTALLER_BASE_DIR", str(Path(__file__).parent)))
+        bundle_zip = _base / "hermes_agent_bundle.zip"
+
+        if bundle_zip.exists():
+            yield _log(f"正在解压内置源码包（{bundle_zip.stat().st_size // 1024} KB）...")
+            try:
+                import zipfile, shutil
+                if HERMES_AGENT.exists():
+                    shutil.rmtree(HERMES_AGENT)
+                HERMES_AGENT.mkdir(parents=True, exist_ok=True)
+
+                def _extract():
+                    with zipfile.ZipFile(bundle_zip, "r") as zf:
+                        zf.extractall(HERMES_AGENT)
+
+                await asyncio.get_event_loop().run_in_executor(None, _extract)
+                yield _log("✓ 源码解压完成")
+            except Exception as exc:
+                yield _fail(f"解压失败: {exc}")
+                return
+        else:
+            # Fallback: git clone (requires network)
+            yield _log("未找到内置包，正在从 GitHub 克隆（需要网络）...")
+            rc = [0]
+            async for e in _run_step(
+                ["git", "clone", "--depth=1",
+                 "https://github.com/NousResearch/hermes-agent", str(HERMES_AGENT)],
+                rc_box=rc,
+            ):
+                yield e
+            if rc[0] != 0:
+                yield _fail("git clone 失败，请检查网络连接")
+                return
     else:
-        yield _log("仓库已存在，正在拉取最新代码...")
-        async for e in _run_step(["git", "pull", "--ff-only"], cwd=HERMES_AGENT, rc_box=rc):
-            yield e
-        # pull failure is non-fatal (local changes etc.) — continue
+        yield _log("源码已存在，跳过解压...")
 
     # ── Step 2: Create venv ───────────────────────────────────────────────
     yield _log("正在创建虚拟环境 (Python 3.11)...")
-    # Remove broken venv (directory exists but python binary is missing)
     venv_dir = HERMES_AGENT / "venv"
     if venv_dir.exists() and not HERMES_PYTHON.exists():
         import shutil
         shutil.rmtree(venv_dir, ignore_errors=True)
         yield _log("检测到损坏的虚拟环境，已清理，重新创建...")
 
-    rc[0] = 0
+    rc = [0]
     async for e in _run_step(
         ["uv", "venv", "venv", "--python", "3.11"],
         cwd=HERMES_AGENT, rc_box=rc,
     ):
         yield e
     if rc[0] != 0:
-        yield f"data: {json.dumps({'type':'done','success':False,'message':'创建虚拟环境失败，请确认已安装 uv 和 Python 3.11'})}\n\n"
+        yield _fail("创建虚拟环境失败，请确认已安装 uv 和 Python 3.11")
         return
 
     # ── Step 3: Install dependencies ──────────────────────────────────────
@@ -348,8 +373,7 @@ async def _install_generator() -> AsyncGenerator[str, None]:
         yield e
 
     if rc[0] != 0:
-        # Fallback: install without optional extras
-        yield _log("完整安装失败，尝试基础安装模式...")
+        yield _log("完整安装失败，尝试基础安装...")
         rc[0] = 0
         async for e in _run_step(
             ["uv", "pip", "install", "-e", ".", "--python", str(HERMES_PYTHON)],
@@ -358,7 +382,7 @@ async def _install_generator() -> AsyncGenerator[str, None]:
             yield e
 
     if rc[0] != 0 or not HERMES_PYTHON.exists():
-        yield f"data: {json.dumps({'type':'done','success':False,'message':'依赖安装失败，请查看日志'})}\n\n"
+        yield _fail("依赖安装失败，请查看上方日志")
         return
 
     yield _log("✓ 安装完成！")
