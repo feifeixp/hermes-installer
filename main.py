@@ -1,22 +1,34 @@
 """
 Hermes Agent Installer — cross-platform entry point.
 - macOS  : pywebview cocoa (WKWebView native window)
-- Windows: system browser; uvicorn runs on the MAIN thread (no daemon threads,
-           no multiprocessing, no spawn loops)
+- Windows: system browser + uvicorn on main thread
 """
-# Must be called before anything else on Windows (PyInstaller + multiprocessing)
+# ── CHILD PROCESS GUARD ────────────────────────────────────────────────────
+# This must be the VERY FIRST executable code.
+# When any library (uvicorn, aiohttp, anyio …) spawns a subprocess on
+# Windows, that subprocess re-runs this exe from scratch.
+# Setting HERMES_MAIN before anything else, and exiting immediately when
+# it's already set, guarantees child processes never run the GUI/server.
+import os
+import sys
+
+if os.environ.get("_HERMES_MAIN") == "1":
+    # We are a child process — do nothing and exit cleanly.
+    sys.exit(0)
+
+os.environ["_HERMES_MAIN"] = "1"   # mark: subprocesses must exit
+
+# ── Now safe to import everything ─────────────────────────────────────────
 import multiprocessing
 multiprocessing.freeze_support()
 
-import sys
-import os
 import threading
 import time
 import socket
 import logging
 from pathlib import Path
 
-# ── Logging ────────────────────────────────────────────────────────────────
+# ── Log file ────────────────────────────────────────────────────────────────
 _LOG_PATH = Path(os.environ.get("TEMP", os.environ.get("TMPDIR", "/tmp"))) / "hermes-installer.log"
 logging.basicConfig(
     filename=str(_LOG_PATH),
@@ -25,9 +37,9 @@ logging.basicConfig(
     encoding="utf-8",
 )
 log = logging.getLogger("hermes")
-log.info("=== starting === py=%s platform=%s frozen=%s pid=%s",
-         sys.version.split()[0], sys.platform,
-         getattr(sys, "frozen", False), os.getpid())
+log.info("=== Hermes Installer starting === pid=%s py=%s platform=%s frozen=%s",
+         os.getpid(), sys.version.split()[0], sys.platform,
+         getattr(sys, "frozen", False))
 
 
 def _alert(title: str, msg: str):
@@ -40,19 +52,6 @@ def _alert(title: str, msg: str):
         root.destroy()
     except Exception:
         print(f"[ERROR] {title}: {msg}", file=sys.stderr)
-
-
-# ── Single-instance lock (prevents multiple exe copies running at once) ────
-def _acquire_lock(port: int) -> bool:
-    """Bind a UDP socket as a mutex. Returns False if another instance owns it."""
-    try:
-        _lock_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        _lock_sock.bind(("127.0.0.1", port + 1))   # e.g. 7892
-        # Store on module level so it isn't GC'd
-        _acquire_lock._sock = _lock_sock
-        return True
-    except OSError:
-        return False
 
 
 # ── Bundle path ────────────────────────────────────────────────────────────
@@ -72,7 +71,7 @@ if sys.platform == "win32":
     import asyncio
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-# ── Import app ─────────────────────────────────────────────────────────────
+# ── Import FastAPI app ─────────────────────────────────────────────────────
 try:
     import uvicorn
     from app import app as fastapi_app
@@ -85,22 +84,38 @@ except Exception as _e:
 PORT = 7891
 
 
+def _port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
+def _wait_for_server(port: int, timeout: float = 20.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), 0.3):
+                return True
+        except OSError:
+            time.sleep(0.15)
+    return False
+
+
 # ══════════════════════════════════════════════════════════════════════════
-# macOS — pywebview native window (cocoa, no multiprocessing issue)
+# macOS — pywebview cocoa
 # ══════════════════════════════════════════════════════════════════════════
 def _run_macos(url: str):
     try:
         import webview
-        log.info("pywebview %s  gui=cocoa", getattr(webview, "__version__", "?"))
-        window = webview.create_window(
-            title="Hermes Agent 安装向导",
-            url=url, width=1080, height=760,
+        log.info("pywebview %s gui=cocoa", getattr(webview, "__version__", "?"))
+        webview.create_window(
+            "Hermes Agent 安装向导", url,
+            width=1080, height=760,
             resizable=True, min_size=(860, 620),
             background_color="#0f0f1a",
         )
@@ -109,50 +124,46 @@ def _run_macos(url: str):
         log.exception("pywebview failed: %s", exc)
         import webbrowser
         webbrowser.open(url)
-        _alert("Hermes Installer",
-               f"原生窗口不可用（{exc}），已在浏览器中打开。\n{url}")
+        _alert("Hermes Installer", f"原生窗口不可用，已在浏览器中打开。\n{url}\n\n错误：{exc}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Windows — uvicorn on MAIN thread; browser opened via timer
+# Windows — browser + uvicorn on MAIN thread
 # ══════════════════════════════════════════════════════════════════════════
 def _run_windows(port: int):
     url = f"http://127.0.0.1:{port}"
 
-    # Open browser 2 s after uvicorn is ready (timer fires on a side thread)
-    def _open_browser():
-        time.sleep(2)
-        try:
+    # Open browser from a side thread after server is ready
+    def _open():
+        if _wait_for_server(port, timeout=30.0):
             import webbrowser
             webbrowser.open(url)
             log.info("browser opened: %s", url)
-        except Exception as exc:
-            log.exception("webbrowser.open failed: %s", exc)
+        else:
+            _alert("Hermes Installer", f"服务器未能在 30 秒内启动。\n日志：{_LOG_PATH}")
 
-    threading.Thread(target=_open_browser, daemon=True).start()
+    threading.Thread(target=_open, daemon=True).start()
 
     print()
     print("=" * 54)
-    print("  ⚡ Hermes Agent 安装向导")
+    print("  ⚡ Hermes Agent 安装向导  (Windows)")
     print("=" * 54)
-    print(f"  服务器地址：{url}")
-    print()
+    print(f"  地址: {url}")
     print("  浏览器正在打开，请稍候...")
-    print("  如未自动打开，请手动访问上方地址。")
-    print()
-    print("  关闭此窗口即可退出程序。")
+    print("  关闭此窗口即可退出。")
     print("=" * 54)
-    print()
 
-    log.info("uvicorn starting on main thread, port=%d", port)
-    # Run uvicorn on the MAIN thread (blocking call — no daemon threads,
-    # no subprocesses, no multiprocessing spawn loop possible)
+    log.info("uvicorn starting on main thread port=%d", port)
+    # Run on main thread — blocks until server is stopped.
+    # Forcing h11 + asyncio avoids any C-extension or subprocess spawning.
     uvicorn.run(
         fastapi_app,
         host="127.0.0.1",
         port=port,
         log_level="warning",
         reload=False,
+        loop="asyncio",   # pure Python, no uvloop subprocess
+        http="h11",       # pure Python, no httptools subprocess
     )
 
 
@@ -162,46 +173,30 @@ def _run_windows(port: int):
 def main():
     global PORT
 
-    # ── Single-instance check ──────────────────────────────────────────────
-    if not _acquire_lock(PORT):
-        log.warning("Another instance is already running on port %d", PORT)
-        # Just open the browser to the existing instance and exit
+    # If another instance already owns the port, just open its browser
+    if _port_in_use(PORT):
+        log.info("Port %d already in use — another instance running", PORT)
         try:
             import webbrowser
             webbrowser.open(f"http://127.0.0.1:{PORT}")
         except Exception:
             pass
-        print(f"Hermes Installer 已在运行，请访问 http://127.0.0.1:{PORT}")
         return
 
-    # ── Check if port is free; if not, find another ────────────────────────
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(("127.0.0.1", PORT)) == 0:
-            PORT = _find_free_port()
-            log.info("port 7891 busy → %d", PORT)
-
-    log.info("Using port %d", PORT)
-
     if sys.platform == "darwin":
-        # macOS: start uvicorn in background thread, webview on main thread
-        server_thread = threading.Thread(
+        # macOS: server in daemon thread, webview on main thread
+        t = threading.Thread(
             target=lambda: uvicorn.run(
                 fastapi_app, host="127.0.0.1", port=PORT,
-                log_level="warning", reload=False),
-            daemon=True,
-        )
-        server_thread.start()
-        # Wait for server to be ready
-        deadline = time.time() + 20
-        while time.time() < deadline:
-            try:
-                with socket.create_connection(("127.0.0.1", PORT), 0.3):
-                    break
-            except OSError:
-                time.sleep(0.15)
+                log_level="warning", reload=False,
+                loop="asyncio", http="h11"),
+            daemon=True)
+        t.start()
+        if not _wait_for_server(PORT, timeout=20.0):
+            _alert("Hermes Installer", f"服务器启动超时。\n日志：{_LOG_PATH}")
+            sys.exit(1)
         _run_macos(f"http://127.0.0.1:{PORT}")
     else:
-        # Windows/Linux: uvicorn on MAIN thread (browser opened via timer)
         _run_windows(PORT)
 
 
