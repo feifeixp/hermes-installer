@@ -277,61 +277,92 @@ async def _stream_subprocess(cmd: list[str], cwd: Optional[Path] = None) -> Asyn
 async def _install_generator() -> AsyncGenerator[str, None]:
     installed, version = check_hermes_installed()
     if installed:
-        payload = json.dumps({"type": "already_installed", "version": version})
-        yield f"data: {payload}\n\n"
-        payload = json.dumps({"type": "done", "success": True})
-        yield f"data: {payload}\n\n"
+        yield f"data: {json.dumps({'type':'already_installed','version':version})}\n\n"
+        yield f"data: {json.dumps({'type':'done','success':True})}\n\n"
         return
 
-    # Build the install command for the current platform.
-    # We delegate entirely to the official install scripts — they handle
-    # cloning, uv, venv, pip install .[all], node, ripgrep, ffmpeg, PATH, etc.
-    # --skip-setup / -SkipSetup skips the interactive CLI wizard; the GUI
-    # installer handles key/config setup itself.
-    if sys.platform == "win32":
-        # Download install.ps1 to a temp file then run with -SkipSetup so we
-        # can pass arguments (irm | iex does not support arg forwarding).
-        ps_cmd = (
-            f"$tmp = [System.IO.Path]::GetTempFileName() + '.ps1'; "
-            f"Invoke-WebRequest -UseBasicParsing -Uri '{HERMES_INSTALL_PS1}' -OutFile $tmp; "
-            f"& $tmp -SkipSetup; "
-            f"Remove-Item $tmp -ErrorAction SilentlyContinue"
-        )
-        cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd]
+    HERMES_HOME.mkdir(parents=True, exist_ok=True)
+
+    def _log(msg: str) -> str:
+        return f"data: {json.dumps({'type':'log','level':'info','message':msg})}\n\n"
+
+    # _stream_subprocess already yields a {"type":"returncode","code":N} event last.
+    # We forward log events to the client and capture the returncode via rc_box.
+    async def _run_step(cmd: list[str], cwd: Optional[Path] = None, rc_box: Optional[list] = None):
+        async for event in _stream_subprocess(cmd, cwd):
+            try:
+                data = json.loads(event[5:].strip())
+                if data.get("type") == "returncode":
+                    if rc_box is not None:
+                        rc_box[0] = data.get("code", 1)
+                    continue          # don't forward returncode event to browser
+            except Exception:
+                pass
+            yield event
+
+    # ── Step 1: Clone or update ───────────────────────────────────────────
+    rc = [0]
+    if not HERMES_AGENT.exists():
+        yield _log("正在克隆 hermes-agent 仓库...")
+        async for e in _run_step(
+            ["git", "clone", "--depth=1",
+             "https://github.com/NousResearch/hermes-agent", str(HERMES_AGENT)],
+            rc_box=rc,
+        ):
+            yield e
+        if rc[0] != 0:
+            yield f"data: {json.dumps({'type':'done','success':False,'message':'git clone 失败，请检查网络连接'})}\n\n"
+            return
     else:
-        # macOS / Linux — pipe curl output into bash
-        cmd = ["bash", "-c", f"curl -fsSL '{HERMES_INSTALL_SH}' | bash -s -- --skip-setup"]
+        yield _log("仓库已存在，正在拉取最新代码...")
+        async for e in _run_step(["git", "pull", "--ff-only"], cwd=HERMES_AGENT, rc_box=rc):
+            yield e
+        # pull failure is non-fatal (local changes etc.) — continue
 
-    yield f"data: {json.dumps({'type':'log','level':'info','message':'Running Hermes Agent installer (this may take a few minutes)...'})}\n\n"
+    # ── Step 2: Create venv ───────────────────────────────────────────────
+    yield _log("正在创建虚拟环境 (Python 3.11)...")
+    # Remove broken venv (directory exists but python binary is missing)
+    venv_dir = HERMES_AGENT / "venv"
+    if venv_dir.exists() and not HERMES_PYTHON.exists():
+        import shutil
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        yield _log("检测到损坏的虚拟环境，已清理，重新创建...")
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    assert proc.stdout is not None
-
-    while True:
-        line_bytes = await proc.stdout.readline()
-        if not line_bytes:
-            break
-        line = line_bytes.decode(errors="replace").rstrip()
-        if line:
-            payload = json.dumps({"type": "log", "level": "info", "message": line})
-            yield f"data: {payload}\n\n"
-        await asyncio.sleep(0)
-
-    await proc.wait()
-    rc = proc.returncode
-
-    if rc != 0:
-        payload = json.dumps({"type": "done", "success": False, "message": "Installation failed"})
-        yield f"data: {payload}\n\n"
+    rc[0] = 0
+    async for e in _run_step(
+        ["uv", "venv", "venv", "--python", "3.11"],
+        cwd=HERMES_AGENT, rc_box=rc,
+    ):
+        yield e
+    if rc[0] != 0:
+        yield f"data: {json.dumps({'type':'done','success':False,'message':'创建虚拟环境失败，请确认已安装 uv 和 Python 3.11'})}\n\n"
         return
 
-    yield f"data: {json.dumps({'type':'log','level':'info','message':'Installation complete!'})}\n\n"
-    payload = json.dumps({"type": "done", "success": True})
-    yield f"data: {payload}\n\n"
+    # ── Step 3: Install dependencies ──────────────────────────────────────
+    yield _log("正在安装依赖包（可能需要几分钟）...")
+    rc[0] = 0
+    async for e in _run_step(
+        ["uv", "pip", "install", "-e", ".[all]", "--python", str(HERMES_PYTHON)],
+        cwd=HERMES_AGENT, rc_box=rc,
+    ):
+        yield e
+
+    if rc[0] != 0:
+        # Fallback: install without optional extras
+        yield _log("完整安装失败，尝试基础安装模式...")
+        rc[0] = 0
+        async for e in _run_step(
+            ["uv", "pip", "install", "-e", ".", "--python", str(HERMES_PYTHON)],
+            cwd=HERMES_AGENT, rc_box=rc,
+        ):
+            yield e
+
+    if rc[0] != 0 or not HERMES_PYTHON.exists():
+        yield f"data: {json.dumps({'type':'done','success':False,'message':'依赖安装失败，请查看日志'})}\n\n"
+        return
+
+    yield _log("✓ 安装完成！")
+    yield f"data: {json.dumps({'type':'done','success':True})}\n\n"
 
 
 @app.get("/api/install")
