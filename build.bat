@@ -70,7 +70,16 @@ if errorlevel 1 (
 )
 echo  ✓ 依赖安装完成
 
-REM ── 4. Clean previous build ───────────────────────────────────────────────
+REM ── 4. Bundle hermes-agent source (so users don't need git) ─────────────
+echo  → 打包 hermes-agent 源码（内置到安装器，用户无需 git clone）...
+python bundle_source.py
+if errorlevel 1 (
+    echo  ❌ 源码打包失败，请检查网络连接和 git 配置后重试
+    pause
+    exit /b 1
+)
+
+REM ── 5. Clean previous build ───────────────────────────────────────────────
 echo  → 清理旧构建...
 if exist build rmdir /s /q build
 if exist "%DIST_DIR%\%APP_NAME%.exe" del /f /q "%DIST_DIR%\%APP_NAME%.exe"

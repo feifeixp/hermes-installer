@@ -266,34 +266,55 @@ async def _install_generator() -> AsyncGenerator[str, None]:
 
     HERMES_HOME.mkdir(parents=True, exist_ok=True)
 
-    # Step 1 — clone
+    # Step 1 — get hermes-agent source
+    # Priority: bundled zip (no git needed) → git clone fallback
+    BUNDLED_ZIP = BASE_DIR / "hermes_agent.zip"
+
     if not HERMES_AGENT.exists():
-        yield f"data: {json.dumps({'type':'log','level':'info','message':f'Cloning {HERMES_REPO}...'})}\n\n"
-        clone_cmd = ["git", "clone", "--depth=1", HERMES_REPO, str(HERMES_AGENT)]
-        return_code = None
-        proc = await asyncio.create_subprocess_exec(
-            *clone_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        assert proc.stdout is not None
-        while True:
-            line_bytes = await proc.stdout.readline()
-            if not line_bytes:
-                break
-            line = line_bytes.decode(errors="replace").rstrip()
-            if line:
-                payload = json.dumps({"type": "log", "level": "info", "message": line})
-                yield f"data: {payload}\n\n"
-            await asyncio.sleep(0)
-        await proc.wait()
-        return_code = proc.returncode
-        if return_code != 0:
-            payload = json.dumps({"type": "done", "success": False, "message": "git clone failed"})
-            yield f"data: {payload}\n\n"
-            return
+        if BUNDLED_ZIP.exists():
+            # ── Fast path: extract from bundled zip ──────────────────────
+            import zipfile
+            yield "data: " + json.dumps({"type": "log", "level": "info",
+                "message": "📦 使用内置源码包（无需网络）..."}) + "\n\n"
+            try:
+                loop = asyncio.get_event_loop()
+                def _extract():
+                    with zipfile.ZipFile(BUNDLED_ZIP) as zf:
+                        zf.extractall(HERMES_AGENT)
+                await loop.run_in_executor(None, _extract)
+                yield "data: " + json.dumps({"type": "log", "level": "info",
+                    "message": "✓ 源码解压完成"}) + "\n\n"
+            except Exception as e:
+                yield "data: " + json.dumps({"type": "done", "success": False,
+                    "message": f"解压失败: {e}"}) + "\n\n"
+                return
+        else:
+            # ── Fallback: git clone ───────────────────────────────────────
+            yield "data: " + json.dumps({"type": "log", "level": "info",
+                "message": f"正在从 GitHub 克隆 {HERMES_REPO}..."}) + "\n\n"
+            proc = await asyncio.create_subprocess_exec(
+                "git", "clone", "--depth=1", HERMES_REPO, str(HERMES_AGENT),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            assert proc.stdout is not None
+            while True:
+                line_bytes = await proc.stdout.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode(errors="replace").rstrip()
+                if line:
+                    yield "data: " + json.dumps({"type": "log", "level": "info",
+                        "message": line}) + "\n\n"
+                await asyncio.sleep(0)
+            await proc.wait()
+            if proc.returncode != 0:
+                yield "data: " + json.dumps({"type": "done", "success": False,
+                    "message": "git clone 失败，请检查网络连接"}) + "\n\n"
+                return
     else:
-        yield f"data: {json.dumps({'type':'log','level':'info','message':'Repository already cloned, pulling latest...'})}\n\n"
+        yield "data: " + json.dumps({"type": "log", "level": "info",
+            "message": "仓库已存在，拉取最新代码..."}) + "\n\n"
         pull_proc = await asyncio.create_subprocess_exec(
             "git", "pull",
             stdout=asyncio.subprocess.PIPE,
