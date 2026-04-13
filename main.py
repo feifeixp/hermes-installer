@@ -128,43 +128,35 @@ def _run_macos(url: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Windows — browser + uvicorn on MAIN thread
+# Windows — pywebview edgechromium (native window)
+# Edge WebView2 spawns native msedgewebview2.exe processes — those are
+# NOT Python processes and are NOT affected by our _HERMES_MAIN guard.
 # ══════════════════════════════════════════════════════════════════════════
-def _run_windows(port: int):
-    url = f"http://127.0.0.1:{port}"
-
-    # Open browser from a side thread after server is ready
-    def _open():
-        if _wait_for_server(port, timeout=30.0):
+def _run_windows(url: str):
+    try:
+        import webview
+        log.info("pywebview %s gui=edgechromium", getattr(webview, "__version__", "?"))
+        webview.create_window(
+            "Hermes Agent 安装向导", url,
+            width=1080, height=760,
+            resizable=True, min_size=(860, 620),
+            background_color="#0f0f1a",
+        )
+        webview.start(gui="edgechromium", debug=False)
+        log.info("webview closed")
+    except Exception as exc:
+        log.exception("pywebview failed: %s", exc)
+        # Fallback: open system browser
+        try:
             import webbrowser
             webbrowser.open(url)
-            log.info("browser opened: %s", url)
-        else:
-            _alert("Hermes Installer", f"服务器未能在 30 秒内启动。\n日志：{_LOG_PATH}")
-
-    threading.Thread(target=_open, daemon=True).start()
-
-    print()
-    print("=" * 54)
-    print("  ⚡ Hermes Agent 安装向导  (Windows)")
-    print("=" * 54)
-    print(f"  地址: {url}")
-    print("  浏览器正在打开，请稍候...")
-    print("  关闭此窗口即可退出。")
-    print("=" * 54)
-
-    log.info("uvicorn starting on main thread port=%d", port)
-    # Run on main thread — blocks until server is stopped.
-    # Forcing h11 + asyncio avoids any C-extension or subprocess spawning.
-    uvicorn.run(
-        fastapi_app,
-        host="127.0.0.1",
-        port=port,
-        log_level="warning",
-        reload=False,
-        loop="asyncio",   # pure Python, no uvloop subprocess
-        http="h11",       # pure Python, no httptools subprocess
-    )
+            _alert("Hermes Installer",
+                   f"原生窗口不可用（{exc}），\n已在浏览器中打开：{url}\n\n"
+                   f"关闭浏览器标签后请手动关闭控制台窗口退出。")
+        except Exception as exc2:
+            _alert("Hermes Installer — 错误",
+                   f"WebView 和浏览器均无法打开。\n{exc}\n{exc2}\n"
+                   f"请手动访问：{url}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -183,21 +175,26 @@ def main():
             pass
         return
 
+    # Start uvicorn in a background daemon thread (both platforms)
+    t = threading.Thread(
+        target=lambda: uvicorn.run(
+            fastapi_app, host="127.0.0.1", port=PORT,
+            log_level="warning", reload=False,
+            loop="asyncio", http="h11"),
+        daemon=True)
+    t.start()
+
+    log.info("waiting for server on port %d …", PORT)
+    if not _wait_for_server(PORT, timeout=20.0):
+        _alert("Hermes Installer", f"服务器启动超时。\n日志：{_LOG_PATH}")
+        sys.exit(1)
+    log.info("server ready")
+
+    url = f"http://127.0.0.1:{PORT}"
     if sys.platform == "darwin":
-        # macOS: server in daemon thread, webview on main thread
-        t = threading.Thread(
-            target=lambda: uvicorn.run(
-                fastapi_app, host="127.0.0.1", port=PORT,
-                log_level="warning", reload=False,
-                loop="asyncio", http="h11"),
-            daemon=True)
-        t.start()
-        if not _wait_for_server(PORT, timeout=20.0):
-            _alert("Hermes Installer", f"服务器启动超时。\n日志：{_LOG_PATH}")
-            sys.exit(1)
-        _run_macos(f"http://127.0.0.1:{PORT}")
+        _run_macos(url)
     else:
-        _run_windows(PORT)
+        _run_windows(url)
 
 
 if __name__ == "__main__":
