@@ -91,8 +91,8 @@ if IS_WIN:
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        upx=True,
-        console=True,   # keep terminal visible so errors are not silent
+        upx=False,      # UPX can trigger antivirus false-positives
+        console=True,   # console window = server keep-alive on Windows
         disable_windowed_traceback=False,
         argv_emulation=False,
         target_arch=None,
