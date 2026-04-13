@@ -27,7 +27,15 @@ from pydantic import BaseModel
 # Constants
 # ---------------------------------------------------------------------------
 
-HERMES_HOME = Path.home() / ".hermes"
+
+# On Windows the official install.ps1 uses %LOCALAPPDATA%\hermes
+# On macOS/Linux the official install.sh uses ~/.hermes
+if sys.platform == "win32":
+    _local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    HERMES_HOME = _local_app_data / "hermes"
+else:
+    HERMES_HOME = Path.home() / ".hermes"
+
 HERMES_AGENT = HERMES_HOME / "hermes-agent"
 HERMES_ENV = HERMES_HOME / ".env"
 HERMES_CONFIG = HERMES_HOME / "config.yaml"
@@ -36,7 +44,10 @@ if sys.platform == "win32":
     HERMES_PYTHON = HERMES_AGENT / "venv" / "Scripts" / "python.exe"
 else:
     HERMES_PYTHON = HERMES_AGENT / "venv" / "bin" / "python3"
-HERMES_REPO = "https://github.com/nousresearch/hermes-agent"
+
+HERMES_INSTALL_SH  = "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
+HERMES_INSTALL_PS1 = "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1"
+
 HERMES_GATEWAY_URL = "http://127.0.0.1:8642"   # Hermes Agent API server
 
 ILINK_BASE = "https://ilinkai.weixin.qq.com"
@@ -272,65 +283,36 @@ async def _install_generator() -> AsyncGenerator[str, None]:
         yield f"data: {payload}\n\n"
         return
 
-    HERMES_HOME.mkdir(parents=True, exist_ok=True)
-
-    # Step 1 — clone
-    if not HERMES_AGENT.exists():
-        yield f"data: {json.dumps({'type':'log','level':'info','message':f'Cloning {HERMES_REPO}...'})}\n\n"
-        clone_cmd = ["git", "clone", "--depth=1", HERMES_REPO, str(HERMES_AGENT)]
-        return_code = None
-        proc = await asyncio.create_subprocess_exec(
-            *clone_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+    # Build the install command for the current platform.
+    # We delegate entirely to the official install scripts — they handle
+    # cloning, uv, venv, pip install .[all], node, ripgrep, ffmpeg, PATH, etc.
+    # --skip-setup / -SkipSetup skips the interactive CLI wizard; the GUI
+    # installer handles key/config setup itself.
+    if sys.platform == "win32":
+        # Download install.ps1 to a temp file then run with -SkipSetup so we
+        # can pass arguments (irm | iex does not support arg forwarding).
+        ps_cmd = (
+            f"$tmp = [System.IO.Path]::GetTempFileName() + '.ps1'; "
+            f"Invoke-WebRequest -UseBasicParsing -Uri '{HERMES_INSTALL_PS1}' -OutFile $tmp; "
+            f"& $tmp -SkipSetup; "
+            f"Remove-Item $tmp -ErrorAction SilentlyContinue"
         )
-        assert proc.stdout is not None
-        while True:
-            line_bytes = await proc.stdout.readline()
-            if not line_bytes:
-                break
-            line = line_bytes.decode(errors="replace").rstrip()
-            if line:
-                payload = json.dumps({"type": "log", "level": "info", "message": line})
-                yield f"data: {payload}\n\n"
-            await asyncio.sleep(0)
-        await proc.wait()
-        return_code = proc.returncode
-        if return_code != 0:
-            payload = json.dumps({"type": "done", "success": False, "message": "git clone failed"})
-            yield f"data: {payload}\n\n"
-            return
+        cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd]
     else:
-        yield f"data: {json.dumps({'type':'log','level':'info','message':'Repository already cloned, pulling latest...'})}\n\n"
-        pull_proc = await asyncio.create_subprocess_exec(
-            "git", "pull",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(HERMES_AGENT),
-        )
-        assert pull_proc.stdout is not None
-        while True:
-            line_bytes = await pull_proc.stdout.readline()
-            if not line_bytes:
-                break
-            line = line_bytes.decode(errors="replace").rstrip()
-            if line:
-                payload = json.dumps({"type": "log", "level": "info", "message": line})
-                yield f"data: {payload}\n\n"
-            await asyncio.sleep(0)
-        await pull_proc.wait()
+        # macOS / Linux — pipe curl output into bash
+        cmd = ["bash", "-c", f"curl -fsSL '{HERMES_INSTALL_SH}' | bash -s -- --skip-setup"]
 
-    # Step 2 — create venv + install
-    yield f"data: {json.dumps({'type':'log','level':'info','message':'Creating virtual environment...'})}\n\n"
-    venv_proc = await asyncio.create_subprocess_exec(
-        "uv", "venv", "venv",
+    yield f"data: {json.dumps({'type':'log','level':'info','message':'Running Hermes Agent installer (this may take a few minutes)...'})}\n\n"
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
-        cwd=str(HERMES_AGENT),
     )
-    assert venv_proc.stdout is not None
+    assert proc.stdout is not None
+
     while True:
-        line_bytes = await venv_proc.stdout.readline()
+        line_bytes = await proc.stdout.readline()
         if not line_bytes:
             break
         line = line_bytes.decode(errors="replace").rstrip()
@@ -338,31 +320,12 @@ async def _install_generator() -> AsyncGenerator[str, None]:
             payload = json.dumps({"type": "log", "level": "info", "message": line})
             yield f"data: {payload}\n\n"
         await asyncio.sleep(0)
-    await venv_proc.wait()
 
-    yield f"data: {json.dumps({'type':'log','level':'info','message':'Installing dependencies (this may take a minute)...'})}\n\n"
-    pip_proc = await asyncio.create_subprocess_exec(
-        "uv", "pip", "install", "-e", ".",
-        "--python", str(HERMES_PYTHON),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        cwd=str(HERMES_AGENT),
-    )
-    assert pip_proc.stdout is not None
-    while True:
-        line_bytes = await pip_proc.stdout.readline()
-        if not line_bytes:
-            break
-        line = line_bytes.decode(errors="replace").rstrip()
-        if line:
-            payload = json.dumps({"type": "log", "level": "info", "message": line})
-            yield f"data: {payload}\n\n"
-        await asyncio.sleep(0)
-    await pip_proc.wait()
-    rc = pip_proc.returncode
+    await proc.wait()
+    rc = proc.returncode
 
     if rc != 0:
-        payload = json.dumps({"type": "done", "success": False, "message": "pip install failed"})
+        payload = json.dumps({"type": "done", "success": False, "message": "Installation failed"})
         yield f"data: {payload}\n\n"
         return
 
