@@ -335,7 +335,7 @@ async def _install_generator() -> AsyncGenerator[str, None]:
     yield f"data: {json.dumps({'type':'log','level':'info','message':'Installing dependencies (this may take a minute)...'})}\n\n"
     pip_proc = await asyncio.create_subprocess_exec(
         "uv", "pip", "install", "-e", ".",
-        "--python", str(HERMES_AGENT / "venv" / "bin" / "python3"),
+        "--python", str(HERMES_PYTHON),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         cwd=str(HERMES_AGENT),
