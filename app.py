@@ -247,6 +247,21 @@ async def api_check():
 # ---------------------------------------------------------------------------
 
 
+def _utf8_env() -> dict:
+    """Return a copy of the current env with UTF-8 forced for subprocess I/O.
+
+    On Chinese Windows the default console encoding is GBK (cp936).
+    Any subprocess that prints non-GBK characters (emoji, CJK outside GBK, …)
+    will crash with UnicodeEncodeError unless we override the codec.
+    PYTHONUTF8=1  → Python UTF-8 mode (3.7+, affects all I/O)
+    PYTHONIOENCODING=utf-8 → explicit stdin/stdout/stderr codec
+    """
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
 async def _stream_subprocess(cmd: list[str], cwd: Optional[Path] = None) -> AsyncGenerator[str, None]:
     """Run a subprocess and yield SSE-formatted JSON lines."""
     proc = await asyncio.create_subprocess_exec(
@@ -254,6 +269,7 @@ async def _stream_subprocess(cmd: list[str], cwd: Optional[Path] = None) -> Asyn
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         cwd=str(cwd) if cwd else None,
+        env=_utf8_env(),
     )
 
     assert proc.stdout is not None
@@ -668,6 +684,7 @@ async def api_gateway_restart():
             hermes_bin_str, "gateway", "restart",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=_utf8_env(),   # force UTF-8; prevents GBK crash on Chinese Windows
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
         rc = proc.returncode
