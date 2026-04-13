@@ -27,7 +27,15 @@ from pydantic import BaseModel
 # Constants
 # ---------------------------------------------------------------------------
 
-HERMES_HOME = Path.home() / ".hermes"
+
+# On Windows the official install.ps1 uses %LOCALAPPDATA%\hermes
+# On macOS/Linux the official install.sh uses ~/.hermes
+if sys.platform == "win32":
+    _local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    HERMES_HOME = _local_app_data / "hermes"
+else:
+    HERMES_HOME = Path.home() / ".hermes"
+
 HERMES_AGENT = HERMES_HOME / "hermes-agent"
 HERMES_ENV = HERMES_HOME / ".env"
 HERMES_CONFIG = HERMES_HOME / "config.yaml"
@@ -36,7 +44,10 @@ if sys.platform == "win32":
     HERMES_PYTHON = HERMES_AGENT / "venv" / "Scripts" / "python.exe"
 else:
     HERMES_PYTHON = HERMES_AGENT / "venv" / "bin" / "python3"
-HERMES_REPO = "https://github.com/nousresearch/hermes-agent"
+
+HERMES_INSTALL_SH  = "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
+HERMES_INSTALL_PS1 = "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1"
+
 HERMES_GATEWAY_URL = "http://127.0.0.1:8642"   # Hermes Agent API server
 
 ILINK_BASE = "https://ilinkai.weixin.qq.com"
@@ -166,9 +177,17 @@ def check_uv() -> dict:
 
 
 def check_hermes_installed() -> tuple[bool, str]:
-    """Return (installed, version_string)."""
+    """Return (installed, version_string).
+
+    Requires BOTH conditions to be true:
+    1. pyproject.toml exists  — repo was cloned
+    2. HERMES_PYTHON exists   — venv was created AND pip install succeeded
+    """
     marker = HERMES_AGENT / "pyproject.toml"
     if not marker.exists():
+        return False, ""
+    # venv Python must also exist — otherwise pip install never finished
+    if not HERMES_PYTHON.exists():
         return False, ""
     # Try to read version from pyproject.toml
     try:
@@ -228,6 +247,21 @@ async def api_check():
 # ---------------------------------------------------------------------------
 
 
+def _utf8_env() -> dict:
+    """Return a copy of the current env with UTF-8 forced for subprocess I/O.
+
+    On Chinese Windows the default console encoding is GBK (cp936).
+    Any subprocess that prints non-GBK characters (emoji, CJK outside GBK, …)
+    will crash with UnicodeEncodeError unless we override the codec.
+    PYTHONUTF8=1  → Python UTF-8 mode (3.7+, affects all I/O)
+    PYTHONIOENCODING=utf-8 → explicit stdin/stdout/stderr codec
+    """
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
 async def _stream_subprocess(cmd: list[str], cwd: Optional[Path] = None) -> AsyncGenerator[str, None]:
     """Run a subprocess and yield SSE-formatted JSON lines."""
     proc = await asyncio.create_subprocess_exec(
@@ -235,6 +269,7 @@ async def _stream_subprocess(cmd: list[str], cwd: Optional[Path] = None) -> Asyn
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         cwd=str(cwd) if cwd else None,
+        env=_utf8_env(),
     )
 
     assert proc.stdout is not None
@@ -258,130 +293,116 @@ async def _stream_subprocess(cmd: list[str], cwd: Optional[Path] = None) -> Asyn
 async def _install_generator() -> AsyncGenerator[str, None]:
     installed, version = check_hermes_installed()
     if installed:
-        payload = json.dumps({"type": "already_installed", "version": version})
-        yield f"data: {payload}\n\n"
-        payload = json.dumps({"type": "done", "success": True})
-        yield f"data: {payload}\n\n"
+        yield f"data: {json.dumps({'type':'already_installed','version':version})}\n\n"
+        yield f"data: {json.dumps({'type':'done','success':True})}\n\n"
         return
 
     HERMES_HOME.mkdir(parents=True, exist_ok=True)
 
-    # Step 1 — get hermes-agent source
-    # Priority: bundled zip (no git needed) → git clone fallback
-    BUNDLED_ZIP = BASE_DIR / "hermes_agent.zip"
+    def _log(msg: str) -> str:
+        return f"data: {json.dumps({'type':'log','level':'info','message':msg})}\n\n"
 
-    if not HERMES_AGENT.exists():
-        if BUNDLED_ZIP.exists():
-            # ── Fast path: extract from bundled zip ──────────────────────
-            import zipfile
-            yield "data: " + json.dumps({"type": "log", "level": "info",
-                "message": "📦 使用内置源码包（无需网络）..."}) + "\n\n"
+    def _fail(msg: str) -> str:
+        return f"data: {json.dumps({'type':'done','success':False,'message':msg})}\n\n"
+
+    # _stream_subprocess yields {"type":"returncode","code":N} as the last event.
+    # We forward log lines to the browser and capture rc via rc_box.
+    async def _run_step(cmd: list[str], cwd: Optional[Path] = None, rc_box: Optional[list] = None):
+        async for event in _stream_subprocess(cmd, cwd):
             try:
-                loop = asyncio.get_event_loop()
+                data = json.loads(event[5:].strip())
+                if data.get("type") == "returncode":
+                    if rc_box is not None:
+                        rc_box[0] = data.get("code", 1)
+                    continue
+            except Exception:
+                pass
+            yield event
+
+    # ── Step 1: Get source code ───────────────────────────────────────────
+    # Priority: extract bundled zip (no network) → git clone (fallback)
+    need_source = not HERMES_AGENT.exists() or not (HERMES_AGENT / "pyproject.toml").exists()
+
+    if need_source:
+        # Locate the bundle zip embedded in the installer
+        _base = Path(os.environ.get("HERMES_INSTALLER_BASE_DIR", str(Path(__file__).parent)))
+        bundle_zip = _base / "hermes_agent_bundle.zip"
+
+        if bundle_zip.exists():
+            yield _log(f"正在解压内置源码包（{bundle_zip.stat().st_size // 1024} KB）...")
+            try:
+                import zipfile, shutil
+                if HERMES_AGENT.exists():
+                    shutil.rmtree(HERMES_AGENT)
+                HERMES_AGENT.mkdir(parents=True, exist_ok=True)
+
                 def _extract():
-                    with zipfile.ZipFile(BUNDLED_ZIP) as zf:
+                    with zipfile.ZipFile(bundle_zip, "r") as zf:
                         zf.extractall(HERMES_AGENT)
-                await loop.run_in_executor(None, _extract)
-                yield "data: " + json.dumps({"type": "log", "level": "info",
-                    "message": "✓ 源码解压完成"}) + "\n\n"
-            except Exception as e:
-                yield "data: " + json.dumps({"type": "done", "success": False,
-                    "message": f"解压失败: {e}"}) + "\n\n"
+
+                await asyncio.get_event_loop().run_in_executor(None, _extract)
+                yield _log("✓ 源码解压完成")
+            except Exception as exc:
+                yield _fail(f"解压失败: {exc}")
                 return
         else:
-            # ── Fallback: git clone ───────────────────────────────────────
-            yield "data: " + json.dumps({"type": "log", "level": "info",
-                "message": f"正在从 GitHub 克隆 {HERMES_REPO}..."}) + "\n\n"
-            proc = await asyncio.create_subprocess_exec(
-                "git", "clone", "--depth=1", HERMES_REPO, str(HERMES_AGENT),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            assert proc.stdout is not None
-            while True:
-                line_bytes = await proc.stdout.readline()
-                if not line_bytes:
-                    break
-                line = line_bytes.decode(errors="replace").rstrip()
-                if line:
-                    yield "data: " + json.dumps({"type": "log", "level": "info",
-                        "message": line}) + "\n\n"
-                await asyncio.sleep(0)
-            await proc.wait()
-            if proc.returncode != 0:
-                yield "data: " + json.dumps({"type": "done", "success": False,
-                    "message": "git clone 失败，请检查网络连接"}) + "\n\n"
+            # Fallback: git clone (requires network)
+            yield _log("未找到内置包，正在从 GitHub 克隆（需要网络）...")
+            rc = [0]
+            async for e in _run_step(
+                ["git", "clone", "--depth=1",
+                 "https://github.com/NousResearch/hermes-agent", str(HERMES_AGENT)],
+                rc_box=rc,
+            ):
+                yield e
+            if rc[0] != 0:
+                yield _fail("git clone 失败，请检查网络连接")
                 return
     else:
-        yield "data: " + json.dumps({"type": "log", "level": "info",
-            "message": "仓库已存在，拉取最新代码..."}) + "\n\n"
-        pull_proc = await asyncio.create_subprocess_exec(
-            "git", "pull",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(HERMES_AGENT),
-        )
-        assert pull_proc.stdout is not None
-        while True:
-            line_bytes = await pull_proc.stdout.readline()
-            if not line_bytes:
-                break
-            line = line_bytes.decode(errors="replace").rstrip()
-            if line:
-                payload = json.dumps({"type": "log", "level": "info", "message": line})
-                yield f"data: {payload}\n\n"
-            await asyncio.sleep(0)
-        await pull_proc.wait()
+        yield _log("源码已存在，跳过解压...")
 
-    # Step 2 — create venv + install
-    yield f"data: {json.dumps({'type':'log','level':'info','message':'Creating virtual environment...'})}\n\n"
-    venv_proc = await asyncio.create_subprocess_exec(
-        "uv", "venv", "venv",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        cwd=str(HERMES_AGENT),
-    )
-    assert venv_proc.stdout is not None
-    while True:
-        line_bytes = await venv_proc.stdout.readline()
-        if not line_bytes:
-            break
-        line = line_bytes.decode(errors="replace").rstrip()
-        if line:
-            payload = json.dumps({"type": "log", "level": "info", "message": line})
-            yield f"data: {payload}\n\n"
-        await asyncio.sleep(0)
-    await venv_proc.wait()
+    # ── Step 2: Create venv ───────────────────────────────────────────────
+    yield _log("正在创建虚拟环境 (Python 3.11)...")
+    venv_dir = HERMES_AGENT / "venv"
+    if venv_dir.exists() and not HERMES_PYTHON.exists():
+        import shutil
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        yield _log("检测到损坏的虚拟环境，已清理，重新创建...")
 
-    yield f"data: {json.dumps({'type':'log','level':'info','message':'Installing dependencies (this may take a minute)...'})}\n\n"
-    pip_proc = await asyncio.create_subprocess_exec(
-        "uv", "pip", "install", "-e", ".",
-        "--python", str(HERMES_AGENT / "venv" / "bin" / "python3"),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        cwd=str(HERMES_AGENT),
-    )
-    assert pip_proc.stdout is not None
-    while True:
-        line_bytes = await pip_proc.stdout.readline()
-        if not line_bytes:
-            break
-        line = line_bytes.decode(errors="replace").rstrip()
-        if line:
-            payload = json.dumps({"type": "log", "level": "info", "message": line})
-            yield f"data: {payload}\n\n"
-        await asyncio.sleep(0)
-    await pip_proc.wait()
-    rc = pip_proc.returncode
-
-    if rc != 0:
-        payload = json.dumps({"type": "done", "success": False, "message": "pip install failed"})
-        yield f"data: {payload}\n\n"
+    rc = [0]
+    async for e in _run_step(
+        ["uv", "venv", "venv", "--python", "3.11"],
+        cwd=HERMES_AGENT, rc_box=rc,
+    ):
+        yield e
+    if rc[0] != 0:
+        yield _fail("创建虚拟环境失败，请确认已安装 uv 和 Python 3.11")
         return
 
-    yield f"data: {json.dumps({'type':'log','level':'info','message':'Installation complete!'})}\n\n"
-    payload = json.dumps({"type": "done", "success": True})
-    yield f"data: {payload}\n\n"
+    # ── Step 3: Install dependencies ──────────────────────────────────────
+    yield _log("正在安装依赖包（可能需要几分钟）...")
+    rc[0] = 0
+    async for e in _run_step(
+        ["uv", "pip", "install", "-e", ".[all]", "--python", str(HERMES_PYTHON)],
+        cwd=HERMES_AGENT, rc_box=rc,
+    ):
+        yield e
+
+    if rc[0] != 0:
+        yield _log("完整安装失败，尝试基础安装...")
+        rc[0] = 0
+        async for e in _run_step(
+            ["uv", "pip", "install", "-e", ".", "--python", str(HERMES_PYTHON)],
+            cwd=HERMES_AGENT, rc_box=rc,
+        ):
+            yield e
+
+    if rc[0] != 0 or not HERMES_PYTHON.exists():
+        yield _fail("依赖安装失败，请查看上方日志")
+        return
+
+    yield _log("✓ 安装完成！")
+    yield f"data: {json.dumps({'type':'done','success':True})}\n\n"
 
 
 @app.get("/api/install")
@@ -663,6 +684,7 @@ async def api_gateway_restart():
             hermes_bin_str, "gateway", "restart",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=_utf8_env(),   # force UTF-8; prevents GBK crash on Chinese Windows
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
         rc = proc.returncode

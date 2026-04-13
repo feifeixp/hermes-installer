@@ -1,71 +1,49 @@
 """
-bundle_source.py — Clone hermes-agent and create hermes_agent.zip for bundling.
-
-Called by build.bat / build.sh before PyInstaller.
-Output: hermes_agent.zip (bundled into the exe via hermes_installer.spec)
-
-This lets the installer work without git — it extracts the zip instead of
-cloning from GitHub.
+Build helper: clone hermes-agent and create hermes_agent_bundle.zip
+Run this before PyInstaller:  python bundle_source.py
 """
-import os
-import shutil
-import stat
-import sys
+import subprocess
 import zipfile
-from pathlib import Path
+import pathlib
+import sys
+import shutil
 
-REPO_URL  = "https://github.com/nousresearch/hermes-agent"
-CLONE_DIR = Path("hermes_agent_bundle")
-ZIP_OUT   = Path("hermes_agent.zip")
-
-# Directories / files to exclude from the bundle (keep it lean)
-EXCLUDE = {".git", "__pycache__", "*.pyc", "*.pyo",
-           ".pytest_cache", "node_modules", ".venv", "venv"}
-
-
-def _remove_readonly(func, path, _exc):
-    """onerror handler for shutil.rmtree: clear read-only flag then retry."""
-    try:
-        os.chmod(path, stat.S_IWRITE)
-        func(path)
-    except Exception as e:
-        print(f"  [warn] could not remove {path}: {e}")
-
-
-def _should_exclude(path: Path) -> bool:
-    for part in path.parts:
-        if part in EXCLUDE:
-            return True
-        for pat in EXCLUDE:
-            if "*" in pat and path.name.endswith(pat.lstrip("*")):
-                return True
-    return False
+REPO_URL  = "https://github.com/NousResearch/hermes-agent"
+CLONE_DIR = pathlib.Path("hermes_agent_bundle")
+ZIP_PATH  = pathlib.Path("hermes_agent_bundle.zip")
 
 
 def main():
-    print(f"  → 清理旧目录 {CLONE_DIR} ...")
+    # ── Clean up any previous run ─────────────────────────────────────────
     if CLONE_DIR.exists():
-        shutil.rmtree(CLONE_DIR, onerror=_remove_readonly)
+        shutil.rmtree(CLONE_DIR)
+    if ZIP_PATH.exists():
+        ZIP_PATH.unlink()
 
-    print(f"  → 克隆 {REPO_URL} ...")
-    ret = os.system(f'git clone --depth=1 "{REPO_URL}" "{CLONE_DIR}"')
-    if ret != 0:
-        print("  ❌ git clone 失败，请检查网络或 git 是否已安装。")
+    # ── Clone (shallow, no history needed) ───────────────────────────────
+    print(f"→ Cloning {REPO_URL} ...")
+    result = subprocess.run(
+        ["git", "clone", "--depth=1", REPO_URL, str(CLONE_DIR)],
+        check=False,
+    )
+    if result.returncode != 0:
+        print("❌ git clone failed — check your network / git config")
         sys.exit(1)
 
-    print(f"  → 创建 {ZIP_OUT} ...")
-    with zipfile.ZipFile(ZIP_OUT, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for file in CLONE_DIR.rglob("*"):
-            if file.is_file() and not _should_exclude(file.relative_to(CLONE_DIR)):
-                arcname = file.relative_to(CLONE_DIR)
-                zf.write(file, arcname)
+    # ── Zip (exclude .git to keep size small) ────────────────────────────
+    print("→ Creating bundle zip ...")
+    count = 0
+    with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for f in sorted(CLONE_DIR.rglob("*")):
+            if f.is_file() and ".git" not in f.parts:
+                arcname = f.relative_to(CLONE_DIR)
+                zf.write(f, arcname)
+                count += 1
 
-    size_mb = ZIP_OUT.stat().st_size / 1024 / 1024
-    print(f"  ✓ {ZIP_OUT} 创建完成（{size_mb:.1f} MB）")
-
-    print(f"  → 清理临时目录 {CLONE_DIR} ...")
-    shutil.rmtree(CLONE_DIR, onerror=_remove_readonly)
-    print("  ✓ 源码打包完成")
+    # ── Clean up clone dir ────────────────────────────────────────────────
+    shutil.rmtree(CLONE_DIR)
+    size_kb = ZIP_PATH.stat().st_size // 1024
+    print(f"✓ Bundled {count} files → {ZIP_PATH}  ({size_kb} KB)")
 
 
 if __name__ == "__main__":

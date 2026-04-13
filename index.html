@@ -793,17 +793,81 @@
         <!-- Instructions -->
         <div style="margin-bottom:20px;">
           <div style="font-size:0.85rem;font-weight:600;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">使用方式</div>
+
+          <!-- 立即开始 -->
+          <div class="instruction-block" style="border-left-color:var(--green);">
+            <h4 style="color:var(--green);">🚀 立即开始</h4>
+            <p style="margin-bottom:8px;">安装完成后，在终端中运行以下命令：</p>
+            <div style="background:var(--terminal-bg);border-radius:6px;padding:10px 14px;font-family:'Menlo','Courier New',monospace;font-size:0.8rem;line-height:1.8;">
+              <div style="color:#94a3b8;"># macOS / Linux — 重新加载 Shell 环境变量</div>
+              <div style="color:var(--terminal-green);">source ~/.bashrc &nbsp;&nbsp;<span style="color:#475569;"># 或 source ~/.zshrc</span></div>
+              <div style="color:#94a3b8;margin-top:6px;"># Windows — 重启终端（Terminal）即可</div>
+              <div style="color:#94a3b8;margin-top:10px;"># 启动 Hermes</div>
+              <div style="color:var(--terminal-green);">hermes &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#475569;"># 开始对话！</span></div>
+            </div>
+          </div>
+
           <div class="instruction-block">
             <h4>微信聊天</h4>
             <p>打开微信，直接向已绑定的账号发送消息，Hermes Agent 会自动响应。</p>
           </div>
-          <div class="instruction-block">
-            <h4>命令行</h4>
-            <p>在终端运行 <code>hermes chat</code> 开始对话，或 <code>hermes --help</code> 查看所有命令。</p>
-          </div>
+
           <div class="instruction-block">
             <h4>配置文件</h4>
             <p>API 密钥保存在 <code>~/.hermes/.env</code>，配置在 <code>~/.hermes/config.yaml</code>。</p>
+          </div>
+        </div>
+
+        <!-- 常用命令参考 -->
+        <div style="margin-bottom:20px;">
+          <div style="font-size:0.85rem;font-weight:600;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">常用命令参考</div>
+          <div class="card" style="padding:0;overflow:hidden;">
+            <table style="width:100%;border-collapse:collapse;font-size:0.83rem;">
+              <thead>
+                <tr style="background:rgba(124,58,237,0.1);border-bottom:1px solid var(--border);">
+                  <th style="text-align:left;padding:10px 18px;color:var(--purple-light);font-weight:600;width:52%;">命令</th>
+                  <th style="text-align:left;padding:10px 18px;color:var(--text-muted);font-weight:500;">说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom:1px solid var(--border);">
+                  <td style="padding:9px 18px;"><code>hermes</code></td>
+                  <td style="padding:9px 18px;color:var(--text-muted);">启动交互式对话</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);">
+                  <td style="padding:9px 18px;"><code>hermes model</code></td>
+                  <td style="padding:9px 18px;color:var(--text-muted);">选择 LLM 模型和提供商</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border);">
+                  <td style="padding:9px 18px;"><code>hermes tools</code></td>
+                  <td style="padding:9px 18px;color:var(--text-muted);">配置启用的工具</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);">
+                  <td style="padding:9px 18px;"><code>hermes config set</code></td>
+                  <td style="padding:9px 18px;color:var(--text-muted);">设置单个配置项</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border);">
+                  <td style="padding:9px 18px;"><code>hermes gateway</code></td>
+                  <td style="padding:9px 18px;color:var(--text-muted);">启动消息网关（Telegram / Discord 等）</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);">
+                  <td style="padding:9px 18px;"><code>hermes setup</code></td>
+                  <td style="padding:9px 18px;color:var(--text-muted);">运行完整配置向导</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border);">
+                  <td style="padding:9px 18px;"><code>hermes update</code></td>
+                  <td style="padding:9px 18px;color:var(--text-muted);">更新到最新版本</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);">
+                  <td style="padding:9px 18px;"><code>hermes doctor</code></td>
+                  <td style="padding:9px 18px;color:var(--text-muted);">诊断环境问题</td>
+                </tr>
+                <tr>
+                  <td style="padding:9px 18px;"><code>hermes claw migrate</code></td>
+                  <td style="padding:9px 18px;color:var(--text-muted);">从 OpenClaw 迁移</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
 
