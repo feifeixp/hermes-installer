@@ -819,7 +819,8 @@ async def api_chat_stream(req: ChatRequest):
     # 所有请求必须经过 Hermes Agent Gateway（port 8642）
     if not await _hermes_gateway_running():
         async def _no_gateway() -> AsyncGenerator[str, None]:
-            yield f"data: {json.dumps({'type':'error','message':'⚠️ Hermes Agent Gateway 未运行（port 8642）。\\n\\n请重新启动 Hermes Agent，或返回安装向导重新配置。'})}\n\n"
+            msg = "⚠️ Hermes Agent Gateway 未运行（port 8642）。\n\n请重新启动 Hermes Agent，或返回安装向导重新配置。"
+            yield "data: " + json.dumps({"type": "error", "message": msg}) + "\n\n"
         return StreamingResponse(
             _no_gateway(),
             media_type="text/event-stream",
