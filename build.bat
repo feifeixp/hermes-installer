@@ -80,10 +80,21 @@ if errorlevel 1 (
 )
 echo  ✓ hermes-agent 源码打包完成
 
-REM ── 4. Clean previous build ───────────────────────────────────────────────
+REM ── 4. Kill running exe + clean previous build ───────────────────────────
+echo  → 关闭正在运行的旧版本（如有）...
+taskkill /f /im "%APP_NAME%.exe" >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+
 echo  → 清理旧构建...
 if exist build rmdir /s /q build
-if exist "%DIST_DIR%\%APP_NAME%.exe" del /f /q "%DIST_DIR%\%APP_NAME%.exe"
+if exist "%DIST_DIR%\%APP_NAME%.exe" (
+    del /f /q "%DIST_DIR%\%APP_NAME%.exe" >nul 2>&1
+    if exist "%DIST_DIR%\%APP_NAME%.exe" (
+        echo  ⚠ 文件仍被占用，等待 3 秒后重试...
+        ping -n 4 127.0.0.1 >nul
+        del /f /q "%DIST_DIR%\%APP_NAME%.exe" >nul 2>&1
+    )
+)
 if exist "%DIST_DIR%\%ZIP_NAME%"     del /f /q "%DIST_DIR%\%ZIP_NAME%"
 if exist __pycache__ rmdir /s /q __pycache__
 
