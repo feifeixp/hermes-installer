@@ -399,13 +399,24 @@ async def _install_generator() -> AsyncGenerator[str, None]:
                 f"https://mirror.ghproxy.com/https://github.com/{_REPO_PATH}",
                 f"https://gitclone.com/github.com/{_REPO_PATH}",
             ]
+            # Pre-flight: make sure git is available
+            _git_bin = _which("git")
+            if not _git_bin:
+                yield _fail(
+                    "未找到 git 命令。\n"
+                    "请先安装 Git for Windows：https://git-scm.com/download/win\n"
+                    "安装后重新运行安装器。"
+                )
+                return
+            yield _log(f"✓ 找到 git: {_git_bin}")
+
             cloned = False
             for _i, _url in enumerate(_MIRRORS):
                 _label = "GitHub" if _i == 0 else f"镜像{_i}"
                 yield _log(f"正在尝试 {_label} 克隆：{_url}")
                 rc = [0]
                 async for e in _run_step(
-                    ["git", "clone", "--depth=1", _url, str(HERMES_AGENT)],
+                    [_git_bin, "clone", "--depth=1", _url, str(HERMES_AGENT)],
                     rc_box=rc,
                 ):
                     yield e
@@ -425,6 +436,20 @@ async def _install_generator() -> AsyncGenerator[str, None]:
 
     # ── Step 2: Create venv ───────────────────────────────────────────────
     yield _log("正在创建虚拟环境 (Python 3.11)...")
+
+    # Pre-flight: make sure uv is available
+    _uv_bin = _which("uv")
+    if not _uv_bin:
+        yield _fail(
+            "未找到 uv 命令。\n"
+            "请先安装 uv：https://docs.astral.sh/uv/getting-started/installation/\n"
+            "Windows 安装命令（PowerShell）：\n"
+            "  powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"\n"
+            "安装后重新运行安装器。"
+        )
+        return
+    yield _log(f"✓ 找到 uv: {_uv_bin}")
+
     venv_dir = HERMES_AGENT / "venv"
     if venv_dir.exists() and not HERMES_PYTHON.exists():
         import shutil
@@ -433,7 +458,7 @@ async def _install_generator() -> AsyncGenerator[str, None]:
 
     rc = [0]
     async for e in _run_step(
-        ["uv", "venv", "venv", "--python", "3.11"],
+        [_uv_bin, "venv", "venv", "--python", "3.11"],
         cwd=HERMES_AGENT, rc_box=rc,
     ):
         yield e
@@ -445,7 +470,7 @@ async def _install_generator() -> AsyncGenerator[str, None]:
     yield _log("正在安装依赖包（可能需要几分钟）...")
     rc[0] = 0
     async for e in _run_step(
-        ["uv", "pip", "install", "-e", ".[all]", "--python", str(HERMES_PYTHON)],
+        [_uv_bin, "pip", "install", "-e", ".[all]", "--python", str(HERMES_PYTHON)],
         cwd=HERMES_AGENT, rc_box=rc,
     ):
         yield e
@@ -454,7 +479,7 @@ async def _install_generator() -> AsyncGenerator[str, None]:
         yield _log("完整安装失败，尝试基础安装...")
         rc[0] = 0
         async for e in _run_step(
-            ["uv", "pip", "install", "-e", ".", "--python", str(HERMES_PYTHON)],
+            [_uv_bin, "pip", "install", "-e", ".", "--python", str(HERMES_PYTHON)],
             cwd=HERMES_AGENT, rc_box=rc,
         ):
             yield e
