@@ -137,31 +137,59 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
 
 
 def check_python() -> dict:
-    # Prefer hermes venv Python (3.11+), fall back to system Python
-    candidates = [
+    """Check for Python 3.10+.
+
+    Search order:
+    1. Hermes venv Python (installed and working)
+    2. Named executables found via expanded PATH (_which)
+    3. uv-managed Python (uv python list)
+    4. The runtime embedding this script (works when frozen by PyInstaller)
+    """
+    # Named candidates — try each with expanded PATH
+    named = [
         str(HERMES_PYTHON),
-        "python3.11", "python3.12", "python3.13",
-        sys.executable,
+        "python3.13", "python3.12", "python3.11", "python3.10",
+        "python3", "python",
     ]
-    for candidate in candidates:
-        ok, out = _run([candidate, "--version"])
+    for candidate in named:
+        exe = _which(candidate) if not os.sep in candidate else (candidate if os.path.isfile(candidate) else None)
+        if not exe:
+            continue
+        ok, out = _run([exe, "--version"])
         if not ok:
             continue
         m = re.search(r"(\d+)\.(\d+)", out)
         if not m:
             continue
         major, minor = int(m.group(1)), int(m.group(2))
-        version = m.group(0)
         if (major, minor) >= (3, 10):
-            return {"ok": True, "version": version}
-    # Return the system Python version even if < 3.10
-    ok, out = _run([sys.executable, "--version"])
-    m = re.search(r"(\d+\.\d+)", out) if ok else None
-    return {"ok": False, "version": m.group(0) if m else None}
+            return {"ok": True, "version": m.group(0), "managed_by_uv": False}
+
+    # Check uv-managed Python (uv python list --output-format json or plain)
+    uv_bin = _which("uv")
+    if uv_bin:
+        ok2, out2 = _run([uv_bin, "python", "list"])
+        if ok2:
+            m2 = re.search(r"3\.(1[0-9])\.(\d+)", out2)
+            if m2:
+                return {"ok": True, "version": m2.group(0), "managed_by_uv": True}
+
+    # When frozen as PyInstaller exe, sys.executable is the app itself (not python).
+    # But sys.version_info still holds the *runtime* Python version.
+    if sys.version_info >= (3, 10):
+        ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+        return {"ok": True, "version": ver, "managed_by_uv": False}
+
+    # Nothing found
+    raw = f"{sys.version_info.major}.{sys.version_info.minor}"
+    return {"ok": False, "version": raw, "managed_by_uv": False}
 
 
 def check_git() -> dict:
-    ok, out = _run(["git", "--version"])
+    exe = _which("git")
+    if not exe:
+        return {"ok": False, "version": None}
+    ok, out = _run([exe, "--version"])
     if ok:
         m = re.search(r"(\d+\.\d+[\.\d]*)", out)
         return {"ok": True, "version": m.group(1) if m else "?"}
@@ -169,7 +197,10 @@ def check_git() -> dict:
 
 
 def check_uv() -> dict:
-    ok, out = _run(["uv", "--version"])
+    exe = _which("uv")
+    if not exe:
+        return {"ok": False, "version": None}
+    ok, out = _run([exe, "--version"])
     if ok:
         m = re.search(r"(\d+\.\d+[\.\d]*)", out)
         return {"ok": True, "version": m.group(1) if m else "?"}
@@ -502,6 +533,127 @@ async def api_install():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/install-tool?tool=uv|python  (SSE — auto-install prerequisites)
+# ---------------------------------------------------------------------------
+
+
+async def _install_tool_generator(tool: str) -> AsyncGenerator[str, None]:
+    """Auto-install uv or Python 3.11 and stream progress as SSE."""
+
+    def _log(msg: str) -> str:
+        return f"data: {json.dumps({'type': 'log', 'level': 'info', 'message': msg})}\n\n"
+
+    def _fail(msg: str) -> str:
+        return f"data: {json.dumps({'type': 'done', 'success': False, 'message': msg})}\n\n"
+
+    def _ok(msg: str = "") -> str:
+        return f"data: {json.dumps({'type': 'done', 'success': True, 'message': msg})}\n\n"
+
+    async def _run_cmd(cmd: list[str]) -> int:
+        """Stream subprocess output as log events; return exit code."""
+        rc = 1
+        async for evt in _stream_subprocess(cmd):
+            try:
+                d = json.loads(evt[5:].strip())
+                if d.get("type") == "returncode":
+                    rc = d.get("code", 1)
+                    continue
+            except Exception:
+                pass
+            yield evt
+        return rc  # type: ignore[return-value]  # generator return via StopAsyncIteration
+
+    if tool == "uv":
+        yield _log("正在安装 uv 包管理器...")
+        if sys.platform == "win32":
+            yield _log("使用 PowerShell 安装 uv（需要联网，约 10-30 秒）...")
+            cmd = [
+                "powershell", "-ExecutionPolicy", "Bypass", "-NoProfile",
+                "-Command", "irm https://astral.sh/uv/install.ps1 | iex",
+            ]
+        else:
+            yield _log("使用 curl 安装 uv（需要联网，约 10-30 秒）...")
+            cmd = ["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"]
+
+        rc_box = [1]
+        async for evt in _stream_subprocess(cmd):
+            try:
+                d = json.loads(evt[5:].strip())
+                if d.get("type") == "returncode":
+                    rc_box[0] = d.get("code", 1)
+                    continue
+            except Exception:
+                pass
+            yield evt
+
+        if rc_box[0] == 0:
+            yield _log("✓ uv 安装完成！")
+            yield _ok("uv 已成功安装")
+        else:
+            yield _fail(
+                "uv 安装失败。\n"
+                "请手动安装：https://docs.astral.sh/uv/getting-started/installation/\n"
+                "Windows: powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""
+            )
+
+    elif tool == "python":
+        uv_bin = _which("uv")
+        if not uv_bin:
+            yield _fail("请先安装 uv，再通过 uv 安装 Python 3.11")
+            return
+
+        yield _log(f"使用 uv 安装 Python 3.11（首次约需 1-3 分钟）...")
+        yield _log(f"uv 路径: {uv_bin}")
+
+        rc_box = [1]
+        async for evt in _stream_subprocess([uv_bin, "python", "install", "3.11"]):
+            try:
+                d = json.loads(evt[5:].strip())
+                if d.get("type") == "returncode":
+                    rc_box[0] = d.get("code", 1)
+                    continue
+            except Exception:
+                pass
+            yield evt
+
+        if rc_box[0] == 0:
+            yield _log("✓ Python 3.11 安装完成！")
+            yield _ok("Python 3.11 已成功安装")
+        else:
+            yield _fail(
+                "Python 安装失败。\n"
+                "请手动安装 Python 3.11：https://www.python.org/downloads/"
+            )
+
+    else:
+        yield _fail(f"未知工具: {tool}")
+
+
+@app.get("/api/install-tool")
+async def api_install_tool(tool: str):
+    return StreamingResponse(
+        _install_tool_generator(tool),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/open-url?url=...  (open URL in system browser)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/open-url")
+async def api_open_url(url: str):
+    """Open a URL in the system default browser (safe: allows only http/https)."""
+    import webbrowser
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Only http/https URLs allowed")
+    webbrowser.open(url)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

@@ -572,6 +572,90 @@
       font-family: 'Menlo', monospace;
       font-size: 0.82em;
     }
+
+    /* ── Tool install button ── */
+    .btn-tool-install {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 13px;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid rgba(124, 58, 237, 0.45);
+      background: rgba(124, 58, 237, 0.18);
+      color: var(--purple-light);
+      transition: all 0.18s ease;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .btn-tool-install:hover:not(:disabled) {
+      background: rgba(124, 58, 237, 0.32);
+      border-color: rgba(124, 58, 237, 0.7);
+    }
+    .btn-tool-install:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .btn-tool-install.installing {
+      background: rgba(245, 158, 11, 0.15);
+      border-color: rgba(245, 158, 11, 0.4);
+      color: #fbbf24;
+    }
+    .btn-tool-install.success {
+      background: rgba(34, 197, 94, 0.15);
+      border-color: rgba(34, 197, 94, 0.4);
+      color: var(--green);
+    }
+
+    /* External link button */
+    .btn-tool-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 13px;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.06);
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: all 0.18s ease;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .btn-tool-link:hover {
+      background: rgba(255,255,255,0.12);
+      color: var(--text);
+    }
+
+    /* ── Tool install log (inline terminal in step 1) ── */
+    #tool-install-log {
+      margin-top: 10px;
+    }
+
+    #tool-install-terminal {
+      background: var(--terminal-bg);
+      color: var(--terminal-green);
+      font-family: 'Menlo', 'Courier New', monospace;
+      font-size: 0.78rem;
+      padding: 12px 14px;
+      border-radius: 8px;
+      max-height: 180px;
+      overflow-y: auto;
+      border: 1px solid #1a1a2a;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* Amber badge for "managed by uv" */
+    .badge-managed {
+      color: #f59e0b;
+    }
   </style>
 </head>
 <body>
@@ -622,11 +706,20 @@
           </div>
         </div>
 
+        <!-- Inline install log — shown only during tool auto-install -->
+        <div id="tool-install-log" style="display:none;">
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:5px;display:flex;align-items:center;gap:6px;">
+            <span class="spinner" id="tool-install-spinner"></span>
+            <span id="tool-install-label">正在安装...</span>
+          </div>
+          <div id="tool-install-terminal"></div>
+        </div>
+
         <div style="display:flex;align-items:center;gap:12px;margin-top:24px;">
           <button class="btn btn-primary" id="btn-step1-next" onclick="goToStep(2)" disabled>
             下一步 →
           </button>
-          <button class="btn btn-secondary" onclick="runChecks()">重新检测</button>
+          <button class="btn btn-secondary" onclick="runChecks()" id="btn-recheck">重新检测</button>
         </div>
       </div>
 
@@ -933,6 +1026,8 @@ function goToStep(n) {
 /* ══════════════════════════════════════
    Step 1 — Environment checks
 ══════════════════════════════════════ */
+let toolInstallES = null;   // active EventSource for tool install
+
 async function runChecks() {
   const list = document.getElementById('check-list');
   const nextBtn = document.getElementById('btn-step1-next');
@@ -954,58 +1049,185 @@ async function runChecks() {
     return;
   }
 
+  // ── Build check items ───────────────────────────────────────────────────
+  // Each item may have an action: 'uv' | 'python' | 'git-link' | null
+  const uvOk  = data.uv.ok;
+  const pyOk  = data.python.ok;
+  const pyMgd = data.python.managed_by_uv;  // managed by uv, not in system PATH
+
   const items = [
     {
-      key: 'python',
+      key:   'uv',
+      label: 'uv  包管理器',
+      ok:    uvOk,
+      icon:  uvOk ? '✓' : '✗',
+      iconCls: uvOk ? 'badge-ok' : 'badge-fail',
+      detail: uvOk ? `v${data.uv.version}` : '未安装',
+      action: uvOk ? null : 'uv',
+      actionLabel: '自动安装 uv',
+    },
+    {
+      key:   'python',
       label: 'Python 3.10+',
-      ok: data.python.ok,
-      detail: data.python.version ? `v${data.python.version}` : '未找到',
+      ok:    pyOk,
+      icon:  pyOk ? (pyMgd ? '◎' : '✓') : '✗',
+      iconCls: pyOk ? (pyMgd ? 'badge-managed' : 'badge-ok') : 'badge-fail',
+      detail: pyOk
+        ? (pyMgd ? `v${data.python.version}（uv 管理）` : `v${data.python.version}`)
+        : '未找到',
+      // only show install if uv is available; otherwise show hint
+      action: pyOk ? null : (uvOk ? 'python' : 'python-nouv'),
+      actionLabel: uvOk ? '通过 uv 安装 Python 3.11' : '请先安装 uv',
     },
     {
-      key: 'git',
+      key:   'git',
       label: 'Git',
-      ok: data.git.ok,
-      detail: data.git.version ? `v${data.git.version}` : '未找到',
+      ok:    data.git.ok,
+      icon:  data.git.ok ? '✓' : '✗',
+      iconCls: data.git.ok ? 'badge-ok' : 'badge-fail',
+      detail: data.git.ok ? `v${data.git.version}` : '未安装',
+      action: data.git.ok ? null : 'git-link',
+      actionLabel: '下载 Git ↗',
     },
     {
-      key: 'uv',
-      label: 'uv (Python 包管理器)',
-      ok: data.uv.ok,
-      detail: data.uv.version ? `v${data.uv.version}` : '未找到，请先安装 uv',
-    },
-    {
-      key: 'hermes',
+      key:   'hermes',
       label: 'Hermes Agent',
-      ok: data.hermes_installed,
+      ok:    data.hermes_installed,
+      icon:  data.hermes_installed ? '✓' : '○',
+      iconCls: data.hermes_installed ? 'badge-ok' : '',
       detail: data.hermes_installed
         ? `已安装 v${data.hermes_version}`
         : '未安装（将在下一步安装）',
+      action: null,
     },
   ];
 
-  list.innerHTML = items.map(item => `
-    <div class="check-item">
-      <span class="check-icon ${item.ok ? 'badge-ok' : 'badge-fail'}">${item.ok ? '✓' : '✗'}</span>
-      <span class="check-name">${item.label}</span>
-      <span class="check-version">${item.detail}</span>
-    </div>
-  `).join('');
+  list.innerHTML = items.map(item => {
+    // Right-side action element
+    let actionEl = '';
+    if (item.action === 'uv' || item.action === 'python') {
+      actionEl = `<button
+        class="btn-tool-install"
+        id="btn-install-${item.key}"
+        onclick="installTool('${item.action}', '${item.key}')"
+      >${item.actionLabel}</button>`;
+    } else if (item.action === 'python-nouv') {
+      actionEl = `<button class="btn-tool-install" disabled title="请先安装 uv">${item.actionLabel}</button>`;
+    } else if (item.action === 'git-link') {
+      actionEl = `<button
+        class="btn-tool-link"
+        onclick="openExternal('https://git-scm.com/downloads')"
+      >${item.actionLabel}</button>`;
+    }
 
-  const requiredOk = data.python.ok && data.git.ok && data.uv.ok;
+    return `
+      <div class="check-item" id="check-item-${item.key}">
+        <span class="check-icon ${item.iconCls}" id="check-icon-${item.key}">${item.icon}</span>
+        <span class="check-name">${item.label}</span>
+        <span class="check-version" id="check-ver-${item.key}" style="flex:1">${item.detail}</span>
+        <span id="check-action-${item.key}">${actionEl}</span>
+      </div>`;
+  }).join('');
 
+  // ── Determine if we can proceed ──────────────────────────────────────────
+  const requiredOk = uvOk && pyOk && data.git.ok;
   if (requiredOk) {
     nextBtn.disabled = false;
     if (data.hermes_installed) {
-      // Skip install step
-      setTimeout(() => goToStep(3), 600);
+      setTimeout(() => goToStep(3), 700);
     }
-  } else {
-    list.innerHTML += `
-      <div style="margin-top:14px;padding:12px;background:rgba(239,68,68,0.1);border-radius:8px;border:1px solid rgba(239,68,68,0.25);font-size:0.83rem;color:#fca5a5;">
-        请先安装缺失的依赖后重新检测。<br>
-        uv 安装命令：<code>curl -LsSf https://astral.sh/uv/install.sh | sh</code>
-      </div>`;
   }
+}
+
+/* ── Auto-install a missing tool ──────────────────────────────────────── */
+function installTool(tool, key) {
+  const btn   = document.getElementById(`btn-install-${key}`);
+  const logEl = document.getElementById('tool-install-log');
+  const term  = document.getElementById('tool-install-terminal');
+  const label = document.getElementById('tool-install-label');
+  const spinner = document.getElementById('tool-install-spinner');
+
+  if (btn) {
+    btn.disabled = true;
+    btn.className = 'btn-tool-install installing';
+    btn.textContent = '安装中...';
+  }
+
+  const toolNames = { uv: 'uv', python: 'Python 3.11' };
+  if (label) label.textContent = `正在安装 ${toolNames[tool] || tool}...`;
+  logEl.style.display = 'block';
+  term.innerHTML = '';
+
+  if (toolInstallES) { toolInstallES.close(); }
+
+  const es = new EventSource(`/api/install-tool?tool=${encodeURIComponent(tool)}`);
+  toolInstallES = es;
+
+  es.onmessage = (e) => {
+    let evt;
+    try { evt = JSON.parse(e.data); } catch { return; }
+
+    if (evt.type === 'log') {
+      const line = document.createElement('div');
+      line.textContent = evt.message;
+      if (evt.level === 'error') line.style.color = '#f87171';
+      term.appendChild(line);
+      term.scrollTop = term.scrollHeight;
+
+    } else if (evt.type === 'done') {
+      es.close();
+      toolInstallES = null;
+      spinner.style.display = 'none';
+
+      if (evt.success) {
+        if (label) label.textContent = `✓ ${toolNames[tool] || tool} 安装成功，正在重新检测...`;
+        if (btn) {
+          btn.className = 'btn-tool-install success';
+          btn.textContent = '已安装 ✓';
+        }
+        // Re-run checks after short delay so env picks up new install
+        setTimeout(() => {
+          logEl.style.display = 'none';
+          spinner.style.display = '';
+          runChecks();
+        }, 1800);
+      } else {
+        if (label) label.textContent = `✗ 安装失败`;
+        if (btn) {
+          btn.disabled = false;
+          btn.className = 'btn-tool-install';
+          btn.textContent = '重试';
+        }
+        // Append error message to terminal
+        if (evt.message) {
+          const line = document.createElement('div');
+          line.style.color = '#f87171';
+          line.textContent = '✗ ' + evt.message;
+          term.appendChild(line);
+          term.scrollTop = term.scrollHeight;
+        }
+      }
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    toolInstallES = null;
+    if (btn) {
+      btn.disabled = false;
+      btn.className = 'btn-tool-install';
+      btn.textContent = '重试';
+    }
+    if (label) label.textContent = '连接中断，请重试';
+    spinner.style.display = 'none';
+  };
+}
+
+/* ── Open URL in system browser ──────────────────────────────────────── */
+function openExternal(url) {
+  fetch(`/api/open-url?url=${encodeURIComponent(url)}`).catch(() => {
+    window.open(url, '_blank');
+  });
 }
 
 /* ══════════════════════════════════════
