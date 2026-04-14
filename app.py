@@ -207,25 +207,79 @@ def check_uv() -> dict:
     return {"ok": False, "version": None}
 
 
+def check_wsl() -> dict:
+    """Windows only: check whether WSL2 is installed and has at least one distro.
+
+    Returns:
+        ok          – True when a WSL2 distro is available and ready
+        installed   – True when the wsl.exe command exists (WSL installed at all)
+        has_v2      – True when at least one distro reports VERSION 2
+    """
+    if sys.platform != "win32":
+        # Not Windows — WSL is irrelevant; treat as satisfied
+        return {"ok": True, "installed": True, "has_v2": True}
+
+    try:
+        r = subprocess.run(
+            ["wsl", "-l", "-v"],
+            capture_output=True,
+            timeout=20,
+        )
+        # wsl -l -v emits UTF-16-LE on many Windows builds
+        out = ""
+        for enc in ("utf-16-le", "utf-8", "gbk"):
+            try:
+                decoded = r.stdout.decode(enc, errors="replace")
+                if decoded.strip():
+                    out = decoded
+                    break
+            except Exception:
+                continue
+
+        if r.returncode != 0 or not out.strip():
+            return {"ok": False, "installed": True, "has_v2": False}
+
+        # A VERSION 2 column value — look for standalone "2" on any data line
+        has_v2 = bool(re.search(r"\b2\b", out))
+        return {"ok": has_v2, "installed": True, "has_v2": has_v2}
+
+    except FileNotFoundError:
+        # wsl.exe not found — WSL is not installed at all
+        return {"ok": False, "installed": False, "has_v2": False}
+    except Exception:
+        return {"ok": False, "installed": False, "has_v2": False}
+
+
 def check_hermes_installed() -> tuple[bool, str]:
     """Return (installed, version_string).
 
-    Requires BOTH conditions to be true:
-    1. pyproject.toml exists  — repo was cloned
-    2. HERMES_PYTHON exists   — venv was created AND pip install succeeded
+    On Windows: checks inside the WSL Linux filesystem via `wsl --`.
+    On macOS/Linux: checks the local filesystem directly.
     """
+    if sys.platform == "win32":
+        # Hermes is installed inside WSL; probe via wsl command
+        ok, out = _run([
+            "wsl", "--", "bash", "-c",
+            "test -f ~/.hermes/hermes-agent/pyproject.toml "
+            "&& cat ~/.hermes/hermes-agent/pyproject.toml 2>/dev/null "
+            "|| echo __NOT_FOUND__",
+        ])
+        if not ok or "__NOT_FOUND__" in out:
+            return False, ""
+        m = re.search(r'version\s*=\s*["\']([^"\']+)["\']', out)
+        return True, m.group(1) if m else "unknown"
+
+    # macOS / Linux — local filesystem
     marker = HERMES_AGENT / "pyproject.toml"
     if not marker.exists():
         return False, ""
     # venv Python must also exist — otherwise pip install never finished
     if not HERMES_PYTHON.exists():
         return False, ""
-    # Try to read version from pyproject.toml
     try:
         content = marker.read_text()
         m = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
-        version = m.group(1) if m else "unknown"
-        return True, version
+        return True, m.group(1) if m else "unknown"
     except Exception:
         return True, "unknown"
 
@@ -252,23 +306,26 @@ async def serve_index():
 
 @app.get("/api/check")
 async def api_check():
-    py = check_python()
+    wsl = check_wsl()
+    py  = check_python()
     git = check_git()
-    uv = check_uv()
+    uv  = check_uv()
     installed, version = check_hermes_installed()
     env = read_env()
     env_keys = {
-        "MINIMAX_API_KEY": bool(env.get("MINIMAX_API_KEY", "").strip()),
+        "MINIMAX_API_KEY":    bool(env.get("MINIMAX_API_KEY",    "").strip()),
         "OPENROUTER_API_KEY": bool(env.get("OPENROUTER_API_KEY", "").strip()),
-        "ANTHROPIC_API_KEY": bool(env.get("ANTHROPIC_API_KEY", "").strip()),
-        "WEIXIN_ACCOUNT_ID": bool(env.get("WEIXIN_ACCOUNT_ID", "").strip()),
+        "ANTHROPIC_API_KEY":  bool(env.get("ANTHROPIC_API_KEY",  "").strip()),
+        "WEIXIN_ACCOUNT_ID":  bool(env.get("WEIXIN_ACCOUNT_ID",  "").strip()),
     }
     return {
+        "platform": sys.platform,   # "win32" | "darwin" | "linux"
+        "wsl":  wsl,
         "python": py,
-        "git": git,
-        "uv": uv,
+        "git":  git,
+        "uv":   uv,
         "hermes_installed": installed,
-        "hermes_version": version,
+        "hermes_version":   version,
         "env_keys": env_keys,
     }
 
@@ -394,6 +451,46 @@ async def _install_generator() -> AsyncGenerator[str, None]:
             except Exception:
                 pass
             yield event
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Windows: Hermes Agent runs inside WSL2 — use the official install.sh
+    # ════════════════════════════════════════════════════════════════════════
+    if sys.platform == "win32":
+        wsl = check_wsl()
+        if not wsl["ok"]:
+            yield _fail(
+                "需要 WSL2 才能在 Windows 上安装 Hermes Agent。\n"
+                "请先在「环境检测」页面安装 WSL2，重启电脑后再回来继续安装。"
+            )
+            return
+
+        INSTALL_SCRIPT = (
+            "https://raw.githubusercontent.com/NousResearch/hermes-agent"
+            "/main/scripts/install.sh"
+        )
+        yield _log("检测到 WSL2 ✓")
+        yield _log("通过 WSL2 运行官方安装脚本（首次约需 5-10 分钟）...")
+        yield _log(f"命令: curl -fsSL {INSTALL_SCRIPT} | bash")
+
+        rc = [0]
+        async for e in _run_step(
+            ["wsl", "--", "bash", "-c",
+             f"curl -fsSL {INSTALL_SCRIPT} | bash"],
+            rc_box=rc,
+        ):
+            yield e
+
+        if rc[0] != 0:
+            yield _fail("安装失败，请查看上方日志。\n可尝试在 WSL 终端手动执行安装命令。")
+            return
+
+        yield _log("✓ Hermes Agent 安装完成！")
+        yield f"data: {json.dumps({'type':'done','success':True})}\n\n"
+        return
+
+    # ════════════════════════════════════════════════════════════════════════
+    # macOS / Linux: git clone + uv venv (existing flow)
+    # ════════════════════════════════════════════════════════════════════════
 
     # ── Step 1: Get source code ───────────────────────────────────────────
     # Priority: extract bundled zip (no network) → git clone (fallback)
@@ -654,6 +751,44 @@ async def api_open_url(url: str):
         raise HTTPException(status_code=400, detail="Only http/https URLs allowed")
     webbrowser.open(url)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/install-wsl  (Windows: launch elevated WSL2 installer)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/install-wsl")
+async def api_install_wsl():
+    """Launch an elevated process to run `wsl --install`.
+
+    wsl --install requires administrator privileges and triggers a reboot.
+    We launch it via Start-Process ... -Verb RunAs so the UAC prompt appears.
+    Returns immediately — the installation happens out-of-process.
+    """
+    if sys.platform != "win32":
+        return {"ok": False, "message": "仅 Windows 需要安装 WSL2"}
+    try:
+        # Start-Process with -Verb RunAs triggers the UAC elevation prompt
+        subprocess.Popen(
+            [
+                "powershell", "-ExecutionPolicy", "Bypass", "-NoProfile",
+                "-WindowStyle", "Normal", "-Command",
+                "Start-Process powershell "
+                "-ArgumentList '-NoProfile -Command wsl --install' "
+                "-Verb RunAs -Wait",
+            ],
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        return {
+            "ok": True,
+            "message": (
+                "WSL2 安装程序已启动，请在弹出的管理员权限窗口中点击「是」。\n"
+                "安装完成后系统需要重启，重启后重新打开本安装向导继续安装。"
+            ),
+        }
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)}
 
 
 # ---------------------------------------------------------------------------

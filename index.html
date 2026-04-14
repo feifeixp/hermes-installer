@@ -726,11 +726,11 @@
       <!-- ────────── STEP 2 ────────── -->
       <div class="step-panel" id="panel-2">
         <h2 class="panel-title">安装 Hermes</h2>
-        <p class="panel-subtitle">从 GitHub 克隆仓库并安装依赖包</p>
+        <p class="panel-subtitle" id="step2-subtitle">正在加载安装信息...</p>
 
-        <div class="card">
-          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;">仓库地址</div>
-          <div class="repo-url">https://github.com/nousresearch/hermes-agent</div>
+        <div class="card" id="step2-info-card">
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;">安装脚本</div>
+          <div class="repo-url" id="step2-install-cmd">正在检测平台...</div>
           <button class="btn btn-primary" id="btn-start-install" onclick="startInstall()">
             开始安装
           </button>
@@ -1019,6 +1019,7 @@ function goToStep(n) {
 
   // Step-specific on-enter logic
   if (n === 1) runChecks();
+  if (n === 2) initStep2();
   if (n === 3) prefillKeys();
   if (n === 5) loadSummary();
 }
@@ -1049,63 +1050,109 @@ async function runChecks() {
     return;
   }
 
-  // ── Build check items ───────────────────────────────────────────────────
-  // Each item may have an action: 'uv' | 'python' | 'git-link' | null
-  const uvOk  = data.uv.ok;
-  const pyOk  = data.python.ok;
-  const pyMgd = data.python.managed_by_uv;  // managed by uv, not in system PATH
+  // ── Build check items (platform-aware) ──────────────────────────────────
+  const isWin = data.platform === 'win32';
+  let items = [];
+  let requiredOk = false;
 
-  const items = [
-    {
-      key:   'uv',
-      label: 'uv  包管理器',
-      ok:    uvOk,
-      icon:  uvOk ? '✓' : '✗',
-      iconCls: uvOk ? 'badge-ok' : 'badge-fail',
-      detail: uvOk ? `v${data.uv.version}` : '未安装',
-      action: uvOk ? null : 'uv',
-      actionLabel: '自动安装 uv',
-    },
-    {
-      key:   'python',
-      label: 'Python 3.10+',
-      ok:    pyOk,
-      icon:  pyOk ? (pyMgd ? '◎' : '✓') : '✗',
-      iconCls: pyOk ? (pyMgd ? 'badge-managed' : 'badge-ok') : 'badge-fail',
-      detail: pyOk
-        ? (pyMgd ? `v${data.python.version}（uv 管理）` : `v${data.python.version}`)
-        : '未找到',
-      // only show install if uv is available; otherwise show hint
-      action: pyOk ? null : (uvOk ? 'python' : 'python-nouv'),
-      actionLabel: uvOk ? '通过 uv 安装 Python 3.11' : '请先安装 uv',
-    },
-    {
-      key:   'git',
-      label: 'Git',
-      ok:    data.git.ok,
-      icon:  data.git.ok ? '✓' : '✗',
-      iconCls: data.git.ok ? 'badge-ok' : 'badge-fail',
-      detail: data.git.ok ? `v${data.git.version}` : '未安装',
-      action: data.git.ok ? null : 'git-link',
-      actionLabel: '下载 Git ↗',
-    },
-    {
-      key:   'hermes',
-      label: 'Hermes Agent',
-      ok:    data.hermes_installed,
-      icon:  data.hermes_installed ? '✓' : '○',
-      iconCls: data.hermes_installed ? 'badge-ok' : '',
-      detail: data.hermes_installed
-        ? `已安装 v${data.hermes_version}`
-        : '未安装（将在下一步安装）',
-      action: null,
-    },
-  ];
+  if (isWin) {
+    // ── Windows: only WSL2 matters for prerequisites ──────────────────────
+    const wslOk  = data.wsl && data.wsl.ok;
+    const wslInst = data.wsl && data.wsl.installed;  // wsl.exe exists but no WSL2 distro
 
+    items = [
+      {
+        key:      'wsl',
+        label:    'WSL2（Windows 子系统 for Linux）',
+        ok:       wslOk,
+        icon:     wslOk ? '✓' : '✗',
+        iconCls:  wslOk ? 'badge-ok' : 'badge-fail',
+        detail:   wslOk ? '已安装 WSL2' : (wslInst ? '已安装 WSL1，需要升级为 WSL2' : '未安装'),
+        action:   wslOk ? null : 'wsl',
+        actionLabel: '安装 WSL2',
+        note: wslOk ? '' :
+          '安装 WSL2 需要管理员权限，安装后须<strong>重启电脑</strong>',
+      },
+      {
+        key:     'hermes',
+        label:   'Hermes Agent',
+        ok:      data.hermes_installed,
+        icon:    data.hermes_installed ? '✓' : '○',
+        iconCls: data.hermes_installed ? 'badge-ok' : 'badge-managed',
+        detail:  data.hermes_installed
+          ? `已安装 v${data.hermes_version}`
+          : '未安装（将在下一步通过 WSL2 安装）',
+        action: null,
+      },
+    ];
+
+    requiredOk = wslOk;
+
+  } else {
+    // ── macOS / Linux: uv + Python + Git ─────────────────────────────────
+    const uvOk  = data.uv.ok;
+    const pyOk  = data.python.ok;
+    const pyMgd = data.python.managed_by_uv;
+
+    items = [
+      {
+        key:     'uv',
+        label:   'uv  包管理器',
+        ok:      uvOk,
+        icon:    uvOk ? '✓' : '✗',
+        iconCls: uvOk ? 'badge-ok' : 'badge-fail',
+        detail:  uvOk ? `v${data.uv.version}` : '未安装',
+        action:  uvOk ? null : 'uv',
+        actionLabel: '自动安装 uv',
+      },
+      {
+        key:     'python',
+        label:   'Python 3.10+',
+        ok:      pyOk,
+        icon:    pyOk ? (pyMgd ? '◎' : '✓') : '✗',
+        iconCls: pyOk ? (pyMgd ? 'badge-managed' : 'badge-ok') : 'badge-fail',
+        detail:  pyOk
+          ? (pyMgd ? `v${data.python.version}（uv 管理）` : `v${data.python.version}`)
+          : '未找到',
+        action:  pyOk ? null : (uvOk ? 'python' : 'python-nouv'),
+        actionLabel: uvOk ? '通过 uv 安装 Python 3.11' : '请先安装 uv',
+      },
+      {
+        key:     'git',
+        label:   'Git',
+        ok:      data.git.ok,
+        icon:    data.git.ok ? '✓' : '✗',
+        iconCls: data.git.ok ? 'badge-ok' : 'badge-fail',
+        detail:  data.git.ok ? `v${data.git.version}` : '未安装',
+        action:  data.git.ok ? null : 'git-link',
+        actionLabel: '下载 Git ↗',
+      },
+      {
+        key:     'hermes',
+        label:   'Hermes Agent',
+        ok:      data.hermes_installed,
+        icon:    data.hermes_installed ? '✓' : '○',
+        iconCls: data.hermes_installed ? 'badge-ok' : '',
+        detail:  data.hermes_installed
+          ? `已安装 v${data.hermes_version}`
+          : '未安装（将在下一步安装）',
+        action: null,
+      },
+    ];
+
+    requiredOk = uvOk && pyOk && data.git.ok;
+  }
+
+  // ── Render items ─────────────────────────────────────────────────────────
   list.innerHTML = items.map(item => {
-    // Right-side action element
     let actionEl = '';
-    if (item.action === 'uv' || item.action === 'python') {
+    if (item.action === 'wsl') {
+      actionEl = `<button
+        class="btn-tool-install"
+        id="btn-install-wsl"
+        onclick="installWSL()"
+      >${item.actionLabel}</button>`;
+    } else if (item.action === 'uv' || item.action === 'python') {
       actionEl = `<button
         class="btn-tool-install"
         id="btn-install-${item.key}"
@@ -1120,17 +1167,21 @@ async function runChecks() {
       >${item.actionLabel}</button>`;
     }
 
+    const noteHtml = item.note
+      ? `<div style="font-size:0.75rem;color:#fbbf24;margin-top:4px;padding-left:36px;">${item.note}</div>`
+      : '';
+
     return `
-      <div class="check-item" id="check-item-${item.key}">
+      <div class="check-item" id="check-item-${item.key}" style="flex-wrap:wrap;">
         <span class="check-icon ${item.iconCls}" id="check-icon-${item.key}">${item.icon}</span>
         <span class="check-name">${item.label}</span>
         <span class="check-version" id="check-ver-${item.key}" style="flex:1">${item.detail}</span>
         <span id="check-action-${item.key}">${actionEl}</span>
+        ${noteHtml}
       </div>`;
   }).join('');
 
-  // ── Determine if we can proceed ──────────────────────────────────────────
-  const requiredOk = uvOk && pyOk && data.git.ok;
+  // ── Enable next button? ───────────────────────────────────────────────────
   if (requiredOk) {
     nextBtn.disabled = false;
     if (data.hermes_installed) {
@@ -1230,9 +1281,101 @@ function openExternal(url) {
   });
 }
 
+/* ── Install WSL2 on Windows ─────────────────────────────────────────── */
+async function installWSL() {
+  const btn   = document.getElementById('btn-install-wsl');
+  const logEl = document.getElementById('tool-install-log');
+  const term  = document.getElementById('tool-install-terminal');
+  const label = document.getElementById('tool-install-label');
+  const spinner = document.getElementById('tool-install-spinner');
+
+  if (btn) {
+    btn.disabled = true;
+    btn.className = 'btn-tool-install installing';
+    btn.textContent = '正在启动...';
+  }
+
+  logEl.style.display = 'block';
+  term.innerHTML = '';
+  if (label) label.textContent = '正在启动 WSL2 安装程序...';
+
+  try {
+    const resp = await fetch('/api/install-wsl');
+    const data = await resp.json();
+    spinner.style.display = 'none';
+
+    if (data.ok) {
+      // WSL install is fire-and-forget (out-of-process elevated window)
+      // Show a prominent restart notice
+      term.innerHTML = '';
+      const lines = [
+        { text: '✓ WSL2 安装程序已在管理员窗口中启动', color: 'var(--green)' },
+        { text: '' },
+        { text: '📌 请在弹出的管理员权限窗口中点击「是」确认安装', color: '#fbbf24' },
+        { text: '🔄 安装完成后系统将提示重启 — 请重启电脑', color: '#fbbf24' },
+        { text: '↩  重启后重新打开本安装向导，点击「重新检测」继续', color: '#94a3b8' },
+      ];
+      lines.forEach(l => {
+        const div = document.createElement('div');
+        div.textContent = l.text;
+        if (l.color) div.style.color = l.color;
+        div.style.margin = '2px 0';
+        term.appendChild(div);
+      });
+      if (label) label.textContent = '等待安装完成后重启...';
+
+      if (btn) {
+        btn.className = 'btn-tool-install success';
+        btn.textContent = '安装中（重启后继续）';
+        btn.disabled = true;
+      }
+
+    } else {
+      spinner.style.display = 'none';
+      const div = document.createElement('div');
+      div.style.color = '#f87171';
+      div.textContent = '✗ 启动失败：' + (data.message || '未知错误');
+      term.appendChild(div);
+      if (label) label.textContent = '启动失败';
+      if (btn) {
+        btn.disabled = false;
+        btn.className = 'btn-tool-install';
+        btn.textContent = '重试安装 WSL2';
+      }
+    }
+  } catch (e) {
+    spinner.style.display = 'none';
+    const div = document.createElement('div');
+    div.style.color = '#f87171';
+    div.textContent = '请求失败：' + e.message;
+    term.appendChild(div);
+    if (label) label.textContent = '请求失败';
+    if (btn) {
+      btn.disabled = false;
+      btn.className = 'btn-tool-install';
+      btn.textContent = '重试';
+    }
+  }
+}
+
 /* ══════════════════════════════════════
    Step 2 — Install
 ══════════════════════════════════════ */
+function initStep2() {
+  const isWin = checkData && checkData.platform === 'win32';
+  const subtitle = document.getElementById('step2-subtitle');
+  const cmdEl    = document.getElementById('step2-install-cmd');
+
+  if (isWin) {
+    if (subtitle) subtitle.textContent = '通过 WSL2 运行官方安装脚本，自动完成所有配置';
+    if (cmdEl) cmdEl.textContent =
+      'curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash';
+  } else {
+    if (subtitle) subtitle.textContent = '通过 uv 克隆仓库并安装依赖包';
+    if (cmdEl) cmdEl.textContent = 'https://github.com/nousresearch/hermes-agent';
+  }
+}
+
 function startInstall() {
   const installBtn = document.getElementById('btn-start-install');
   const nextBtn = document.getElementById('btn-step2-next');
