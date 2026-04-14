@@ -6,6 +6,10 @@
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Always run from the directory that contains this script,
+# regardless of where the user invoked it from.
+cd "$(dirname "$0")"
+
 DIST_DIR="dist"
 APP_NAME="Hermes Installer"
 DMG_NAME="Hermes-Installer-macOS.dmg"
