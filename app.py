@@ -248,17 +248,51 @@ async def api_check():
 
 
 def _utf8_env() -> dict:
-    """Return a copy of the current env with UTF-8 forced for subprocess I/O.
+    """Return a copy of the current env with UTF-8 forced + Windows PATH expanded.
 
     On Chinese Windows the default console encoding is GBK (cp936).
     Any subprocess that prints non-GBK characters (emoji, CJK outside GBK, …)
     will crash with UnicodeEncodeError unless we override the codec.
     PYTHONUTF8=1  → Python UTF-8 mode (3.7+, affects all I/O)
     PYTHONIOENCODING=utf-8 → explicit stdin/stdout/stderr codec
+
+    When running as a PyInstaller frozen exe the inherited PATH is minimal.
+    We prepend the most common install locations for git, uv, and Python so
+    that subprocess calls to these tools succeed without requiring the user
+    to have them in their system PATH.
     """
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+
+    if sys.platform == "win32":
+        user = os.environ.get("USERPROFILE", "C:\\Users\\Default")
+        extra_paths = [
+            # git (typical install locations)
+            r"C:\Program Files\Git\cmd",
+            r"C:\Program Files\Git\bin",
+            r"C:\Program Files (x86)\Git\cmd",
+            # uv (installed via official installer)
+            os.path.join(user, r"AppData\Local\Programs\uv"),
+            os.path.join(user, ".cargo", "bin"),          # uv via cargo
+            os.path.join(user, r"AppData\Roaming\uv\bin"),
+            # Python launchers
+            os.path.join(user, r"AppData\Local\Programs\Python\Python311"),
+            os.path.join(user, r"AppData\Local\Programs\Python\Python312"),
+            os.path.join(user, r"AppData\Local\Programs\Python\Python310"),
+            os.path.join(user, r"AppData\Local\Programs\Python\Python311\Scripts"),
+            os.path.join(user, r"AppData\Local\Programs\Python\Python312\Scripts"),
+            # scoop / chocolatey shims
+            os.path.join(user, "scoop", "shims"),
+            r"C:\ProgramData\chocolatey\bin",
+            # winget Python
+            os.path.join(user, r"AppData\Local\Microsoft\WindowsApps"),
+        ]
+        current_path = env.get("PATH", "")
+        additions = os.pathsep.join(p for p in extra_paths if os.path.isdir(p))
+        if additions:
+            env["PATH"] = additions + os.pathsep + current_path
+
     return env
 
 
@@ -288,6 +322,17 @@ async def _stream_subprocess(cmd: list[str], cwd: Optional[Path] = None) -> Asyn
     # yield returncode as a metadata event so callers can check success
     payload = json.dumps({"type": "returncode", "code": proc.returncode})
     yield f"data: {payload}\n\n"
+
+
+def _which(cmd: str) -> Optional[str]:
+    """Find executable using both shutil.which and the expanded PATH from _utf8_env."""
+    import shutil
+    found = shutil.which(cmd)
+    if found:
+        return found
+    # Also try with expanded PATH
+    env = _utf8_env()
+    return shutil.which(cmd, path=env.get("PATH", ""))
 
 
 async def _install_generator() -> AsyncGenerator[str, None]:
