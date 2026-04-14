@@ -58,12 +58,15 @@ a = Analysis(
     ["main.py", "app.py"],      # explicitly analyse app.py so it's bundled
     pathex=["."],
     binaries=[],
-    datas=[
-        ("index.html",              "."),   # installer wizard UI
-        ("chat.html",               "."),   # chat interface UI
-        ("app.py",                  "."),   # fallback: include as raw file too
-        ("hermes_agent_bundle.zip", "."),   # pre-bundled hermes-agent source
-    ],
+    datas=(
+        [
+            ("index.html", "."),   # installer wizard UI
+            ("chat.html",  "."),   # chat interface UI
+            ("app.py",     "."),   # fallback: include as raw file too
+        ]
+        # Bundle zip is optional: present → offline install; absent → git clone at runtime
+        + ([("hermes_agent_bundle.zip", ".")] if Path("hermes_agent_bundle.zip").exists() else [])
+    ),
     hiddenimports=HIDDEN_IMPORTS + ["app"],
     hookspath=[],
     hooksconfig={},

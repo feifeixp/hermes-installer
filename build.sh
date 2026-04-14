@@ -61,15 +61,24 @@ $PYTHON -m pip install --quiet \
     pyyaml \
     python-dotenv
 
-# ── 3. Clean previous build ────────────────────────────────────────────────
+# ── 3. Bundle hermes-agent source (optional — falls back to git-clone at runtime) ──
+echo "→ 打包 hermes-agent 源码（需要联网，失败时安装器会自动 git clone）..."
+if $PYTHON bundle_source.py; then
+    echo "   ✓ hermes_agent_bundle.zip 已生成"
+else
+    echo "   ⚠ bundle_source.py 失败（可能无网络），跳过离线包"
+    echo "     安装器运行时将自动从 GitHub 克隆"
+fi
+
+# ── 4. Clean previous build ────────────────────────────────────────────────
 echo "→ 清理旧构建..."
 rm -rf build/ dist/ __pycache__/
 
-# ── 4. PyInstaller ────────────────────────────────────────────────────────
+# ── 5. PyInstaller ────────────────────────────────────────────────────────
 echo "→ 运行 PyInstaller (需要 1-3 分钟)..."
 $PYTHON -m PyInstaller hermes_installer.spec --noconfirm --clean
 
-# ── 5. Verify .app ────────────────────────────────────────────────────────
+# ── 6. Verify .app ────────────────────────────────────────────────────────
 APP_PATH="$DIST_DIR/$APP_NAME.app"
 if [ ! -d "$APP_PATH" ]; then
     echo "❌ 构建失败: $APP_PATH 未找到"
@@ -77,7 +86,7 @@ if [ ! -d "$APP_PATH" ]; then
 fi
 echo "✓ .app 构建完成"
 
-# ── 6. Create .dmg ────────────────────────────────────────────────────────
+# ── 7. Create .dmg ────────────────────────────────────────────────────────
 echo "→ 创建 .dmg 安装包..."
 
 TMP_DMG_DIR=$(mktemp -d)
