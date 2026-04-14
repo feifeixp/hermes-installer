@@ -672,14 +672,25 @@ async def _install_tool_generator(tool: str) -> AsyncGenerator[str, None]:
                 pass
             yield evt
 
-        if rc_box[0] == 0:
-            yield _log("✓ uv 安装完成！")
+        # The uv installer occasionally returns non-zero on minor issues
+        # (e.g. fish shell config dir permission error) even though uv itself
+        # was installed correctly. Verify by actually locating the binary.
+        uv_found = _which("uv")
+        if rc_box[0] == 0 or uv_found:
+            if uv_found:
+                yield _log(f"✓ uv 安装完成！路径: {uv_found}")
+            else:
+                yield _log("✓ uv 安装完成！")
             yield _ok("uv 已成功安装")
         else:
+            if sys.platform == "win32":
+                manual = "powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""
+            else:
+                manual = "curl -LsSf https://astral.sh/uv/install.sh | sh"
             yield _fail(
-                "uv 安装失败。\n"
-                "请手动安装：https://docs.astral.sh/uv/getting-started/installation/\n"
-                "Windows: powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""
+                f"uv 安装失败。\n"
+                f"请手动安装：https://docs.astral.sh/uv/getting-started/installation/\n"
+                f"命令：{manual}"
             )
 
     elif tool == "python":
