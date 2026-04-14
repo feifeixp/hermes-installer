@@ -649,20 +649,6 @@ async def _install_tool_generator(tool: str) -> AsyncGenerator[str, None]:
     def _ok(msg: str = "") -> str:
         return f"data: {json.dumps({'type': 'done', 'success': True, 'message': msg})}\n\n"
 
-    async def _run_cmd(cmd: list[str]) -> int:
-        """Stream subprocess output as log events; return exit code."""
-        rc = 1
-        async for evt in _stream_subprocess(cmd):
-            try:
-                d = json.loads(evt[5:].strip())
-                if d.get("type") == "returncode":
-                    rc = d.get("code", 1)
-                    continue
-            except Exception:
-                pass
-            yield evt
-        return rc  # type: ignore[return-value]  # generator return via StopAsyncIteration
-
     if tool == "uv":
         yield _log("正在安装 uv 包管理器...")
         if sys.platform == "win32":
