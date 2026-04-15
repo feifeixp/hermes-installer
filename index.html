@@ -977,7 +977,7 @@
                 <span id="chat-btn-icon">⏳</span> 开始对话
               </button>
               <button class="btn btn-secondary" id="btn-start-gateway" onclick="startGateway()" style="display:none;">
-                重启 Gateway
+                重新检查
               </button>
             </div>
           </div>
@@ -1697,27 +1697,24 @@ async function startGateway() {
   const retryBtn = document.getElementById('btn-start-gateway');
   const msg      = document.getElementById('gateway-status-msg');
 
-  if (msg) msg.textContent = '正在启动 Hermes Gateway...';
+  if (msg) msg.textContent = '正在检查 Hermes API 服务...';
 
+  // Check port 8642 health — no restart needed, Hermes is already running
   try {
-    const resp = await fetch('/api/gateway/restart', { method: 'POST' });
+    const resp = await fetch('/api/gateway/health');
     const data = await resp.json();
-    if (data.success) {
-      if (msg) { msg.style.color = 'var(--green)'; msg.textContent = '✓ Gateway 已启动，可以开始对话'; }
-      if (chatBtn) { chatBtn.disabled = false; }
-      if (chatIcon) chatIcon.textContent = '💬';
-      if (retryBtn) retryBtn.style.display = '';
+    if (data.running) {
+      if (msg) { msg.style.color = 'var(--green)'; msg.textContent = '✓ Hermes API 服务运行中，可以开始对话'; }
     } else {
-      if (msg) { msg.style.color = 'var(--red)'; msg.textContent = '⚠ Gateway 启动失败 — ' + (data.output || '请重试'); }
-      if (chatBtn) { chatBtn.disabled = false; }   // still allow entering chat
-      if (chatIcon) chatIcon.textContent = '💬';
+      if (msg) { msg.style.color = 'var(--yellow)'; msg.textContent = '⚠ Hermes API 服务未检测到（port 8642），如已安装请在终端运行 hermes'; }
       if (retryBtn) retryBtn.style.display = '';
     }
   } catch (e) {
-    if (msg) { msg.style.color = 'var(--text-muted)'; msg.textContent = '无法连接 Gateway，仍可进入对话界面'; }
+    if (msg) { msg.style.color = 'var(--text-muted)'; msg.textContent = '检查超时，仍可进入对话界面'; }
+  } finally {
+    // Always unlock chat button — user may still want to open the UI
     if (chatBtn) { chatBtn.disabled = false; }
     if (chatIcon) chatIcon.textContent = '💬';
-    if (retryBtn) retryBtn.style.display = '';
   }
 }
 

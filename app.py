@@ -1034,39 +1034,29 @@ async def api_status():
 
 
 # ---------------------------------------------------------------------------
-# POST /api/gateway/restart
+# POST /api/gateway/restart  — just verify port 8642 is reachable
+# NOTE: "hermes gateway" manages messaging platforms (Telegram/Discord/WhatsApp)
+#       and is UNRELATED to the Hermes API server on port 8642.
+#       We no longer call "hermes gateway restart" here — doing so could
+#       disrupt the running Hermes process.  Model config changes in
+#       ~/.hermes/config.yaml take effect automatically on the next request.
 # ---------------------------------------------------------------------------
 
 
 @app.post("/api/gateway/restart")
 async def api_gateway_restart():
-    # Locate hermes executable (differs by platform)
-    if sys.platform == "win32":
-        hermes_bin = HERMES_AGENT / "venv" / "Scripts" / "hermes.exe"
+    """Check whether the Hermes API server (port 8642) is reachable."""
+    running = await _hermes_gateway_running()
+    if running:
+        return {"success": True, "output": "Hermes API server is running on port 8642"}
     else:
-        hermes_bin = Path.home() / ".local" / "bin" / "hermes"
-    if not hermes_bin.exists():
-        hermes_bin_str = "hermes"   # fall back to PATH
-    else:
-        hermes_bin_str = str(hermes_bin)
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            hermes_bin_str, "gateway", "restart",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=_utf8_env(),   # force UTF-8; prevents GBK crash on Chinese Windows
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        rc = proc.returncode
-        output = stdout.decode(errors="replace") if stdout else ""
-        return {"success": rc == 0, "output": output}
-    except asyncio.TimeoutError:
-        return {"success": False, "output": "timeout"}
-    except FileNotFoundError:
-        return {"success": False, "output": "hermes command not found"}
-    except Exception as exc:
-        return {"success": False, "output": str(exc)}
+        return {
+            "success": False,
+            "output": (
+                "Hermes API server (port 8642) is not reachable. "
+                "Please start Hermes Agent manually: hermes serve"
+            ),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1184,26 +1174,36 @@ async def _stream_hermes_gen(req: "ChatRequest") -> AsyncGenerator[str, None]:
                     yield f"data: {json.dumps({'type':'error','message':f'Hermes Gateway 错误 {resp.status}: {err[:300]}'})}\n\n"
                     return
 
-                async for raw_line in resp.content:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str == "[DONE]":
+                # Buffer and split by newlines — aiohttp chunks may contain
+                # multiple SSE lines or partial lines; we must split manually.
+                buf = b""
+                done = False
+                async for raw_chunk in resp.content.iter_any():
+                    buf += raw_chunk
+                    while b"\n" in buf:
+                        raw_line, buf = buf.split(b"\n", 1)
+                        line = raw_line.decode("utf-8", errors="replace").strip()
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            done = True
+                            break
+                        try:
+                            evt = json.loads(data_str)
+                        except Exception:
+                            continue
+
+                        choices = evt.get("choices", [])
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
+                        text = delta.get("content", "")
+                        if text:
+                            yield f"data: {json.dumps({'type':'text_delta','text':text})}\n\n"
+
+                    if done:
                         break
-                    try:
-                        evt = json.loads(data_str)
-                    except Exception:
-                        continue
-
-                    choices = evt.get("choices", [])
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {})
-                    text = delta.get("content", "")
-                    if text:
-                        yield f"data: {json.dumps({'type':'text_delta','text':text})}\n\n"
-
                     await asyncio.sleep(0)
 
                 yield f"data: {json.dumps({'type':'done'})}\n\n"

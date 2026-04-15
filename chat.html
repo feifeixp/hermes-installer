@@ -352,13 +352,13 @@ code.inline-code{background:rgba(124,58,237,.15);color:#c4b5fd;padding:1px 6px;b
           <label class="sp-radio-label" for="mode-openai">OpenAI Chat</label>
         </div>
       </div>
-      <!-- Explain why restart is needed -->
-      <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:0.78rem;color:#fbbf24;line-height:1.55;">
-        ⚠ Hermes Agent 在 Gateway 进程中管理模型。修改后需<strong>重启 Gateway</strong> 才能生效。<br>
+      <!-- Info note -->
+      <div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:0.78rem;color:#86efac;line-height:1.55;">
+        ✓ 模型配置保存后立即生效，下一条消息将使用新模型。<br>
         也可在终端运行 <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">hermes model</code> 交互式切换。
       </div>
-      <button class="sp-save-btn" id="btn-save-model" onclick="saveModelAndRestart()">保存并重启 Gateway</button>
-      <div class="sp-toast" id="model-toast">✓ 已保存并重启</div>
+      <button class="sp-save-btn" id="btn-save-model" onclick="saveModelAndRestart()">保存模型设置</button>
+      <div class="sp-toast" id="model-toast">✓ 已保存</div>
     </div>
 
     <!-- KEYS TAB -->
@@ -410,13 +410,16 @@ code.inline-code{background:rgba(124,58,237,.15);color:#c4b5fd;padding:1px 6px;b
       <div class="status-card">
         <div class="sc-left">
           <div class="sc-dot" id="gw-proc-dot"></div>
-          <div><div class="sc-name">Gateway 进程</div><div class="sc-status" id="gw-proc-status">检测中...</div></div>
+          <div><div class="sc-name">Hermes API 服务 (port 8642)</div><div class="sc-status" id="gw-proc-status">检测中...</div></div>
         </div>
-        <button class="sc-btn" id="gw-restart-btn" onclick="restartGateway()">重启</button>
+        <button class="sc-btn" id="gw-restart-btn" onclick="restartGateway()">检查</button>
       </div>
       <hr class="sp-divider"/>
+      <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.5;margin-bottom:10px;">
+        若 Hermes API 服务未运行，请在终端执行：<code style="background:var(--bg-card);padding:1px 5px;border-radius:3px;">hermes</code> 或 <code style="background:var(--bg-card);padding:1px 5px;border-radius:3px;">hermes serve</code>
+      </div>
       <button class="sp-save-btn" style="background:var(--bg-card);border:1px solid var(--border);color:var(--text-secondary)" onclick="loadGatewayStatus()">🔄 刷新状态</button>
-      <div class="sp-toast" id="gw-toast">✓ Gateway 已重启</div>
+      <div class="sp-toast" id="gw-toast">✓ 已刷新</div>
     </div>
 
     <!-- ADVANCED TAB -->
@@ -958,7 +961,7 @@ function openModelSettings() {
   switchTab('model', document.querySelector('.sp-tab'))
 }
 
-/* Save model config + restart Gateway so the new model takes effect */
+/* Save model config — config.yaml changes take effect immediately on next request */
 async function saveModelAndRestart() {
   const btn = document.getElementById('btn-save-model')
   const toast = document.getElementById('model-toast')
@@ -973,32 +976,27 @@ async function saveModelAndRestart() {
   if (toast) toast.style.display = 'none'
 
   try {
-    // 1. Save to config.yaml
+    // Save to ~/.hermes/config.yaml — Hermes reads it on each request, no restart needed
     await fetch('/api/config/model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider, model, base_url, api_mode })
     })
 
-    // 2. Update top badge immediately
+    // Update top badge immediately
     updateModelBadge({ provider, name: model, base_url, api_mode })
-    if (btn) btn.textContent = '重启 Gateway...'
 
-    // 3. Restart Gateway so new model takes effect
-    const gwResp = await fetch('/api/gateway/restart', { method: 'POST' })
-    const gwData = await gwResp.json()
-
-    if (gwData.success) {
-      if (toast) { toast.textContent = `✓ 已切换至 ${model}，Gateway 已重启`; toast.style.display = 'block' }
-      setTimeout(() => { if (toast) toast.style.display = 'none' }, 3000)
-      checkGatewayStatus()
-    } else {
-      if (toast) { toast.textContent = `⚠ 已保存，但 Gateway 重启失败：${gwData.output || '请手动重启'}`; toast.style.display = 'block'; toast.style.color = 'var(--yellow)' }
+    if (toast) {
+      toast.textContent = `✓ 已切换至 ${model}`
+      toast.style.color = 'var(--green)'
+      toast.style.display = 'block'
     }
+    setTimeout(() => { if (toast) toast.style.display = 'none' }, 3000)
+    checkGatewayStatus()
   } catch(e) {
     if (toast) { toast.textContent = `✗ 错误：${e.message}`; toast.style.display = 'block'; toast.style.color = 'var(--red)' }
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '保存并重启 Gateway' }
+    if (btn) { btn.disabled = false; btn.textContent = '保存模型设置' }
   }
 }
 
@@ -1054,11 +1052,10 @@ async function restartGateway() {
   btn.textContent = '...'
   btn.disabled = true
   try {
-    await fetch('/api/gateway/restart', { method: 'POST' })
+    await checkGatewayStatus()
     showToast('gw-toast')
-    setTimeout(loadGatewayStatus, 1500)
   } finally {
-    btn.textContent = '重启'
+    btn.textContent = '检查'
     btn.disabled = false
   }
 }
