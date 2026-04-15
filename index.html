@@ -964,12 +964,27 @@
           </div>
         </div>
 
+        <!-- ── 开始使用 CTA ── -->
+        <div style="background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(168,85,247,0.08));border:1px solid rgba(124,58,237,0.3);border-radius:14px;padding:24px 28px;margin-bottom:20px;">
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:200px;">
+              <div style="font-size:1rem;font-weight:700;color:var(--text);margin-bottom:4px;">立即开始对话 ✨</div>
+              <div id="gateway-status-msg" style="font-size:0.83rem;color:var(--text-muted);">正在启动 Hermes Gateway...</div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button class="btn btn-primary" id="btn-open-chat" onclick="openChat()" disabled
+                style="padding:12px 28px;font-size:1rem;">
+                <span id="chat-btn-icon">⏳</span> 开始对话
+              </button>
+              <button class="btn btn-secondary" id="btn-start-gateway" onclick="startGateway()" style="display:none;">
+                重启 Gateway
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <button class="btn btn-primary" id="btn-start-gateway" onclick="startGateway()">
-            启动 Gateway
-          </button>
-          <button class="btn btn-secondary" onclick="window.close()">关闭安装向导</button>
-          <div id="gateway-status-msg" style="font-size:0.82rem;color:var(--text-muted);"></div>
+          <button class="btn btn-ghost" onclick="window.close()">关闭安装向导</button>
         </div>
       </div>
 
@@ -1651,7 +1666,7 @@ async function loadSummary() {
     },
     {
       label: 'Gateway',
-      val: status.gateway_running ? '运行中' : '未启动',
+      val: status.gateway_running ? '运行中' : '启动中...',
       ok: status.gateway_running,
       optional: true,
     },
@@ -1666,36 +1681,46 @@ async function loadSummary() {
   `).join('');
 
   launchConfetti();
+
+  // Auto-start gateway and unlock the chat button
+  startGateway();
+}
+
+/* ── Open chat page ───────────────────────────────────────────────── */
+function openChat() {
+  window.location.href = '/chat';
 }
 
 async function startGateway() {
-  const btn = document.getElementById('btn-start-gateway');
-  const msg = document.getElementById('gateway-status-msg');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> 启动中...';
-  msg.textContent = '';
+  const chatBtn  = document.getElementById('btn-open-chat');
+  const chatIcon = document.getElementById('chat-btn-icon');
+  const retryBtn = document.getElementById('btn-start-gateway');
+  const msg      = document.getElementById('gateway-status-msg');
+
+  if (msg) msg.textContent = '正在启动 Hermes Gateway...';
 
   try {
     const resp = await fetch('/api/gateway/restart', { method: 'POST' });
     const data = await resp.json();
     if (data.success) {
-      btn.innerHTML = '✓ Gateway 已启动';
-      btn.style.background = 'linear-gradient(135deg,#22c55e,#16a34a)';
-      msg.style.color = 'var(--green)';
-      msg.textContent = 'Gateway 正在运行';
+      if (msg) { msg.style.color = 'var(--green)'; msg.textContent = '✓ Gateway 已启动，可以开始对话'; }
+      if (chatBtn) { chatBtn.disabled = false; }
+      if (chatIcon) chatIcon.textContent = '💬';
+      if (retryBtn) retryBtn.style.display = '';
     } else {
-      btn.disabled = false;
-      btn.innerHTML = '重试启动';
-      msg.style.color = 'var(--red)';
-      msg.textContent = data.output || '启动失败';
+      if (msg) { msg.style.color = 'var(--red)'; msg.textContent = '⚠ Gateway 启动失败 — ' + (data.output || '请重试'); }
+      if (chatBtn) { chatBtn.disabled = false; }   // still allow entering chat
+      if (chatIcon) chatIcon.textContent = '💬';
+      if (retryBtn) retryBtn.style.display = '';
     }
   } catch (e) {
-    btn.disabled = false;
-    btn.innerHTML = '重试启动';
-    msg.style.color = 'var(--red)';
-    msg.textContent = '请求失败: ' + e.message;
+    if (msg) { msg.style.color = 'var(--text-muted)'; msg.textContent = '无法连接 Gateway，仍可进入对话界面'; }
+    if (chatBtn) { chatBtn.disabled = false; }
+    if (chatIcon) chatIcon.textContent = '💬';
+    if (retryBtn) retryBtn.style.display = '';
   }
 }
+
 
 /* ══════════════════════════════════════
    Confetti
