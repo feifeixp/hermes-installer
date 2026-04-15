@@ -215,23 +215,15 @@ code.inline-code{background:rgba(124,58,237,.15);color:#c4b5fd;padding:1px 6px;b
 <div id="topbar">
   <button id="hamburger" onclick="toggleSidebar()" title="折叠侧边栏">☰</button>
   <div class="logo"><span>⚡</span> Hermes</div>
-  <select id="model-select" title="选择模型" onchange="onModelChange(this.value)">
-    <optgroup label="MiniMax">
-      <option value="minimax|MiniMax-M2.7|https://api.minimax.io/anthropic|anthropic_messages">MiniMax-M2.7</option>
-      <option value="minimax|MiniMax-M2.5|https://api.minimax.io/anthropic|anthropic_messages" selected>MiniMax-M2.5</option>
-      <option value="minimax|MiniMax-M2.1|https://api.minimax.io/anthropic|anthropic_messages">MiniMax-M2.1</option>
-    </optgroup>
-    <optgroup label="Anthropic">
-      <option value="anthropic|claude-sonnet-4-5|https://api.anthropic.com|anthropic_messages">Claude Sonnet 4.5</option>
-      <option value="anthropic|claude-opus-4|https://api.anthropic.com|anthropic_messages">Claude Opus 4</option>
-      <option value="anthropic|claude-haiku-4-5|https://api.anthropic.com|anthropic_messages">Claude Haiku 4.5</option>
-    </optgroup>
-    <optgroup label="OpenRouter">
-      <option value="openrouter|google/gemini-2.5-flash|https://openrouter.ai/api/v1|chat_completions">Gemini 2.5 Flash</option>
-      <option value="openrouter|deepseek/deepseek-r1|https://openrouter.ai/api/v1|chat_completions">DeepSeek R1</option>
-      <option value="openrouter|qwen/qwen3-235b-a22b|https://openrouter.ai/api/v1|chat_completions">Qwen3 235B</option>
-    </optgroup>
-  </select>
+  <!-- Model badge — shows active model; click to open model settings -->
+  <button id="model-badge" onclick="openModelSettings()" title="点击修改模型配置"
+    style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:8px;
+           background:rgba(124,58,237,0.12);border:1px solid rgba(124,58,237,0.3);
+           color:#a78bfa;font-size:13px;font-weight:500;cursor:pointer;
+           transition:all .18s ease;white-space:nowrap;">
+    <span id="model-badge-name">MiniMax-M2.5</span>
+    <span style="font-size:10px;opacity:0.55;">▾</span>
+  </button>
   <div class="topbar-right">
     <div id="gw-indicator" title="Hermes Gateway 状态" style="display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:12px;background:var(--bg-card);border:1px solid var(--border);font-size:11px;color:var(--text-muted);cursor:default">
       <div id="gw-dot" style="width:7px;height:7px;border-radius:50%;background:var(--text-muted);transition:background .3s"></div>
@@ -307,6 +299,28 @@ code.inline-code{background:rgba(124,58,237,.15);color:#c4b5fd;padding:1px 6px;b
 
     <!-- MODEL TAB -->
     <div class="sp-section active" id="tab-model">
+      <!-- Quick presets -->
+      <div class="sp-field">
+        <div class="sp-label">快速选择</div>
+        <select class="sp-select" id="model-preset" onchange="applyModelPreset(this.value)">
+          <option value="">— 选择预设 —</option>
+          <optgroup label="MiniMax">
+            <option value="minimax|MiniMax-M2.7|https://api.minimax.io/anthropic|anthropic_messages">MiniMax-M2.7</option>
+            <option value="minimax|MiniMax-M2.5|https://api.minimax.io/anthropic|anthropic_messages">MiniMax-M2.5</option>
+            <option value="minimax|MiniMax-M2.1|https://api.minimax.io/anthropic|anthropic_messages">MiniMax-M2.1</option>
+          </optgroup>
+          <optgroup label="Anthropic">
+            <option value="anthropic|claude-sonnet-4-5|https://api.anthropic.com|anthropic_messages">Claude Sonnet 4.5</option>
+            <option value="anthropic|claude-opus-4|https://api.anthropic.com|anthropic_messages">Claude Opus 4</option>
+            <option value="anthropic|claude-haiku-4-5|https://api.anthropic.com|anthropic_messages">Claude Haiku 4.5</option>
+          </optgroup>
+          <optgroup label="OpenRouter">
+            <option value="openrouter|google/gemini-2.5-flash|https://openrouter.ai/api/v1|chat_completions">Gemini 2.5 Flash</option>
+            <option value="openrouter|deepseek/deepseek-r1|https://openrouter.ai/api/v1|chat_completions">DeepSeek R1</option>
+            <option value="openrouter|qwen/qwen3-235b-a22b|https://openrouter.ai/api/v1|chat_completions">Qwen3 235B</option>
+          </optgroup>
+        </select>
+      </div>
       <div class="sp-field">
         <div class="sp-label">提供商</div>
         <select class="sp-select" id="cfg-provider">
@@ -338,8 +352,13 @@ code.inline-code{background:rgba(124,58,237,.15);color:#c4b5fd;padding:1px 6px;b
           <label class="sp-radio-label" for="mode-openai">OpenAI Chat</label>
         </div>
       </div>
-      <button class="sp-save-btn" onclick="saveModel()">保存模型配置</button>
-      <div class="sp-toast" id="model-toast">✓ 已保存</div>
+      <!-- Explain why restart is needed -->
+      <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:0.78rem;color:#fbbf24;line-height:1.55;">
+        ⚠ Hermes Agent 在 Gateway 进程中管理模型。修改后需<strong>重启 Gateway</strong> 才能生效。<br>
+        也可在终端运行 <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">hermes model</code> 交互式切换。
+      </div>
+      <button class="sp-save-btn" id="btn-save-model" onclick="saveModelAndRestart()">保存并重启 Gateway</button>
+      <div class="sp-toast" id="model-toast">✓ 已保存并重启</div>
     </div>
 
     <!-- KEYS TAB -->
@@ -548,8 +567,8 @@ async function loadConfig() {
     }
     if (agent.max_turns) document.getElementById('adv-max-turns').value = agent.max_turns
 
-    // sync top model select if possible
-    syncTopSelect(m)
+    // update top bar badge
+    updateModelBadge(m)
   } catch(e) {
     document.getElementById('status-label').textContent = '离线'
     document.getElementById('status-dot').className = 'err'
@@ -561,13 +580,17 @@ function setDot(dotId, labelId, ok, okText, errText) {
   document.getElementById(labelId).textContent = ok ? okText : errText
 }
 
-function syncTopSelect(m) {
+function updateModelBadge(m) {
   if (!m) return
-  const sel = document.getElementById('model-select')
-  const targetVal = `${m.provider}|${m.name}|${m.base_url}|${m.api_mode}`
-  for (const opt of sel.options) {
-    if (opt.value === targetVal) { opt.selected = true; break }
+  const badge = document.getElementById('model-badge-name')
+  if (badge) badge.textContent = m.name || 'Hermes'
+  // also sync the preset dropdown (visual only)
+  const preset = document.getElementById('model-preset')
+  if (preset) {
+    const targetVal = `${m.provider}|${m.name}|${m.base_url}|${m.api_mode}`
+    preset.value = targetVal  // won't match → shows "— 选择预设 —" if custom
   }
+
 }
 
 async function loadGatewayStatus() {
@@ -916,7 +939,8 @@ function cycleReasoning() {
 // ────────────────────────────────────────────────────────────
 // MODEL SELECT (top bar)
 // ────────────────────────────────────────────────────────────
-function onModelChange(val) {
+/* Apply a preset value into the settings form fields (no save yet) */
+function applyModelPreset(val) {
   if (!val) return
   const [provider, name, baseUrl, apiMode] = val.split('|')
   document.getElementById('cfg-provider').value = provider
@@ -924,12 +948,58 @@ function onModelChange(val) {
   document.getElementById('cfg-base-url').value = baseUrl
   const modeEl = document.querySelector(`input[name="api-mode"][value="${apiMode}"]`)
   if (modeEl) modeEl.checked = true
-  // auto-save
-  fetch('/api/config/model', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, model: name, base_url: baseUrl, api_mode: apiMode })
-  })
+  // Reset preset select back to placeholder so repeated selection works
+  setTimeout(() => { const el = document.getElementById('model-preset'); if (el) el.value = '' }, 50)
+}
+
+/* Open settings panel to the model tab */
+function openModelSettings() {
+  openSettings()
+  switchTab('model', document.querySelector('.sp-tab'))
+}
+
+/* Save model config + restart Gateway so the new model takes effect */
+async function saveModelAndRestart() {
+  const btn = document.getElementById('btn-save-model')
+  const toast = document.getElementById('model-toast')
+  const provider = document.getElementById('cfg-provider').value
+  const model    = document.getElementById('cfg-model').value.trim()
+  const base_url = document.getElementById('cfg-base-url').value.trim()
+  const api_mode = document.querySelector('input[name="api-mode"]:checked')?.value || 'anthropic_messages'
+
+  if (!model) return
+
+  if (btn) { btn.disabled = true; btn.textContent = '保存中...' }
+  if (toast) toast.style.display = 'none'
+
+  try {
+    // 1. Save to config.yaml
+    await fetch('/api/config/model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model, base_url, api_mode })
+    })
+
+    // 2. Update top badge immediately
+    updateModelBadge({ provider, name: model, base_url, api_mode })
+    if (btn) btn.textContent = '重启 Gateway...'
+
+    // 3. Restart Gateway so new model takes effect
+    const gwResp = await fetch('/api/gateway/restart', { method: 'POST' })
+    const gwData = await gwResp.json()
+
+    if (gwData.success) {
+      if (toast) { toast.textContent = `✓ 已切换至 ${model}，Gateway 已重启`; toast.style.display = 'block' }
+      setTimeout(() => { if (toast) toast.style.display = 'none' }, 3000)
+      checkGatewayStatus()
+    } else {
+      if (toast) { toast.textContent = `⚠ 已保存，但 Gateway 重启失败：${gwData.output || '请手动重启'}`; toast.style.display = 'block'; toast.style.color = 'var(--yellow)' }
+    }
+  } catch(e) {
+    if (toast) { toast.textContent = `✗ 错误：${e.message}`; toast.style.display = 'block'; toast.style.color = 'var(--red)' }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '保存并重启 Gateway' }
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -953,17 +1023,6 @@ function switchTab(name, btn) {
   if (name === 'gateway') loadGatewayStatus()
 }
 
-async function saveModel() {
-  const provider = document.getElementById('cfg-provider').value
-  const model = document.getElementById('cfg-model').value.trim()
-  const base_url = document.getElementById('cfg-base-url').value.trim()
-  const api_mode = document.querySelector('input[name="api-mode"]:checked')?.value || 'anthropic_messages'
-  await fetch('/api/config/model', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, model, base_url, api_mode })
-  })
-  showToast('model-toast')
-}
 
 async function saveKeys() {
   const payload = {
