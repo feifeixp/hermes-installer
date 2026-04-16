@@ -1688,7 +1688,9 @@ async function loadSummary() {
 
 /* ── Open chat page ───────────────────────────────────────────────── */
 function openChat() {
-  window.location.href = '/chat';
+  fetch('/api/setup/complete', { method: 'POST' }).finally(() => {
+    window.location.href = '/chat';
+  });
 }
 
 async function startGateway() {

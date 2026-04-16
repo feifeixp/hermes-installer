@@ -49,6 +49,7 @@ HERMES_INSTALL_SH  = "https://raw.githubusercontent.com/NousResearch/hermes-agen
 HERMES_INSTALL_PS1 = "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1"
 
 HERMES_GATEWAY_URL = "http://127.0.0.1:8642"   # Hermes Agent API server
+SETUP_COMPLETE = HERMES_HOME / ".setup_complete"
 
 ILINK_BASE = "https://ilinkai.weixin.qq.com"
 ILINK_HEADERS = {
@@ -296,7 +297,17 @@ INDEX_HTML = BASE_DIR / "index.html"
 
 @app.get("/")
 async def serve_index():
+    from fastapi.responses import RedirectResponse
+    if SETUP_COMPLETE.exists():
+        return RedirectResponse(url="/chat", status_code=302)
     return FileResponse(str(INDEX_HTML), media_type="text/html")
+
+
+@app.post("/api/setup/complete")
+async def mark_setup_complete():
+    HERMES_HOME.mkdir(parents=True, exist_ok=True)
+    SETUP_COMPLETE.write_text("1", encoding="utf-8")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
