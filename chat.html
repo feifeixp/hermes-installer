@@ -414,9 +414,11 @@ code.inline-code{background:rgba(124,58,237,.15);color:#c4b5fd;padding:1px 6px;b
         </div>
         <button class="sc-btn" id="gw-restart-btn" onclick="restartGateway()">检查</button>
       </div>
+      <button id="gw-start-btn" onclick="startHermes()" style="display:none;width:100%;margin:8px 0;padding:9px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">⚡ 启动 Hermes Agent</button>
+      <div id="gw-start-msg" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px;display:none;"></div>
       <hr class="sp-divider"/>
       <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.5;margin-bottom:10px;">
-        若 Hermes API 服务未运行，请在终端执行：<code style="background:var(--bg-card);padding:1px 5px;border-radius:3px;">hermes</code> 或 <code style="background:var(--bg-card);padding:1px 5px;border-radius:3px;">hermes serve</code>
+        若自动启动失败，请在终端执行：<code style="background:var(--bg-card);padding:1px 5px;border-radius:3px;">hermes serve</code>
       </div>
       <button class="sp-save-btn" style="background:var(--bg-card);border:1px solid var(--border);color:var(--text-secondary)" onclick="loadGatewayStatus()">🔄 刷新状态</button>
       <div class="sp-toast" id="gw-toast">✓ 已刷新</div>
@@ -519,15 +521,43 @@ async function checkGatewayStatus() {
     document.getElementById('gw-label').textContent = running ? '⚡ Hermes Gateway' : '⚠ Gateway 未运行'
     document.getElementById('gw-indicator').title = running
       ? '消息通过 Hermes Agent Gateway (port 8642) 发送'
-      : 'Hermes Agent Gateway 未运行！请重新启动或返回安装向导配置。'
+      : 'Hermes Agent Gateway 未运行！点击设置 → Gateway 可一键启动。'
     document.getElementById('gw-indicator').style.borderColor = running ? 'var(--border)' : 'var(--red)'
-    // also update gateway tab card
+    // gateway tab card
     const procStatus = document.getElementById('gw-proc-status')
     const procDot = document.getElementById('gw-proc-dot')
     if (procStatus) procStatus.textContent = running ? '运行中 (port 8642)' : '未运行'
     if (procDot) procDot.className = 'sc-dot ' + (running ? 'ok' : 'err')
+    // show/hide start button
+    const startBtn = document.getElementById('gw-start-btn')
+    const startMsg = document.getElementById('gw-start-msg')
+    if (startBtn) startBtn.style.display = running ? 'none' : ''
+    if (startMsg && running) startMsg.style.display = 'none'
   } catch(e) {
     document.getElementById('gw-label').textContent = 'Gateway 离线'
+  }
+}
+
+async function startHermes() {
+  const btn = document.getElementById('gw-start-btn')
+  const msg = document.getElementById('gw-start-msg')
+  btn.disabled = true
+  btn.textContent = '⏳ 启动中...'
+  if (msg) { msg.style.display = ''; msg.style.color = 'var(--text-muted)'; msg.textContent = '正在启动 Hermes Agent，请稍候...' }
+  try {
+    const data = await fetch('/api/hermes/start', { method: 'POST' }).then(r => r.json())
+    if (data.ok) {
+      if (msg) { msg.style.color = 'var(--green)'; msg.textContent = '✓ ' + data.message }
+      await checkGatewayStatus()
+    } else {
+      if (msg) { msg.style.color = 'var(--red)'; msg.textContent = '✗ ' + data.message }
+      btn.disabled = false
+      btn.textContent = '⚡ 启动 Hermes Agent'
+    }
+  } catch(e) {
+    if (msg) { msg.style.color = 'var(--red)'; msg.textContent = '✗ 请求失败: ' + e.message }
+    btn.disabled = false
+    btn.textContent = '⚡ 启动 Hermes Agent'
   }
 }
 

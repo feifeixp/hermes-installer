@@ -1017,10 +1017,15 @@ def _is_process_running(pid_file: Path) -> bool:
     if not pid_file.exists():
         return False
     try:
-        pid = int(pid_file.read_text().strip())
+        raw = pid_file.read_text().strip()
+        # PID file may be plain int or JSON {"pid": N, ...}
+        try:
+            pid = int(raw)
+        except ValueError:
+            pid = int(json.loads(raw)["pid"])
         os.kill(pid, 0)
         return True
-    except (ValueError, ProcessLookupError, PermissionError):
+    except (ValueError, KeyError, ProcessLookupError, PermissionError):
         return False
 
 
@@ -1068,6 +1073,63 @@ async def api_gateway_restart():
                 "Please start Hermes Agent manually: hermes serve"
             ),
         }
+
+
+def _find_hermes_bin() -> Optional[Path]:
+    """Locate the hermes CLI binary in known locations."""
+    candidates = [
+        HERMES_AGENT / "venv" / "bin" / "hermes",          # venv install (macOS/Linux)
+        HERMES_AGENT / "venv" / "Scripts" / "hermes.exe",   # venv install (Windows)
+        HERMES_HOME / "bin" / "hermes",                     # standalone install
+        Path.home() / ".local" / "bin" / "hermes",          # pipx / user-local
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    # Fall back to PATH lookup
+    import shutil
+    found = shutil.which("hermes")
+    return Path(found) if found else None
+
+
+@app.post("/api/hermes/start")
+async def api_hermes_start():
+    """Launch 'hermes serve' as a detached background process."""
+    # Already running?
+    if await _hermes_gateway_running():
+        return {"ok": True, "message": "已运行"}
+
+    hermes_bin = _find_hermes_bin()
+    if not hermes_bin:
+        return {"ok": False, "message": "找不到 hermes 可执行文件，请确保 Hermes Agent 已安装"}
+
+    try:
+        env = os.environ.copy()
+        # Ensure venv bin dir is first in PATH so hermes can find its own deps
+        venv_bin = str(hermes_bin.parent)
+        env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
+
+        kwargs: dict = dict(
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs["start_new_session"] = True   # detach from our process group
+
+        subprocess.Popen([str(hermes_bin), "serve"], **kwargs)
+    except Exception as exc:
+        return {"ok": False, "message": f"启动失败: {exc}"}
+
+    # Wait up to 8 s for port 8642 to become reachable
+    for _ in range(16):
+        await asyncio.sleep(0.5)
+        if await _hermes_gateway_running():
+            return {"ok": True, "message": "Hermes Agent 已启动"}
+
+    return {"ok": False, "message": "进程已启动，但 port 8642 尚未就绪，请稍等几秒后刷新"}
 
 
 # ---------------------------------------------------------------------------
