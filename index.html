@@ -657,6 +657,89 @@
       color: #f59e0b;
     }
   </style>
+  <style>
+    /* ── Setup / Install terminal (shared) ── */
+    .terminal {
+      background: var(--terminal-bg);
+      color: var(--terminal-green);
+      font-family: 'Menlo', 'Courier New', monospace;
+      font-size: 0.8rem;
+      padding: 14px 16px;
+      border-radius: 10px;
+      height: 300px;
+      overflow-y: auto;
+      border: 1px solid #1a1a2a;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .terminal-setup {
+      height: 360px;
+    }
+    /* Input bar below setup terminal */
+    .setup-input-bar {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      align-items: center;
+    }
+    .setup-input-bar input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--terminal-green);
+      padding: 9px 14px;
+      font-family: 'Menlo', monospace;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    .setup-input-bar input:focus {
+      border-color: var(--purple);
+    }
+    .setup-input-bar button {
+      padding: 9px 18px;
+      background: var(--purple);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .setup-input-bar button:hover { background: var(--purple-light); }
+    /* cmd pill — shows the install command */
+    .cmd-pill {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--terminal-bg);
+      border: 1px solid #1a1a2a;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      font-family: 'Menlo', monospace;
+      font-size: 0.8rem;
+      color: #7dd3fc;
+      user-select: all;
+    }
+    .cmd-pill-label {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+      font-family: sans-serif;
+    }
+    /* done banner */
+    .done-banner {
+      background: linear-gradient(135deg, rgba(34,197,94,.12), rgba(22,163,74,.08));
+      border: 1px solid rgba(34,197,94,.3);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-top: 16px;
+      display: none;
+    }
+  </style>
 </head>
 <body>
 <div id="app">
@@ -664,7 +747,7 @@
   <nav id="sidebar">
     <div id="sidebar-header">
       <h1>⚡ Hermes Agent<br>安装向导</h1>
-      <p>一键部署您的 AI 助手</p>
+      <p>极简安装，3 步完成</p>
     </div>
     <div id="step-list">
       <div class="step-item" id="nav-1" onclick="goToStep(1)">
@@ -677,15 +760,7 @@
       </div>
       <div class="step-item" id="nav-3" onclick="goToStep(3)">
         <div class="step-dot" id="dot-3">3</div>
-        <span class="step-label">配置 API 密钥</span>
-      </div>
-      <div class="step-item" id="nav-4" onclick="goToStep(4)">
-        <div class="step-dot" id="dot-4">4</div>
-        <span class="step-label">连接微信</span>
-      </div>
-      <div class="step-item" id="nav-5" onclick="goToStep(5)">
-        <div class="step-dot" id="dot-5">5</div>
-        <span class="step-label">完成</span>
+        <span class="step-label">初始化配置</span>
       </div>
     </div>
   </nav>
@@ -694,10 +769,10 @@
   <main id="main">
     <div id="content-area">
 
-      <!-- ────────── STEP 1 ────────── -->
+      <!-- ────────── STEP 1 : 环境检测 ────────── -->
       <div class="step-panel" id="panel-1">
         <h2 class="panel-title">环境检测</h2>
-        <p class="panel-subtitle">检查系统依赖是否满足 Hermes Agent 的运行需求</p>
+        <p class="panel-subtitle">确认系统满足安装需求</p>
 
         <div class="card" id="check-list">
           <div style="display:flex;align-items:center;gap:10px;color:var(--text-muted);font-size:0.85rem;">
@@ -706,39 +781,36 @@
           </div>
         </div>
 
-        <!-- Inline install log — shown only during tool auto-install -->
-        <div id="tool-install-log" style="display:none;">
-          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:5px;display:flex;align-items:center;gap:6px;">
-            <span class="spinner" id="tool-install-spinner"></span>
-            <span id="tool-install-label">正在安装...</span>
-          </div>
-          <div id="tool-install-terminal"></div>
-        </div>
-
         <div style="display:flex;align-items:center;gap:12px;margin-top:24px;">
           <button class="btn btn-primary" id="btn-step1-next" onclick="goToStep(2)" disabled>
             下一步 →
           </button>
-          <button class="btn btn-secondary" onclick="runChecks()" id="btn-recheck">重新检测</button>
+          <button class="btn btn-secondary" onclick="runChecks()">重新检测</button>
         </div>
       </div>
 
-      <!-- ────────── STEP 2 ────────── -->
+      <!-- ────────── STEP 2 : 安装 ────────── -->
       <div class="step-panel" id="panel-2">
-        <h2 class="panel-title">安装 Hermes</h2>
-        <p class="panel-subtitle" id="step2-subtitle">正在加载安装信息...</p>
+        <h2 class="panel-title">安装 Hermes Agent</h2>
+        <p class="panel-subtitle">运行官方一键安装脚本，自动完成所有配置</p>
 
-        <div class="card" id="step2-info-card">
-          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;">安装脚本</div>
-          <div class="repo-url" id="step2-install-cmd">正在检测平台...</div>
+        <div class="card" style="margin-bottom:16px;">
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;">安装命令</div>
+          <div class="cmd-pill">
+            <span class="cmd-pill-label">$</span>
+            <span id="install-cmd-text">curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash</span>
+          </div>
           <button class="btn btn-primary" id="btn-start-install" onclick="startInstall()">
-            开始安装
+            ▶ 开始安装
           </button>
         </div>
 
-        <div id="log-section" style="display:none;margin-top:8px;">
-          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;">安装日志</div>
-          <div id="log-terminal"></div>
+        <div id="install-log-wrap" style="display:none;margin-bottom:16px;">
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+            <span class="spinner" id="install-spinner"></span>
+            <span id="install-log-label">正在安装...</span>
+          </div>
+          <div id="install-terminal" class="terminal"></div>
         </div>
 
         <div style="display:flex;align-items:center;gap:12px;margin-top:20px;">
@@ -749,242 +821,53 @@
         </div>
       </div>
 
-      <!-- ────────── STEP 3 ────────── -->
+      <!-- ────────── STEP 3 : hermes setup ────────── -->
       <div class="step-panel" id="panel-3">
-        <h2 class="panel-title">配置 API 密钥</h2>
-        <p class="panel-subtitle">填写所需的 API 密钥，将安全保存至 <code>~/.hermes/.env</code></p>
+        <h2 class="panel-title">初始化配置</h2>
+        <p class="panel-subtitle">运行 <code>hermes setup</code> 完成 API Key、模型等配置</p>
 
-        <div class="card">
-          <!-- MiniMax -->
-          <div class="form-group">
-            <label class="form-label">
-              MiniMax API Key
-              <span class="configured-badge" id="badge-minimax" style="display:none">✓ 已配置</span>
-              <span style="color:var(--red);font-size:0.75rem;margin-left:4px;">* 必填</span>
-            </label>
-            <div class="input-wrap">
-              <input
-                class="form-input with-toggle"
-                type="password"
-                id="minimax-key"
-                placeholder="sk-cp-..."
-                autocomplete="off"
-              />
-              <button class="eye-toggle" onclick="toggleVisibility('minimax-key', this)">👁</button>
-            </div>
-            <div class="form-hint">在 <a href="https://minimax.io" target="_blank" style="color:var(--purple-light)">minimax.io</a> 获取您的 API Key</div>
+        <div class="card" style="margin-bottom:16px;">
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;">配置命令</div>
+          <div class="cmd-pill">
+            <span class="cmd-pill-label">$</span>
+            <span>hermes setup</span>
           </div>
-
-          <!-- OpenRouter -->
-          <div class="form-group">
-            <label class="form-label">
-              OpenRouter API Key
-              <span class="configured-badge" id="badge-openrouter" style="display:none">✓ 已配置</span>
-              <span style="color:var(--text-muted);font-size:0.75rem;margin-left:4px;">可选</span>
-            </label>
-            <div class="input-wrap">
-              <input
-                class="form-input with-toggle"
-                type="password"
-                id="openrouter-key"
-                placeholder="sk-or-..."
-                autocomplete="off"
-              />
-              <button class="eye-toggle" onclick="toggleVisibility('openrouter-key', this)">👁</button>
-            </div>
-            <div class="form-hint">在 <a href="https://openrouter.ai" target="_blank" style="color:var(--purple-light)">openrouter.ai</a> 获取</div>
-          </div>
-
-          <!-- Anthropic -->
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">
-              Anthropic API Key
-              <span class="configured-badge" id="badge-anthropic" style="display:none">✓ 已配置</span>
-              <span style="color:var(--text-muted);font-size:0.75rem;margin-left:4px;">可选</span>
-            </label>
-            <div class="input-wrap">
-              <input
-                class="form-input with-toggle"
-                type="password"
-                id="anthropic-key"
-                placeholder="sk-ant-..."
-                autocomplete="off"
-              />
-              <button class="eye-toggle" onclick="toggleVisibility('anthropic-key', this)">👁</button>
-            </div>
-            <div class="form-hint">在 <a href="https://console.anthropic.com" target="_blank" style="color:var(--purple-light)">console.anthropic.com</a> 获取</div>
-          </div>
-        </div>
-
-        <div id="keys-error" style="display:none;color:var(--red);font-size:0.85rem;margin-bottom:12px;"></div>
-
-        <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
-          <button class="btn btn-primary" id="btn-save-keys" onclick="saveKeys()">
-            保存并继续
+          <button class="btn btn-primary" id="btn-run-setup" onclick="runSetup()">
+            ▶ 运行配置向导
           </button>
-          <button class="btn btn-ghost" onclick="goToStep(2)">← 返回</button>
         </div>
-      </div>
 
-      <!-- ────────── STEP 4 ────────── -->
-      <div class="step-panel" id="panel-4">
-        <h2 class="panel-title">连接微信</h2>
-        <p class="panel-subtitle">扫描二维码，将您的微信账号与 Hermes 绑定</p>
-
-        <div class="card" style="text-align:center;padding:28px 24px;">
-          <div id="qr-container">
-            <div id="qr-placeholder">
-              <div>
-                <div style="font-size:2rem;margin-bottom:8px;">📱</div>
-                <div>点击下方按钮<br>获取登录二维码</div>
-              </div>
-            </div>
-            <div id="qr-img-wrap">
-              <img id="qr-img" src="" alt="微信登录二维码" />
-            </div>
-            <div id="qr-status-text"></div>
+        <div id="setup-log-wrap" style="display:none;margin-bottom:16px;">
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+            <span class="spinner" id="setup-spinner"></span>
+            <span id="setup-log-label">配置向导运行中...</span>
           </div>
-
-          <div id="weixin-login-btns" style="display:flex;flex-direction:column;align-items:center;gap:10px;">
-            <button class="btn btn-primary" id="btn-start-weixin" onclick="startWeixinLogin()">
-              开始扫码登录
-            </button>
-            <button class="btn btn-ghost" onclick="skipWeixin()">跳过 →（稍后再连接）</button>
-          </div>
-
-          <div id="weixin-success" style="display:none;">
-            <div class="success-circle">✓</div>
-            <div style="font-size:1rem;font-weight:600;color:var(--green);margin-bottom:6px;">微信登录成功！</div>
-            <div id="weixin-account-text" style="font-size:0.82rem;color:var(--text-muted);margin-bottom:20px;"></div>
+          <div id="setup-terminal" class="terminal terminal-setup"></div>
+          <!-- Input bar: shown when setup is waiting for input -->
+          <div class="setup-input-bar" id="setup-input-bar">
+            <input type="text" id="setup-input" placeholder="输入回复后按 Enter…"
+                   onkeydown="if(event.key==='Enter'){sendSetupInput()}" autocomplete="off" />
+            <button onclick="sendSetupInput()">发送 ↵</button>
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
-          <button class="btn btn-primary" id="btn-step4-next" onclick="goToStep(5)" disabled>
-            下一步 →
-          </button>
-          <button class="btn btn-ghost" onclick="goToStep(3)">← 返回</button>
-        </div>
-      </div>
-
-      <!-- ────────── STEP 5 ────────── -->
-      <div class="step-panel" id="panel-5">
-        <div style="text-align:center;margin-bottom:28px;">
-          <div class="success-circle">🎉</div>
-          <h2 class="panel-title" style="text-align:center">安装完成！</h2>
-          <p class="panel-subtitle" style="text-align:center">Hermes Agent 已成功配置，可以开始使用了</p>
-        </div>
-
-        <!-- Summary -->
-        <div class="card" style="margin-bottom:20px;">
-          <div style="font-size:0.82rem;font-weight:600;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">配置摘要</div>
-          <div id="summary-rows">
-            <!-- Populated by JS -->
-          </div>
-        </div>
-
-        <!-- Instructions -->
-        <div style="margin-bottom:20px;">
-          <div style="font-size:0.85rem;font-weight:600;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">使用方式</div>
-
-          <!-- 立即开始 -->
-          <div class="instruction-block" style="border-left-color:var(--green);">
-            <h4 style="color:var(--green);">🚀 立即开始</h4>
-            <p style="margin-bottom:8px;">安装完成后，在终端中运行以下命令：</p>
-            <div style="background:var(--terminal-bg);border-radius:6px;padding:10px 14px;font-family:'Menlo','Courier New',monospace;font-size:0.8rem;line-height:1.8;">
-              <div style="color:#94a3b8;"># macOS / Linux — 重新加载 Shell 环境变量</div>
-              <div style="color:var(--terminal-green);">source ~/.bashrc &nbsp;&nbsp;<span style="color:#475569;"># 或 source ~/.zshrc</span></div>
-              <div style="color:#94a3b8;margin-top:6px;"># Windows — 重启终端（Terminal）即可</div>
-              <div style="color:#94a3b8;margin-top:10px;"># 启动 Hermes</div>
-              <div style="color:var(--terminal-green);">hermes &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#475569;"># 开始对话！</span></div>
-            </div>
-          </div>
-
-          <div class="instruction-block">
-            <h4>微信聊天</h4>
-            <p>打开微信，直接向已绑定的账号发送消息，Hermes Agent 会自动响应。</p>
-          </div>
-
-          <div class="instruction-block">
-            <h4>配置文件</h4>
-            <p>API 密钥保存在 <code>~/.hermes/.env</code>，配置在 <code>~/.hermes/config.yaml</code>。</p>
-          </div>
-        </div>
-
-        <!-- 常用命令参考 -->
-        <div style="margin-bottom:20px;">
-          <div style="font-size:0.85rem;font-weight:600;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">常用命令参考</div>
-          <div class="card" style="padding:0;overflow:hidden;">
-            <table style="width:100%;border-collapse:collapse;font-size:0.83rem;">
-              <thead>
-                <tr style="background:rgba(124,58,237,0.1);border-bottom:1px solid var(--border);">
-                  <th style="text-align:left;padding:10px 18px;color:var(--purple-light);font-weight:600;width:52%;">命令</th>
-                  <th style="text-align:left;padding:10px 18px;color:var(--text-muted);font-weight:500;">说明</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style="border-bottom:1px solid var(--border);">
-                  <td style="padding:9px 18px;"><code>hermes</code></td>
-                  <td style="padding:9px 18px;color:var(--text-muted);">启动交互式对话</td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);">
-                  <td style="padding:9px 18px;"><code>hermes model</code></td>
-                  <td style="padding:9px 18px;color:var(--text-muted);">选择 LLM 模型和提供商</td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border);">
-                  <td style="padding:9px 18px;"><code>hermes tools</code></td>
-                  <td style="padding:9px 18px;color:var(--text-muted);">配置启用的工具</td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);">
-                  <td style="padding:9px 18px;"><code>hermes config set</code></td>
-                  <td style="padding:9px 18px;color:var(--text-muted);">设置单个配置项</td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border);">
-                  <td style="padding:9px 18px;"><code>hermes gateway</code></td>
-                  <td style="padding:9px 18px;color:var(--text-muted);">启动消息网关（Telegram / Discord 等）</td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);">
-                  <td style="padding:9px 18px;"><code>hermes setup</code></td>
-                  <td style="padding:9px 18px;color:var(--text-muted);">运行完整配置向导</td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border);">
-                  <td style="padding:9px 18px;"><code>hermes update</code></td>
-                  <td style="padding:9px 18px;color:var(--text-muted);">更新到最新版本</td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);">
-                  <td style="padding:9px 18px;"><code>hermes doctor</code></td>
-                  <td style="padding:9px 18px;color:var(--text-muted);">诊断环境问题</td>
-                </tr>
-                <tr>
-                  <td style="padding:9px 18px;"><code>hermes claw migrate</code></td>
-                  <td style="padding:9px 18px;color:var(--text-muted);">从 OpenClaw 迁移</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- ── 开始使用 CTA ── -->
-        <div style="background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(168,85,247,0.08));border:1px solid rgba(124,58,237,0.3);border-radius:14px;padding:24px 28px;margin-bottom:20px;">
+        <!-- Done banner -->
+        <div class="done-banner" id="setup-done-banner">
           <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-            <div style="flex:1;min-width:200px;">
-              <div style="font-size:1rem;font-weight:700;color:var(--text);margin-bottom:4px;">立即开始对话 ✨</div>
-              <div id="gateway-status-msg" style="font-size:0.83rem;color:var(--text-muted);">正在启动 Hermes Gateway...</div>
+            <div style="flex:1;">
+              <div style="font-size:1.05rem;font-weight:700;color:var(--green);margin-bottom:4px;">🎉 配置完成！</div>
+              <div style="font-size:0.85rem;color:var(--text-muted);">Hermes Agent 已就绪，点击右侧按钮开始对话。</div>
             </div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;">
-              <button class="btn btn-primary" id="btn-open-chat" onclick="openChat()" disabled
-                style="padding:12px 28px;font-size:1rem;">
-                <span id="chat-btn-icon">⏳</span> 开始对话
-              </button>
-              <button class="btn btn-secondary" id="btn-start-gateway" onclick="startGateway()" style="display:none;">
-                重新检查
-              </button>
-            </div>
+            <button class="btn btn-primary" onclick="openChat()"
+                    style="padding:12px 32px;font-size:1rem;white-space:nowrap;">
+              💬 开始对话 →
+            </button>
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <button class="btn btn-ghost" onclick="window.close()">关闭安装向导</button>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:20px;" id="step3-nav">
+          <button class="btn btn-ghost" onclick="goToStep(2)">← 返回</button>
+          <button class="btn btn-secondary" id="btn-skip-setup" onclick="skipSetup()">跳过，稍后配置</button>
         </div>
       </div>
 
@@ -992,32 +875,52 @@
   </main>
 </div>
 
-<!-- Confetti container -->
 <div class="confetti-wrap" id="confetti-wrap"></div>
 
 <script>
-/* ══════════════════════════════════════
+/* ══════════════════════════════════════════════════════
    State
-══════════════════════════════════════ */
+══════════════════════════════════════════════════════ */
+const TOTAL_STEPS = 3;
 let currentStep = 1;
-let checkData = null;
-let weixinEventSource = null;
+let installES = null;
+let setupES = null;
 
-/* ══════════════════════════════════════
+/* ══════════════════════════════════════════════════════
+   Helpers
+══════════════════════════════════════════════════════ */
+// Strip ANSI escape codes for plain-text display
+function stripAnsi(str) {
+  return str.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+            .replace(/\x1b\][^\x07]*\x07/g, '')
+            .replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/g, '');
+}
+
+function termAppend(termId, text) {
+  const el = document.getElementById(termId);
+  if (!el) return;
+  el.textContent += stripAnsi(text);
+  el.scrollTop = el.scrollHeight;
+}
+
+function termClear(termId) {
+  const el = document.getElementById(termId);
+  if (el) el.textContent = '';
+}
+
+/* ══════════════════════════════════════════════════════
    Navigation
-══════════════════════════════════════ */
+══════════════════════════════════════════════════════ */
 function goToStep(n) {
-  // Hide all panels
   document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
-  // Show target panel
   const target = document.getElementById('panel-' + n);
   if (!target) return;
   target.classList.add('active');
 
-  // Update sidebar
-  for (let i = 1; i <= 5; i++) {
+  for (let i = 1; i <= TOTAL_STEPS; i++) {
     const nav = document.getElementById('nav-' + i);
     const dot = document.getElementById('dot-' + i);
+    if (!nav) continue;
     nav.classList.remove('active', 'completed');
     if (i < n) {
       nav.classList.add('completed');
@@ -1031,734 +934,283 @@ function goToStep(n) {
   }
 
   currentStep = n;
-
-  // Step-specific on-enter logic
   if (n === 1) runChecks();
   if (n === 2) initStep2();
-  if (n === 3) prefillKeys();
-  if (n === 5) loadSummary();
 }
 
-/* ══════════════════════════════════════
-   Step 1 — Environment checks
-══════════════════════════════════════ */
-let toolInstallES = null;   // active EventSource for tool install
-
+/* ══════════════════════════════════════════════════════
+   Step 1 — 环境检测
+══════════════════════════════════════════════════════ */
 async function runChecks() {
-  const list = document.getElementById('check-list');
+  const list    = document.getElementById('check-list');
   const nextBtn = document.getElementById('btn-step1-next');
   nextBtn.disabled = true;
 
   list.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;color:var(--text-muted);font-size:0.85rem;">
-      <span class="spinner"></span>
-      <span>正在检测系统环境...</span>
+      <span class="spinner"></span><span>正在检测系统环境...</span>
     </div>`;
 
   let data;
   try {
-    const resp = await fetch('/api/check');
-    data = await resp.json();
-    checkData = data;
+    data = await fetch('/api/check').then(r => r.json());
   } catch (e) {
-    list.innerHTML = `<div style="color:var(--red);">无法连接到安装服务：${e.message}</div>`;
+    list.innerHTML = `<div style="color:var(--red)">无法连接到安装服务：${e.message}</div>`;
     return;
   }
 
-  // ── Build check items (platform-aware) ──────────────────────────────────
   const isWin = data.platform === 'win32';
   let items = [];
-  let requiredOk = false;
+  let canProceed = false;
 
   if (isWin) {
-    // ── Windows: only WSL2 matters for prerequisites ──────────────────────
-    const wslOk  = data.wsl && data.wsl.ok;
-    const wslInst = data.wsl && data.wsl.installed;  // wsl.exe exists but no WSL2 distro
-
-    items = [
-      {
-        key:      'wsl',
-        label:    'WSL2（Windows 子系统 for Linux）',
-        ok:       wslOk,
-        icon:     wslOk ? '✓' : '✗',
-        iconCls:  wslOk ? 'badge-ok' : 'badge-fail',
-        detail:   wslOk ? '已安装 WSL2' : (wslInst ? '已安装 WSL1，需要升级为 WSL2' : '未安装'),
-        action:   wslOk ? null : 'wsl',
-        actionLabel: '安装 WSL2',
-        note: wslOk ? '' :
-          '安装 WSL2 需要管理员权限，安装后须<strong>重启电脑</strong>',
-      },
-      {
-        key:     'hermes',
-        label:   'Hermes Agent',
-        ok:      data.hermes_installed,
-        icon:    data.hermes_installed ? '✓' : '○',
-        iconCls: data.hermes_installed ? 'badge-ok' : 'badge-managed',
-        detail:  data.hermes_installed
-          ? `已安装 v${data.hermes_version}`
-          : '未安装（将在下一步通过 WSL2 安装）',
-        action: null,
-      },
-    ];
-
-    requiredOk = wslOk;
-
+    const wslOk = data.wsl && data.wsl.ok;
+    items = [{
+      icon: wslOk ? '✓' : '✗', cls: wslOk ? 'badge-ok' : 'badge-fail',
+      name: 'WSL2（Windows Subsystem for Linux）',
+      detail: wslOk ? '已安装 WSL2' : (data.wsl && data.wsl.installed ? '已安装 WSL1，需升级' : '未安装'),
+    }];
+    canProceed = wslOk;
+    if (!wslOk) {
+      items.push({
+        icon: '⚠', cls: 'badge-fail',
+        name: '需要安装 WSL2',
+        detail: '请在微软商店或命令行安装 WSL2 后重启电脑',
+      });
+    }
   } else {
-    // ── macOS / Linux: uv + Python + Git ─────────────────────────────────
-    const uvOk  = data.uv.ok;
-    const pyOk  = data.python.ok;
-    const pyMgd = data.python.managed_by_uv;
-
+    // macOS / Linux — curl + bash are always available; show platform info
+    const hermesOk = data.hermes_installed;
     items = [
       {
-        key:     'uv',
-        label:   'uv  包管理器',
-        ok:      uvOk,
-        icon:    uvOk ? '✓' : '✗',
-        iconCls: uvOk ? 'badge-ok' : 'badge-fail',
-        detail:  uvOk ? `v${data.uv.version}` : '未安装',
-        action:  uvOk ? null : 'uv',
-        actionLabel: '自动安装 uv',
+        icon: '✓', cls: 'badge-ok',
+        name: '操作系统',
+        detail: data.platform === 'darwin' ? 'macOS ✓' : 'Linux ✓',
       },
       {
-        key:     'python',
-        label:   'Python 3.10+',
-        ok:      pyOk,
-        icon:    pyOk ? (pyMgd ? '◎' : '✓') : '✗',
-        iconCls: pyOk ? (pyMgd ? 'badge-managed' : 'badge-ok') : 'badge-fail',
-        detail:  pyOk
-          ? (pyMgd ? `v${data.python.version}（uv 管理）` : `v${data.python.version}`)
-          : '未找到',
-        action:  pyOk ? null : (uvOk ? 'python' : 'python-nouv'),
-        actionLabel: uvOk ? '通过 uv 安装 Python 3.11' : '请先安装 uv',
+        icon: '✓', cls: 'badge-ok',
+        name: 'curl / bash',
+        detail: '已可用',
       },
       {
-        key:     'git',
-        label:   'Git',
-        ok:      data.git.ok,
-        icon:    data.git.ok ? '✓' : '✗',
-        iconCls: data.git.ok ? 'badge-ok' : 'badge-fail',
-        detail:  data.git.ok ? `v${data.git.version}` : '未安装',
-        action:  data.git.ok ? null : 'git-link',
-        actionLabel: '下载 Git ↗',
-      },
-      {
-        key:     'hermes',
-        label:   'Hermes Agent',
-        ok:      data.hermes_installed,
-        icon:    data.hermes_installed ? '✓' : '○',
-        iconCls: data.hermes_installed ? 'badge-ok' : '',
-        detail:  data.hermes_installed
-          ? `已安装 v${data.hermes_version}`
-          : '未安装（将在下一步安装）',
-        action: null,
+        icon: hermesOk ? '✓' : '○',
+        cls:  hermesOk ? 'badge-ok' : '',
+        name: 'Hermes Agent',
+        detail: hermesOk ? `已安装 v${data.hermes_version}` : '未安装（将在下一步安装）',
       },
     ];
+    canProceed = true;
 
-    requiredOk = uvOk && pyOk && data.git.ok;
-  }
-
-  // ── Render items ─────────────────────────────────────────────────────────
-  list.innerHTML = items.map(item => {
-    let actionEl = '';
-    if (item.action === 'wsl') {
-      actionEl = `<button
-        class="btn-tool-install"
-        id="btn-install-wsl"
-        onclick="installWSL()"
-      >${item.actionLabel}</button>`;
-    } else if (item.action === 'uv' || item.action === 'python') {
-      actionEl = `<button
-        class="btn-tool-install"
-        id="btn-install-${item.key}"
-        onclick="installTool('${item.action}', '${item.key}')"
-      >${item.actionLabel}</button>`;
-    } else if (item.action === 'python-nouv') {
-      actionEl = `<button class="btn-tool-install" disabled title="请先安装 uv">${item.actionLabel}</button>`;
-    } else if (item.action === 'git-link') {
-      actionEl = `<button
-        class="btn-tool-link"
-        onclick="openExternal('https://git-scm.com/downloads')"
-      >${item.actionLabel}</button>`;
-    }
-
-    const noteHtml = item.note
-      ? `<div style="font-size:0.75rem;color:#fbbf24;margin-top:4px;padding-left:36px;">${item.note}</div>`
-      : '';
-
-    return `
-      <div class="check-item" id="check-item-${item.key}" style="flex-wrap:wrap;">
-        <span class="check-icon ${item.iconCls}" id="check-icon-${item.key}">${item.icon}</span>
-        <span class="check-name">${item.label}</span>
-        <span class="check-version" id="check-ver-${item.key}" style="flex:1">${item.detail}</span>
-        <span id="check-action-${item.key}">${actionEl}</span>
-        ${noteHtml}
-      </div>`;
-  }).join('');
-
-  // ── Enable next button? ───────────────────────────────────────────────────
-  if (requiredOk) {
-    nextBtn.disabled = false;
-    if (data.hermes_installed) {
-      setTimeout(() => goToStep(3), 700);
+    // If already installed, skip step 2 automatically
+    if (hermesOk) {
+      setTimeout(() => goToStep(3), 800);
     }
   }
+
+  list.innerHTML = items.map(item => `
+    <div class="check-item">
+      <span class="check-icon ${item.cls}">${item.icon}</span>
+      <span class="check-name">${item.name}</span>
+      <span class="check-version">${item.detail}</span>
+    </div>`).join('');
+
+  nextBtn.disabled = !canProceed;
 }
 
-/* ── Auto-install a missing tool ──────────────────────────────────────── */
-function installTool(tool, key) {
-  const btn   = document.getElementById(`btn-install-${key}`);
-  const logEl = document.getElementById('tool-install-log');
-  const term  = document.getElementById('tool-install-terminal');
-  const label = document.getElementById('tool-install-label');
-  const spinner = document.getElementById('tool-install-spinner');
+/* ══════════════════════════════════════════════════════
+   Step 2 — 安装 Hermes
+══════════════════════════════════════════════════════ */
+function initStep2() {
+  // Update command display for Windows
+  fetch('/api/check').then(r => r.json()).then(data => {
+    if (data.platform === 'win32') {
+      document.getElementById('install-cmd-text').textContent =
+        'wsl -- bash -c "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"';
+    }
+  }).catch(() => {});
+}
 
-  if (btn) {
-    btn.disabled = true;
-    btn.className = 'btn-tool-install installing';
-    btn.textContent = '安装中...';
-  }
+function startInstall() {
+  if (installES) { installES.close(); installES = null; }
 
-  const toolNames = { uv: 'uv', python: 'Python 3.11' };
-  if (label) label.textContent = `正在安装 ${toolNames[tool] || tool}...`;
-  logEl.style.display = 'block';
-  term.innerHTML = '';
+  const btn     = document.getElementById('btn-start-install');
+  const logWrap = document.getElementById('install-log-wrap');
+  const spinner = document.getElementById('install-spinner');
+  const label   = document.getElementById('install-log-label');
+  const nextBtn = document.getElementById('btn-step2-next');
 
-  if (toolInstallES) { toolInstallES.close(); }
+  btn.disabled = true;
+  btn.textContent = '安装中...';
+  logWrap.style.display = 'block';
+  nextBtn.disabled = true;
+  termClear('install-terminal');
+  label.textContent = '正在安装 Hermes Agent，请稍候（首次约需 2-5 分钟）...';
 
-  const es = new EventSource(`/api/install-tool?tool=${encodeURIComponent(tool)}`);
-  toolInstallES = es;
+  installES = new EventSource('/api/install/simple');
 
-  es.onmessage = (e) => {
+  installES.onmessage = (e) => {
     let evt;
     try { evt = JSON.parse(e.data); } catch { return; }
 
     if (evt.type === 'log') {
-      const line = document.createElement('div');
-      line.textContent = evt.message;
-      if (evt.level === 'error') line.style.color = '#f87171';
-      term.appendChild(line);
-      term.scrollTop = term.scrollHeight;
-
+      termAppend('install-terminal', evt.message + '\n');
+    } else if (evt.type === 'ping') {
+      // keepalive
     } else if (evt.type === 'done') {
-      es.close();
-      toolInstallES = null;
+      installES.close(); installES = null;
       spinner.style.display = 'none';
-
       if (evt.success) {
-        if (label) label.textContent = `✓ ${toolNames[tool] || tool} 安装成功，正在重新检测...`;
-        if (btn) {
-          btn.className = 'btn-tool-install success';
-          btn.textContent = '已安装 ✓';
-        }
-        // Re-run checks after short delay so env picks up new install
-        setTimeout(() => {
-          logEl.style.display = 'none';
-          spinner.style.display = '';
-          runChecks();
-        }, 1800);
+        label.textContent = evt.already_installed
+          ? '✓ Hermes Agent 已安装，无需重新安装'
+          : '✓ 安装完成！';
+        label.style.color = 'var(--green)';
+        btn.textContent = '✓ 已安装';
+        nextBtn.disabled = false;
+        // auto-advance after 1.5 s
+        setTimeout(() => goToStep(3), 1500);
       } else {
-        if (label) label.textContent = `✗ 安装失败`;
-        if (btn) {
-          btn.disabled = false;
-          btn.className = 'btn-tool-install';
-          btn.textContent = '重试';
-        }
-        // Append error message to terminal
-        if (evt.message) {
-          const line = document.createElement('div');
-          line.style.color = '#f87171';
-          line.textContent = '✗ ' + evt.message;
-          term.appendChild(line);
-          term.scrollTop = term.scrollHeight;
-        }
+        label.textContent = '✗ 安装失败，请查看上方日志';
+        label.style.color = 'var(--red)';
+        btn.disabled = false;
+        btn.textContent = '重试';
       }
     }
   };
 
-  es.onerror = () => {
-    es.close();
-    toolInstallES = null;
-    if (btn) {
-      btn.disabled = false;
-      btn.className = 'btn-tool-install';
-      btn.textContent = '重试';
-    }
-    if (label) label.textContent = '连接中断，请重试';
+  installES.onerror = () => {
+    installES.close(); installES = null;
+    label.textContent = '连接中断';
+    label.style.color = 'var(--red)';
+    btn.disabled = false;
+    btn.textContent = '重试';
     spinner.style.display = 'none';
   };
 }
 
-/* ── Open URL in system browser ──────────────────────────────────────── */
-function openExternal(url) {
-  fetch(`/api/open-url?url=${encodeURIComponent(url)}`).catch(() => {
-    window.open(url, '_blank');
+/* ══════════════════════════════════════════════════════
+   Step 3 — hermes setup
+══════════════════════════════════════════════════════ */
+function runSetup() {
+  if (setupES) { setupES.close(); setupES = null; }
+
+  const btn      = document.getElementById('btn-run-setup');
+  const logWrap  = document.getElementById('setup-log-wrap');
+  const spinner  = document.getElementById('setup-spinner');
+  const label    = document.getElementById('setup-log-label');
+  const inputBar = document.getElementById('setup-input-bar');
+  const doneBanner = document.getElementById('setup-done-banner');
+
+  btn.disabled = true;
+  btn.textContent = '运行中...';
+  logWrap.style.display = 'block';
+  doneBanner.style.display = 'none';
+  termClear('setup-terminal');
+  inputBar.style.display = 'flex';
+  label.textContent = '配置向导运行中，请根据提示输入...';
+  label.style.color = '';
+
+  setupES = new EventSource('/api/setup/run');
+
+  setupES.onmessage = (e) => {
+    let evt;
+    try { evt = JSON.parse(e.data); } catch { return; }
+
+    if (evt.type === 'output') {
+      termAppend('setup-terminal', evt.text);
+    } else if (evt.type === 'ping') {
+      // keepalive — do nothing
+    } else if (evt.type === 'error') {
+      termAppend('setup-terminal', '\n[错误] ' + evt.message + '\n');
+      setupES.close(); setupES = null;
+      spinner.style.display = 'none';
+      label.textContent = '✗ 发生错误';
+      label.style.color = 'var(--red)';
+      inputBar.style.display = 'none';
+      btn.disabled = false;
+      btn.textContent = '重试';
+    } else if (evt.type === 'done') {
+      setupES.close(); setupES = null;
+      spinner.style.display = 'none';
+      inputBar.style.display = 'none';
+      const ok = evt.rc === 0 || evt.rc == null;
+      if (ok) {
+        label.textContent = '✓ 配置完成';
+        label.style.color = 'var(--green)';
+        doneBanner.style.display = 'block';
+        launchConfetti();
+      } else {
+        label.textContent = `配置向导已退出（rc=${evt.rc}）`;
+        btn.disabled = false;
+        btn.textContent = '重新运行';
+      }
+    }
+  };
+
+  setupES.onerror = () => {
+    setupES.close(); setupES = null;
+    spinner.style.display = 'none';
+    inputBar.style.display = 'none';
+    label.textContent = '连接中断';
+    label.style.color = 'var(--red)';
+    btn.disabled = false;
+    btn.textContent = '重试';
+  };
+}
+
+async function sendSetupInput() {
+  const input = document.getElementById('setup-input');
+  const text  = input.value;   // allow empty (just Enter)
+  input.value = '';
+  // Echo locally
+  termAppend('setup-terminal', text + '\n');
+  try {
+    await fetch('/api/setup/input', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+  } catch (e) {
+    termAppend('setup-terminal', '[发送失败: ' + e.message + ']\n');
+  }
+}
+
+function skipSetup() {
+  fetch('/api/setup/complete', { method: 'POST' }).finally(() => {
+    window.location.href = '/chat';
   });
 }
 
-/* ── Install WSL2 on Windows ─────────────────────────────────────────── */
-async function installWSL() {
-  const btn   = document.getElementById('btn-install-wsl');
-  const logEl = document.getElementById('tool-install-log');
-  const term  = document.getElementById('tool-install-terminal');
-  const label = document.getElementById('tool-install-label');
-  const spinner = document.getElementById('tool-install-spinner');
-
-  if (btn) {
-    btn.disabled = true;
-    btn.className = 'btn-tool-install installing';
-    btn.textContent = '正在启动...';
-  }
-
-  logEl.style.display = 'block';
-  term.innerHTML = '';
-  if (label) label.textContent = '正在启动 WSL2 安装程序...';
-
-  try {
-    const resp = await fetch('/api/install-wsl');
-    const data = await resp.json();
-    spinner.style.display = 'none';
-
-    if (data.ok) {
-      // WSL install is fire-and-forget (out-of-process elevated window)
-      // Show a prominent restart notice
-      term.innerHTML = '';
-      const lines = [
-        { text: '✓ WSL2 安装程序已在管理员窗口中启动', color: 'var(--green)' },
-        { text: '' },
-        { text: '📌 请在弹出的管理员权限窗口中点击「是」确认安装', color: '#fbbf24' },
-        { text: '🔄 安装完成后系统将提示重启 — 请重启电脑', color: '#fbbf24' },
-        { text: '↩  重启后重新打开本安装向导，点击「重新检测」继续', color: '#94a3b8' },
-      ];
-      lines.forEach(l => {
-        const div = document.createElement('div');
-        div.textContent = l.text;
-        if (l.color) div.style.color = l.color;
-        div.style.margin = '2px 0';
-        term.appendChild(div);
-      });
-      if (label) label.textContent = '等待安装完成后重启...';
-
-      if (btn) {
-        btn.className = 'btn-tool-install success';
-        btn.textContent = '安装中（重启后继续）';
-        btn.disabled = true;
-      }
-
-    } else {
-      spinner.style.display = 'none';
-      const div = document.createElement('div');
-      div.style.color = '#f87171';
-      div.textContent = '✗ 启动失败：' + (data.message || '未知错误');
-      term.appendChild(div);
-      if (label) label.textContent = '启动失败';
-      if (btn) {
-        btn.disabled = false;
-        btn.className = 'btn-tool-install';
-        btn.textContent = '重试安装 WSL2';
-      }
-    }
-  } catch (e) {
-    spinner.style.display = 'none';
-    const div = document.createElement('div');
-    div.style.color = '#f87171';
-    div.textContent = '请求失败：' + e.message;
-    term.appendChild(div);
-    if (label) label.textContent = '请求失败';
-    if (btn) {
-      btn.disabled = false;
-      btn.className = 'btn-tool-install';
-      btn.textContent = '重试';
-    }
-  }
-}
-
-/* ══════════════════════════════════════
-   Step 2 — Install
-══════════════════════════════════════ */
-function initStep2() {
-  const isWin = checkData && checkData.platform === 'win32';
-  const subtitle = document.getElementById('step2-subtitle');
-  const cmdEl    = document.getElementById('step2-install-cmd');
-
-  if (isWin) {
-    if (subtitle) subtitle.textContent = '通过 WSL2 运行官方安装脚本，自动完成所有配置';
-    if (cmdEl) cmdEl.textContent =
-      'curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash';
-  } else {
-    if (subtitle) subtitle.textContent = '通过 uv 克隆仓库并安装依赖包';
-    if (cmdEl) cmdEl.textContent = 'https://github.com/nousresearch/hermes-agent';
-  }
-}
-
-function startInstall() {
-  const installBtn = document.getElementById('btn-start-install');
-  const nextBtn = document.getElementById('btn-step2-next');
-  const logSection = document.getElementById('log-section');
-  const terminal = document.getElementById('log-terminal');
-
-  installBtn.disabled = true;
-  installBtn.innerHTML = '<span class="spinner"></span> 安装中...';
-  logSection.style.display = 'block';
-  terminal.innerHTML = '';
-
-  const es = new EventSource('/api/install');
-
-  es.onmessage = (e) => {
-    let event;
-    try { event = JSON.parse(e.data); } catch { return; }
-
-    if (event.type === 'log') {
-      appendLog(terminal, event.message, event.level === 'error');
-    } else if (event.type === 'already_installed') {
-      appendLog(terminal, `Hermes 已安装 (版本: ${event.version || '未知'})，跳过安装步骤。`, false);
-    } else if (event.type === 'done') {
-      es.close();
-      if (event.success) {
-        installBtn.innerHTML = '✓ 安装完成';
-        installBtn.style.background = 'linear-gradient(135deg,#22c55e,#16a34a)';
-        nextBtn.disabled = false;
-        appendLog(terminal, '✓ 安装成功！', false);
-      } else {
-        installBtn.disabled = false;
-        installBtn.innerHTML = '重试安装';
-        appendLog(terminal, `✗ 安装失败: ${event.message || ''}`, true);
-      }
-    }
-  };
-
-  es.onerror = () => {
-    es.close();
-    appendLog(terminal, '连接中断，请重试。', true);
-    installBtn.disabled = false;
-    installBtn.innerHTML = '重试安装';
-  };
-}
-
-function appendLog(terminal, message, isError) {
-  const line = document.createElement('div');
-  line.textContent = message;
-  if (isError) line.className = 'log-line-error';
-  terminal.appendChild(line);
-  terminal.scrollTop = terminal.scrollHeight;
-}
-
-/* ══════════════════════════════════════
-   Step 3 — API Keys
-══════════════════════════════════════ */
-function prefillKeys() {
-  if (!checkData) return;
-  const keys = checkData.env_keys || {};
-
-  if (keys.MINIMAX_API_KEY) {
-    document.getElementById('badge-minimax').style.display = 'inline-flex';
-  }
-  if (keys.OPENROUTER_API_KEY) {
-    document.getElementById('badge-openrouter').style.display = 'inline-flex';
-  }
-  if (keys.ANTHROPIC_API_KEY) {
-    document.getElementById('badge-anthropic').style.display = 'inline-flex';
-  }
-}
-
-function toggleVisibility(inputId, btn) {
-  const input = document.getElementById(inputId);
-  if (input.type === 'password') {
-    input.type = 'text';
-    btn.textContent = '🙈';
-  } else {
-    input.type = 'password';
-    btn.textContent = '👁';
-  }
-}
-
-async function saveKeys() {
-  const btn = document.getElementById('btn-save-keys');
-  const errEl = document.getElementById('keys-error');
-  errEl.style.display = 'none';
-
-  const minimax = document.getElementById('minimax-key').value.trim();
-  const openrouter = document.getElementById('openrouter-key').value.trim();
-  const anthropic = document.getElementById('anthropic-key').value.trim();
-
-  const hasExistingMinimax = checkData && checkData.env_keys && checkData.env_keys.MINIMAX_API_KEY;
-
-  if (!minimax && !hasExistingMinimax) {
-    errEl.textContent = '请填写 MiniMax API Key（必填）';
-    errEl.style.display = 'block';
-    return;
-  }
-
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> 保存中...';
-
-  try {
-    // Save keys
-    const keysResp = await fetch('/api/config/keys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        MINIMAX_API_KEY: minimax,
-        OPENROUTER_API_KEY: openrouter,
-        ANTHROPIC_API_KEY: anthropic,
-      }),
-    });
-    if (!keysResp.ok) throw new Error('保存密钥失败');
-
-    // Save model config
-    const modelResp = await fetch('/api/config/model', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: 'minimax',
-        model: 'MiniMax-M2.5',
-        base_url: 'https://api.minimax.io/anthropic',
-        api_mode: 'anthropic_messages',
-      }),
-    });
-    if (!modelResp.ok) throw new Error('保存模型配置失败');
-
-    btn.innerHTML = '✓ 已保存';
-    btn.style.background = 'linear-gradient(135deg,#22c55e,#16a34a)';
-    setTimeout(() => goToStep(4), 400);
-  } catch (e) {
-    errEl.textContent = e.message;
-    errEl.style.display = 'block';
-    btn.disabled = false;
-    btn.innerHTML = '保存并继续';
-  }
-}
-
-/* ══════════════════════════════════════
-   Step 4 — WeChat QR
-══════════════════════════════════════ */
-function showQR(dataUrl) {
-  const placeholder = document.getElementById('qr-placeholder');
-  const imgWrap = document.getElementById('qr-img-wrap');
-  const img = document.getElementById('qr-img');
-  placeholder.style.display = 'none';
-  imgWrap.style.display = 'block';
-  img.src = dataUrl;
-}
-
-function updateQrStatus(message) {
-  const el = document.getElementById('qr-status-text');
-  el.textContent = message;
-}
-
-function skipWeixin() {
-  document.getElementById('btn-step4-next').disabled = false;
-  if (weixinEventSource) {
-    weixinEventSource.close();
-    weixinEventSource = null;
-  }
-  goToStep(5);
-}
-
-function startWeixinLogin() {
-  const loginBtns = document.getElementById('weixin-login-btns');
-  const startBtn = document.getElementById('btn-start-weixin');
-  startBtn.disabled = true;
-  startBtn.innerHTML = '<span class="spinner"></span> 获取二维码...';
-
-  updateQrStatus('正在获取二维码...');
-
-  if (weixinEventSource) {
-    weixinEventSource.close();
-  }
-
-  const es = new EventSource('/api/weixin/login');
-  weixinEventSource = es;
-
-  es.onmessage = (e) => {
-    let event;
-    try { event = JSON.parse(e.data); } catch { return; }
-
-    if (event.type === 'qr') {
-      showQR(event.image);
-      startBtn.innerHTML = '重新获取';
-      startBtn.disabled = false;
-      updateQrStatus('请用微信扫描上方二维码');
-    } else if (event.type === 'status') {
-      updateQrStatus(event.message);
-    } else if (event.type === 'error') {
-      updateQrStatus('⚠ ' + event.message);
-      startBtn.disabled = false;
-      startBtn.innerHTML = '重试';
-    } else if (event.type === 'done') {
-      es.close();
-      weixinEventSource = null;
-      if (event.success) {
-        weixinLoginSuccess(event.account_id);
-      } else {
-        startBtn.disabled = false;
-        startBtn.innerHTML = '重新扫码';
-      }
-    }
-  };
-
-  es.onerror = () => {
-    es.close();
-    weixinEventSource = null;
-    updateQrStatus('连接中断，请重试');
-    startBtn.disabled = false;
-    startBtn.innerHTML = '重新获取';
-  };
-}
-
-function weixinLoginSuccess(accountId) {
-  document.getElementById('weixin-login-btns').style.display = 'none';
-  document.getElementById('qr-placeholder').style.display = 'none';
-
-  const successEl = document.getElementById('weixin-success');
-  successEl.style.display = 'block';
-
-  if (accountId) {
-    document.getElementById('weixin-account-text').textContent = `账号 ID: ${accountId}`;
-  }
-
-  document.getElementById('qr-status-text').textContent = '';
-  document.getElementById('btn-step4-next').disabled = false;
-
-  launchConfetti();
-}
-
-/* ══════════════════════════════════════
-   Step 5 — Finish
-══════════════════════════════════════ */
-async function loadSummary() {
-  let status;
-  try {
-    const resp = await fetch('/api/status');
-    status = await resp.json();
-  } catch (e) {
-    status = {};
-  }
-
-  const rows = [
-    {
-      label: 'Hermes Agent',
-      val: status.hermes_installed ? `已安装 v${status.hermes_version || ''}` : '未安装',
-      ok: status.hermes_installed,
-    },
-    {
-      label: 'MiniMax API Key',
-      val: status.env_keys && status.env_keys.MINIMAX_API_KEY ? '已配置' : '未配置',
-      ok: status.env_keys && status.env_keys.MINIMAX_API_KEY,
-    },
-    {
-      label: 'OpenRouter API Key',
-      val: status.env_keys && status.env_keys.OPENROUTER_API_KEY ? '已配置' : '未配置（可选）',
-      ok: status.env_keys && status.env_keys.OPENROUTER_API_KEY,
-      optional: true,
-    },
-    {
-      label: 'Anthropic API Key',
-      val: status.env_keys && status.env_keys.ANTHROPIC_API_KEY ? '已配置' : '未配置（可选）',
-      ok: status.env_keys && status.env_keys.ANTHROPIC_API_KEY,
-      optional: true,
-    },
-    {
-      label: '微信连接',
-      val: status.weixin_connected ? '已连接' : '未连接（可稍后配置）',
-      ok: status.weixin_connected,
-      optional: true,
-    },
-    {
-      label: 'Gateway',
-      val: status.gateway_running ? '运行中' : '启动中...',
-      ok: status.gateway_running,
-      optional: true,
-    },
-  ];
-
-  const container = document.getElementById('summary-rows');
-  container.innerHTML = rows.map(r => `
-    <div class="summary-row">
-      <span class="summary-key">${r.label}</span>
-      <span class="${r.ok ? 'summary-val-ok' : (r.optional ? 'summary-val-warn' : 'summary-val-warn')}">${r.val}</span>
-    </div>
-  `).join('');
-
-  launchConfetti();
-
-  // Auto-start gateway and unlock the chat button
-  startGateway();
-}
-
-/* ── Open chat page ───────────────────────────────────────────────── */
+/* ── Open chat page ─────────────────────────────── */
 function openChat() {
   fetch('/api/setup/complete', { method: 'POST' }).finally(() => {
     window.location.href = '/chat';
   });
 }
 
-async function startGateway() {
-  const chatBtn  = document.getElementById('btn-open-chat');
-  const chatIcon = document.getElementById('chat-btn-icon');
-  const retryBtn = document.getElementById('btn-start-gateway');
-  const msg      = document.getElementById('gateway-status-msg');
-
-  if (msg) msg.textContent = '正在检查 Hermes API 服务...';
-
-  // Check port 8642 health — no restart needed, Hermes is already running
-  try {
-    const resp = await fetch('/api/gateway/health');
-    const data = await resp.json();
-    if (data.running) {
-      if (msg) { msg.style.color = 'var(--green)'; msg.textContent = '✓ Hermes API 服务运行中，可以开始对话'; }
-    } else {
-      if (msg) { msg.style.color = 'var(--yellow)'; msg.textContent = '⚠ Hermes API 服务未检测到（port 8642），如已安装请在终端运行 hermes'; }
-      if (retryBtn) retryBtn.style.display = '';
-    }
-  } catch (e) {
-    if (msg) { msg.style.color = 'var(--text-muted)'; msg.textContent = '检查超时，仍可进入对话界面'; }
-  } finally {
-    // Always unlock chat button — user may still want to open the UI
-    if (chatBtn) { chatBtn.disabled = false; }
-    if (chatIcon) chatIcon.textContent = '💬';
-  }
-}
-
-
-/* ══════════════════════════════════════
+/* ══════════════════════════════════════════════════════
    Confetti
-══════════════════════════════════════ */
+══════════════════════════════════════════════════════ */
 function launchConfetti() {
   const wrap = document.getElementById('confetti-wrap');
   wrap.innerHTML = '';
   const colors = ['#7c3aed','#a855f7','#22c55e','#3b82f6','#f59e0b','#ec4899','#06b6d4'];
-  const count = 80;
-
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < 70; i++) {
     const p = document.createElement('div');
     p.className = 'confetti-particle';
     const color = colors[Math.floor(Math.random() * colors.length)];
-    const left = Math.random() * 100;
-    const delay = Math.random() * 1.5;
-    const duration = 2 + Math.random() * 2;
-    const size = 6 + Math.random() * 8;
-    const rotate = Math.random() * 360;
-    p.style.cssText = `
-      left: ${left}%;
-      width: ${size}px;
-      height: ${size}px;
-      background: ${color};
-      border-radius: ${Math.random() > 0.5 ? '50%' : '2px'};
-      animation-duration: ${duration}s;
-      animation-delay: ${delay}s;
-      transform: rotate(${rotate}deg);
-      opacity: 0.9;
-    `;
+    p.style.cssText = `left:${Math.random()*100}%;width:${6+Math.random()*8}px;
+      height:${6+Math.random()*8}px;background:${color};
+      border-radius:${Math.random()>.5?'50%':'2px'};
+      animation-duration:${2+Math.random()*2}s;animation-delay:${Math.random()*1.5}s;
+      transform:rotate(${Math.random()*360}deg);opacity:.9;`;
     wrap.appendChild(p);
   }
-
   setTimeout(() => { wrap.innerHTML = ''; }, 5000);
 }
 
-/* ══════════════════════════════════════
+/* ══════════════════════════════════════════════════════
    Init
-══════════════════════════════════════ */
+══════════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
   goToStep(1);
 });

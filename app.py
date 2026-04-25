@@ -644,6 +644,207 @@ async def api_install():
 
 
 # ---------------------------------------------------------------------------
+# GET /api/install/simple  — one-liner curl install (SSE)
+# ---------------------------------------------------------------------------
+
+HERMES_INSTALL_URL = "https://hermes-agent.nousresearch.com/install.sh"
+
+
+@app.get("/api/install/simple")
+async def api_install_simple():
+    """Run the official one-liner: curl -fsSL URL | bash  (SSE stream)."""
+
+    async def _gen() -> AsyncGenerator[str, None]:
+        installed, version = check_hermes_installed()
+        if installed:
+            yield f"data: {json.dumps({'type':'log','level':'info','message':f'✓ Hermes Agent 已安装（v{version}），跳过安装'})}\n\n"
+            yield f"data: {json.dumps({'type':'done','success':True,'already_installed':True})}\n\n"
+            return
+
+        if sys.platform == "win32":
+            cmd = ["wsl", "--", "bash", "-c",
+                   f"curl -fsSL {HERMES_INSTALL_URL} | bash"]
+        else:
+            cmd = ["bash", "-c", f"curl -fsSL {HERMES_INSTALL_URL} | bash"]
+
+        async for event in _stream_subprocess(cmd):
+            try:
+                data = json.loads(event[5:].strip())
+            except Exception:
+                yield event
+                continue
+            if data.get("type") == "returncode":
+                success = data.get("code", 1) == 0
+                if success:
+                    yield f"data: {json.dumps({'type':'log','level':'info','message':'✓ 安装完成！'})}\n\n"
+                yield f"data: {json.dumps({'type':'done','success':success})}\n\n"
+            else:
+                yield event
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/setup/run  — run `hermes setup` via PTY (SSE)
+# POST /api/setup/input — send a line to the running setup process
+# ---------------------------------------------------------------------------
+
+import pty as _pty_mod
+import fcntl as _fcntl_mod
+
+_setup_master_fd: Optional[int] = None
+_setup_proc_ref: Optional[object] = None   # subprocess.Popen handle
+
+
+class SetupInputModel(BaseModel):
+    text: str
+
+
+@app.get("/api/setup/run")
+async def api_setup_run():
+    global _setup_master_fd, _setup_proc_ref
+
+    hermes_bin = _find_hermes_bin()
+    if not hermes_bin:
+        async def _err():
+            yield f"data: {json.dumps({'type':'error','message':'找不到 hermes，请先完成安装步骤'})}\n\n"
+        return StreamingResponse(_err(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache"})
+
+    env = _utf8_env()
+    env["PATH"] = str(hermes_bin.parent) + os.pathsep + env.get("PATH", "")
+    env["TERM"] = "xterm-256color"
+    env["PYTHONUNBUFFERED"] = "1"
+
+    if sys.platform == "win32":
+        # Windows: plain subprocess through WSL (no pty available)
+        import subprocess as _sp
+        proc = await asyncio.create_subprocess_exec(
+            "wsl", "--", str(hermes_bin), "setup",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+
+        async def _win_gen():
+            assert proc.stdout
+            while True:
+                chunk = await proc.stdout.read(512)
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                yield f"data: {json.dumps({'type':'output','text':text})}\n\n"
+            await proc.wait()
+            yield f"data: {json.dumps({'type':'done','rc':proc.returncode})}\n\n"
+
+        return StreamingResponse(_win_gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # macOS / Linux: allocate a real PTY so interactive prompts work
+    master_fd, slave_fd = _pty_mod.openpty()
+
+    # Make master non-blocking for safe reads in the callback
+    flags = _fcntl_mod.fcntl(master_fd, _fcntl_mod.F_GETFL)
+    _fcntl_mod.fcntl(master_fd, _fcntl_mod.F_SETFL, flags | os.O_NONBLOCK)
+
+    _setup_master_fd = master_fd
+
+    def _preexec():
+        import termios as _termios
+        os.setsid()
+        _fcntl_mod.ioctl(slave_fd, _termios.TIOCSCTTY, 0)
+        os.dup2(slave_fd, 0)
+        os.dup2(slave_fd, 1)
+        os.dup2(slave_fd, 2)
+        if slave_fd > 2:
+            os.close(slave_fd)
+
+    import subprocess as _sp
+    popen_proc = _sp.Popen(
+        [str(hermes_bin), "setup"],
+        preexec_fn=_preexec,
+        env=env,
+        close_fds=True,
+    )
+    os.close(slave_fd)
+    _setup_proc_ref = popen_proc
+
+    async def _pty_gen():
+        global _setup_master_fd, _setup_proc_ref
+        loop = asyncio.get_event_loop()
+        q: asyncio.Queue = asyncio.Queue()
+
+        def _on_readable():
+            try:
+                data = os.read(master_fd, 4096)
+                q.put_nowait(data)
+            except (OSError, BlockingIOError):
+                pass
+
+        def _on_eof():
+            q.put_nowait(None)
+            try:
+                loop.remove_reader(master_fd)
+            except Exception:
+                pass
+
+        loop.add_reader(master_fd, _on_readable)
+
+        while True:
+            try:
+                chunk = await asyncio.wait_for(q.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                if popen_proc.poll() is not None:
+                    break
+                yield f"data: {json.dumps({'type':'ping'})}\n\n"
+                continue
+
+            if chunk is None:
+                break
+
+            text = chunk.decode("utf-8", errors="replace")
+            yield f"data: {json.dumps({'type':'output','text':text})}\n\n"
+
+        try:
+            loop.remove_reader(master_fd)
+        except Exception:
+            pass
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+        popen_proc.wait()
+        _setup_master_fd = None
+        _setup_proc_ref = None
+        yield f"data: {json.dumps({'type':'done','rc':popen_proc.returncode})}\n\n"
+
+    return StreamingResponse(
+        _pty_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/setup/input")
+async def api_setup_input(body: SetupInputModel):
+    """Write a line of text to the running hermes setup PTY."""
+    global _setup_master_fd
+    if _setup_master_fd is not None:
+        try:
+            os.write(_setup_master_fd, (body.text + "\r").encode("utf-8"))
+            return {"ok": True}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+    return {"ok": False, "error": "no active setup session"}
+
+
+# ---------------------------------------------------------------------------
 # GET /api/install-tool?tool=uv|python  (SSE — auto-install prerequisites)
 # ---------------------------------------------------------------------------
 
