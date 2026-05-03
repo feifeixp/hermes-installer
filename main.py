@@ -193,17 +193,28 @@ def main():
     def run_webui():
         import subprocess
         webui_dir = BASE_DIR / "webui"
-        agent_py = Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "python"
-        if not agent_py.exists():
-            agent_py = Path.home() / ".hermes" / "hermes-agent" / ".venv" / "bin" / "python"
-        if not agent_py.exists():
-            agent_py = "python3"
+        
+        # Determine the correct python executable path based on OS
+        if sys.platform == "win32":
+            agent_py = Path.home() / ".hermes" / "hermes-agent" / "venv" / "Scripts" / "python.exe"
+            if not agent_py.exists():
+                agent_py = Path.home() / ".hermes" / "hermes-agent" / ".venv" / "Scripts" / "python.exe"
+            if not agent_py.exists():
+                agent_py = "python"
+        else:
+            agent_py = Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "python"
+            if not agent_py.exists():
+                agent_py = Path.home() / ".hermes" / "hermes-agent" / ".venv" / "bin" / "python"
+            if not agent_py.exists():
+                agent_py = "python3"
             
         env = os.environ.copy()
         env["HERMES_WEBUI_PORT"] = str(webui_port)
         env["HERMES_WEBUI_HOST"] = "127.0.0.1"
         try:
             log.info("Starting WebUI via subprocess: %s", agent_py)
+            # Use Popen instead of run so we don't block the daemon thread unnecessarily, 
+            # though subprocess.run in a daemon thread is also fine. Keeping run to match previous behavior but capturing output.
             subprocess.run([str(agent_py), str(webui_dir / "server.py")], env=env, cwd=str(webui_dir))
         except Exception as e:
             log.exception("WebUI failed to start: %s", e)
@@ -223,6 +234,9 @@ def main():
     setup_complete_file = Path.home() / ".hermes" / ".setup_complete"
     if setup_complete_file.exists():
         # Setup is done, bypass installer and show WebUI directly
+        log.info("waiting for WebUI server on port %d …", webui_port)
+        if not _wait_for_server(webui_port, timeout=20.0):
+            log.warning("WebUI server didn't start in time, opening anyway...")
         url = f"http://127.0.0.1:{webui_port}/"
         title = "Hermes"
 
