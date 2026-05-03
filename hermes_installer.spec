@@ -61,8 +61,8 @@ a = Analysis(
     datas=(
         [
             ("index.html", "."),   # installer wizard UI
-            ("chat.html",  "."),   # chat interface UI
             ("app.py",     "."),   # fallback: include as raw file too
+            ("webui",      "webui"), # The integrated Hermes WebUI
         ]
         # Bundle zip is optional: present → offline install; absent → git clone at runtime
         + ([("hermes_agent_bundle.zip", ".")] if Path("hermes_agent_bundle.zip").exists() else [])

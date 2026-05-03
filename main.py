@@ -110,12 +110,12 @@ def _wait_for_server(port: int, timeout: float = 20.0) -> bool:
 # ══════════════════════════════════════════════════════════════════════════
 # macOS — pywebview cocoa
 # ══════════════════════════════════════════════════════════════════════════
-def _run_macos(url: str):
+def _run_macos(title: str, url: str):
     try:
         import webview
         log.info("pywebview %s gui=cocoa", getattr(webview, "__version__", "?"))
         webview.create_window(
-            "Hermes Agent 安装向导", url,
+            title, url,
             width=1080, height=760,
             resizable=True, min_size=(860, 620),
             background_color="#0f0f1a",
@@ -133,12 +133,12 @@ def _run_macos(url: str):
 # Edge WebView2 spawns native msedgewebview2.exe processes — those are
 # NOT Python processes and are NOT affected by our _HERMES_MAIN guard.
 # ══════════════════════════════════════════════════════════════════════════
-def _run_windows(url: str):
+def _run_windows(title: str, url: str):
     try:
         import webview
         log.info("pywebview %s gui=edgechromium", getattr(webview, "__version__", "?"))
         webview.create_window(
-            "Hermes Agent 安装向导", url,
+            title, url,
             width=1080, height=760,
             resizable=True, min_size=(860, 620),
             background_color="#0f0f1a",
@@ -185,6 +185,32 @@ def main():
         daemon=True)
     t.start()
 
+    # Start WebUI in a background daemon thread
+    webui_port = _find_free_port()
+    os.environ["HERMES_WEBUI_PORT"] = str(webui_port)
+    os.environ["HERMES_WEBUI_HOST"] = "127.0.0.1"
+
+    def run_webui():
+        import subprocess
+        webui_dir = BASE_DIR / "webui"
+        agent_py = Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "python"
+        if not agent_py.exists():
+            agent_py = Path.home() / ".hermes" / "hermes-agent" / ".venv" / "bin" / "python"
+        if not agent_py.exists():
+            agent_py = "python3"
+            
+        env = os.environ.copy()
+        env["HERMES_WEBUI_PORT"] = str(webui_port)
+        env["HERMES_WEBUI_HOST"] = "127.0.0.1"
+        try:
+            log.info("Starting WebUI via subprocess: %s", agent_py)
+            subprocess.run([str(agent_py), str(webui_dir / "server.py")], env=env, cwd=str(webui_dir))
+        except Exception as e:
+            log.exception("WebUI failed to start: %s", e)
+
+    t2 = threading.Thread(target=run_webui, daemon=True)
+    t2.start()
+
     log.info("waiting for server on port %d …", PORT)
     if not _wait_for_server(PORT, timeout=20.0):
         _alert("Hermes Installer", f"服务器启动超时。\n日志：{_LOG_PATH}")
@@ -192,10 +218,18 @@ def main():
     log.info("server ready")
 
     url = f"http://127.0.0.1:{PORT}"
+    title = "Hermes Agent 安装向导"
+    
+    setup_complete_file = Path.home() / ".hermes" / ".setup_complete"
+    if setup_complete_file.exists():
+        # Setup is done, bypass installer and show WebUI directly
+        url = f"http://127.0.0.1:{webui_port}/"
+        title = "Hermes"
+
     if sys.platform == "darwin":
-        _run_macos(url)
+        _run_macos(title, url)
     else:
-        _run_windows(url)
+        _run_windows(title, url)
 
 
 if __name__ == "__main__":

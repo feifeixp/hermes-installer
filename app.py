@@ -1333,16 +1333,11 @@ async def api_hermes_start():
     return {"ok": False, "message": "进程已启动，但 port 8642 尚未就绪，请稍等几秒后刷新"}
 
 
-# ---------------------------------------------------------------------------
-# GET /chat  — serve chat UI
-# ---------------------------------------------------------------------------
-
-CHAT_HTML = BASE_DIR / "chat.html"
-
-
 @app.get("/chat")
 async def serve_chat():
-    return FileResponse(str(CHAT_HTML), media_type="text/html")
+    from fastapi.responses import RedirectResponse
+    webui_port = os.environ.get("HERMES_WEBUI_PORT", "8787")
+    return RedirectResponse(url=f"http://127.0.0.1:{webui_port}/", status_code=302)
 
 
 # ---------------------------------------------------------------------------
