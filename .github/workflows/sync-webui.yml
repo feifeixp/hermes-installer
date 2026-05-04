@@ -1,0 +1,79 @@
+name: Sync WebUI upstream
+
+on:
+  schedule:
+    # 每天 UTC 08:00（北京时间 16:00）自动运行
+    - cron: "0 8 * * *"
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream-webui https://github.com/nesquena/hermes-webui.git 2>/dev/null || true
+          git fetch upstream-webui master
+
+      - name: Get current upstream commit hash
+        id: upstream
+        run: |
+          HASH=$(git rev-parse upstream-webui/master)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "Current upstream HEAD: $HASH"
+
+      - name: Get last synced commit hash
+        id: last_sync
+        run: |
+          # Extract the squashed commit hash from subtree merge commit message
+          LAST=$(git log --oneline --grep="Squashed.*webui.*content from commit" -1 | sed 's/.*commit //;s/ .*//' | tr -d "'")
+          echo "hash=$LAST" >> $GITHUB_OUTPUT
+          echo "Last synced: $LAST"
+
+      - name: Check if update needed
+        id: check
+        run: |
+          if [ "${{ steps.upstream.outputs.hash }}" = "${{ steps.last_sync.outputs.hash }}" ]; then
+            echo "WebUI is up to date. Nothing to sync."
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Upstream has new commits. Syncing..."
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pull upstream via subtree
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git subtree pull --prefix=webui upstream-webui master --squash \
+            -m "sync: update webui from upstream (${{ steps.upstream.outputs.hash }})"
+
+      - name: Create Pull Request
+        if: steps.check.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: sync/webui-upstream
+          title: "⬆️ Sync WebUI from upstream"
+          body: |
+            ## Upstream update
+            
+            Synced from [nesquena/hermes-webui](https://github.com/nesquena/hermes-webui)
+            
+            - **From**: `${{ steps.last_sync.outputs.hash }}`  
+            - **To**: `${{ steps.upstream.outputs.hash }}`  
+            
+            Review the diff and merge if everything looks good.
+          labels: upstream,automated
+          delete-branch: true

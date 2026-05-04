@@ -82,7 +82,8 @@ hermes-installer/
 ├── fix_annotations.py      # Python 兼容性修复（from __future__）
 ├── build.sh                # macOS 打包脚本
 ├── build.bat               # Windows 打包脚本
-└── requirements.txt        # Python 依赖
+├── sync-webui.sh           # WebUI 上游同步脚本（手动触发）
+├── requirements.txt        # Python 依赖
 ```
 
 ---
@@ -172,6 +173,26 @@ platforms:
     extra:
       host: 127.0.0.1
       port: 8642
+```
+
+---
+
+## WebUI 上游同步
+
+`webui/` 是通过 `git subtree` 从 [nesquena/hermes-webui](https://github.com/nesquena/hermes-webui) 引入的。
+
+### 自动同步（推荐）
+
+GitHub Actions 每天自动检查上游更新，有更新时自动创建 PR：
+- `.github/workflows/sync-webui.yml`
+- PR 会出现在仓库 Pull Requests 列表，审核后合并即可
+
+### 手动同步
+
+```bash
+bash sync-webui.sh
+# 检查 git diff 后推送
+git push origin main
 ```
 
 ---
