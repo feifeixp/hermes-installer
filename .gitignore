@@ -16,8 +16,9 @@ __pycache__/
 .AppleDouble
 .LSOverride
 
-# IDE
-.claude/
+# IDE (only ignore common config dirs, keep launch.json for Claude)
+.claude/*
+!.claude/launch.json
 .vscode/
 .idea/
 
@@ -34,4 +35,4 @@ hermes_agent.zip
 hermes_agent_bundle/
 
 # Static assets (unused placeholder)
-static/
+/static/
