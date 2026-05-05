@@ -1,0 +1,126 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════
+  # macOS — .dmg
+  # ═══════════════════════════════════════════════════════════════════════
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install deps
+        run: pip install pywebview pyinstaller
+
+      - name: Bundle hermes-agent source (offline install)
+        run: python bundle_source.py
+
+      - name: PyInstaller
+        run: python -m PyInstaller hermes_installer.spec --noconfirm --clean
+
+      - name: Verify .app
+        run: |
+          if [ ! -d "dist/Hermes Installer.app" ]; then
+            echo "ERROR: .app not found"
+            exit 1
+          fi
+          echo "✓ .app: $(du -sh 'dist/Hermes Installer.app' | cut -f1)"
+
+      - name: Create .dmg
+        run: |
+          TMP=$(mktemp -d)
+          cp -r "dist/Hermes Installer.app" "$TMP/"
+          ln -s /Applications "$TMP/Applications"
+          hdiutil create \
+            -volname "Hermes Installer" \
+            -srcfolder "$TMP" \
+            -ov -format UDZO \
+            -imagekey zlib-level=9 \
+            "dist/Hermes-Installer-macOS.dmg"
+          rm -rf "$TMP"
+          echo "✓ .dmg: $(du -sh dist/Hermes-Installer-macOS.dmg | cut -f1)"
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hermes-Installer-macOS
+          path: dist/Hermes-Installer-macOS.dmg
+          retention-days: 30
+
+      - name: Upload .dmg to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Hermes-Installer-macOS.dmg
+          generate_release_notes: true
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Windows — .exe + .zip
+  # ═══════════════════════════════════════════════════════════════════════
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install deps
+        run: pip install pywebview pyinstaller
+
+      - name: Bundle hermes-agent source (offline install)
+        run: python bundle_source.py
+
+      - name: PyInstaller
+        run: python -m PyInstaller hermes_installer.spec --noconfirm --clean
+
+      - name: Verify .exe
+        shell: pwsh
+        run: |
+          $exe = 'dist\Hermes Installer.exe'
+          if (-not (Test-Path $exe)) {
+            Write-Error "ERROR: .exe not found"
+            exit 1
+          }
+          Write-Host "✓ .exe found"
+
+      - name: Create .zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path 'dist\Hermes Installer.exe' -DestinationPath 'dist\Hermes-Installer-Windows.zip' -Force
+          Write-Host "✓ .zip created"
+
+      - name: Upload .exe + .zip artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hermes-Installer-Windows
+          path: |
+            dist/Hermes-Installer-Windows.zip
+            dist/Hermes Installer.exe
+          retention-days: 30
+
+      - name: Upload .exe + .zip to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Hermes-Installer-Windows.zip
+            dist/Hermes Installer.exe
+          generate_release_notes: true
