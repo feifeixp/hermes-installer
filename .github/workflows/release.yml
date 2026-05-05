@@ -1,0 +1,80 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"               # v1.0.0, v1.0.1 ...
+  workflow_dispatch:        # 手动触发
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Cache build venv
+        uses: actions/cache@v4
+        with:
+          path: .build_venv
+          key: build-venv-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install build dependencies
+        run: |
+          python -m venv .build_venv
+          source .build_venv/bin/activate
+          pip install --quiet \
+            pywebview \
+            pyinstaller \
+            fastapi \
+            "uvicorn[standard]" \
+            aiohttp \
+            qrcode \
+            pillow \
+            pydantic \
+            pyyaml \
+            python-dotenv
+
+      - name: Build macOS .app + .dmg
+        run: |
+          source .build_venv/bin/activate
+          rm -rf build/ dist/
+
+          # PyInstaller
+          python -m PyInstaller hermes_installer.spec --noconfirm --clean
+
+          # Create .dmg
+          APP_PATH="dist/Hermes Installer.app"
+          DMG_NAME="dist/Hermes-Installer-macOS.dmg"
+          TMP_DMG=$(mktemp -d)
+          cp -r "$APP_PATH" "$TMP_DMG/"
+          ln -s /Applications "$TMP_DMG/Applications"
+
+          hdiutil create \
+            -volname "Hermes Installer" \
+            -srcfolder "$TMP_DMG" \
+            -ov -format UDZO \
+            -imagekey zlib-level=9 \
+            "$DMG_NAME" 2>/dev/null
+
+          rm -rf "$TMP_DMG"
+
+          echo "✅ .app: $(du -sh "$APP_PATH" | cut -f1)"
+          echo "✅ .dmg: $(du -sh "$DMG_NAME" | cut -f1)"
+
+      - name: Upload .dmg to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Hermes-Installer-macOS.dmg
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
