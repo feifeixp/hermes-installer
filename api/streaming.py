@@ -69,6 +69,152 @@ _API_SAFE_MSG_KEYS = {'role', 'content', 'tool_calls', 'tool_call_id', 'name', '
 
 _NATIVE_IMAGE_MAX_BYTES = 20 * 1024 * 1024
 
+_GATEWAY_ROUTING_TOP_LEVEL_KEYS = {
+    'used_provider',
+    'used_model',
+    'requested_provider',
+    'requested_model',
+}
+_GATEWAY_ROUTING_CONTAINER_KEYS = (
+    'llm_gateway',
+    'gateway',
+    'metadata',
+    'response_metadata',
+    'routing_metadata',
+    'usage',
+)
+_GATEWAY_ROUTING_ATTEMPT_KEYS = {
+    'provider', 'model', 'status', 'reason', 'selection_reason', 'score',
+    'latency_ms', 'error', 'timestamp', 'selected', 'attempt', 'attempt_index',
+}
+
+
+def _clean_gateway_routing_scalar(value):
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        text = str(value).strip()
+        if not text:
+            return None
+        return value if isinstance(value, (int, float, bool)) else text[:240]
+    return None
+
+
+def _find_gateway_metadata_payload(payload):
+    if not isinstance(payload, dict):
+        return None
+    if any(k in payload for k in _GATEWAY_ROUTING_TOP_LEVEL_KEYS) or isinstance(payload.get('routing'), list):
+        return payload
+    for key in _GATEWAY_ROUTING_CONTAINER_KEYS:
+        nested = payload.get(key)
+        found = _find_gateway_metadata_payload(nested)
+        if found:
+            return found
+    return None
+
+
+def _normalize_gateway_routing_metadata(payload, requested_model=None, requested_provider=None):
+    """Return safe LLM Gateway routing metadata, or None when absent.
+
+    LLM Gateway response metadata can contain provider/model routing details,
+    but WebUI must only persist display-safe scalars and a bounded routing list.
+    Secrets or provider-specific request objects are deliberately ignored.
+    """
+    src = _find_gateway_metadata_payload(payload)
+    if not src:
+        return None
+
+    normalized = {}
+    for key in _GATEWAY_ROUTING_TOP_LEVEL_KEYS:
+        value = _clean_gateway_routing_scalar(src.get(key))
+        if value is not None:
+            normalized[key] = value
+
+    if 'requested_model' not in normalized:
+        fallback_model = _clean_gateway_routing_scalar(requested_model)
+        if fallback_model is not None:
+            normalized['requested_model'] = fallback_model
+    if 'requested_provider' not in normalized:
+        fallback_provider = _clean_gateway_routing_scalar(requested_provider)
+        if fallback_provider is not None:
+            normalized['requested_provider'] = fallback_provider
+
+    routing = []
+    raw_routing = src.get('routing')
+    if isinstance(raw_routing, list):
+        for attempt in raw_routing[:12]:
+            if not isinstance(attempt, dict):
+                continue
+            clean_attempt = {}
+            for key in _GATEWAY_ROUTING_ATTEMPT_KEYS:
+                value = _clean_gateway_routing_scalar(attempt.get(key))
+                if value is not None:
+                    clean_attempt[key] = value
+            if clean_attempt:
+                routing.append(clean_attempt)
+    if routing:
+        normalized['routing'] = routing
+
+    used_provider = str(normalized.get('used_provider') or '').strip().lower()
+    requested_provider_norm = str(normalized.get('requested_provider') or '').strip().lower()
+    used_model = str(normalized.get('used_model') or '').strip().lower()
+    requested_model_norm = str(normalized.get('requested_model') or '').strip().lower()
+    provider_changed = bool(used_provider and requested_provider_norm and used_provider != requested_provider_norm)
+    model_changed = bool(used_model and requested_model_norm and used_model != requested_model_norm)
+    attempted_providers = [
+        str(a.get('provider') or '').strip().lower()
+        for a in routing
+        if a.get('provider')
+    ]
+    distinct_attempted_providers = {p for p in attempted_providers if p}
+    failed_before_selection = any(
+        str(a.get('status') or '').strip().lower() in {'failed', 'error', 'timeout', 'rejected'}
+        for a in routing
+    )
+    has_failover = bool(provider_changed or len(distinct_attempted_providers) > 1 or failed_before_selection)
+
+    if not (
+        normalized.get('used_provider') or normalized.get('used_model') or routing or provider_changed or model_changed
+    ):
+        return None
+    normalized['provider_changed'] = provider_changed
+    normalized['model_changed'] = model_changed
+    normalized['has_failover'] = has_failover
+    return normalized
+
+
+def _extract_gateway_routing_metadata(agent, result, requested_model=None, requested_provider=None):
+    candidates = []
+    if isinstance(result, dict):
+        candidates.extend([
+            result.get('llm_gateway'),
+            result.get('gateway'),
+            result.get('metadata'),
+            result.get('response_metadata'),
+            result.get('routing_metadata'),
+            result.get('usage'),
+            result,
+        ])
+    for attr in (
+        'llm_gateway_metadata',
+        'gateway_metadata',
+        'last_response_metadata',
+        'response_metadata',
+        'routing_metadata',
+        'last_usage',
+    ):
+        if agent is not None:
+            candidates.append(getattr(agent, attr, None))
+    for candidate in candidates:
+        normalized = _normalize_gateway_routing_metadata(
+            candidate,
+            requested_model=requested_model,
+            requested_provider=requested_provider,
+        )
+        if normalized:
+            return normalized
+    return None
+
 
 def _build_agent_thread_env(profile_runtime_env: dict | None, workspace: str, session_id: str, profile_home: str) -> dict:
     """Build thread-local agent env with per-run values overriding profile defaults.
@@ -1164,6 +1310,17 @@ def _find_current_user_turn(messages, msg_text):
     return fallback
 
 
+def _drop_checkpointed_current_user_from_context(messages, msg_text):
+    """Return model history without an eager-checkpointed current user turn."""
+    history = list(messages or [])
+    if not history:
+        return history
+    current_user_key = _message_identity({'role': 'user', 'content': msg_text})
+    if current_user_key and _message_identity(history[-1]) == current_user_key:
+        return history[:-1]
+    return history
+
+
 def _merge_display_messages_after_agent_result(previous_display, previous_context, result_messages, msg_text):
     """Keep UI transcript durable while allowing model context to compact.
 
@@ -1191,8 +1348,20 @@ def _merge_display_messages_after_agent_result(previous_display, previous_contex
 
     merged = previous_display[:]
     seen = {_message_identity(m) for m in merged}
+    current_user_key = _message_identity({'role': 'user', 'content': msg_text})
     for msg in candidates:
         key = _message_identity(msg)
+        if (
+            key is not None
+            and key == current_user_key
+            and merged
+            and _message_identity(merged[-1]) == key
+        ):
+            # Eager session-save mode can checkpoint the current user turn
+            # before the agent runs. When the agent returns that same user turn
+            # in result_messages, keep the durable checkpoint and append only
+            # the assistant/tool delta.
+            continue
         if _is_context_compression_marker(msg) and key is not None and key in seen:
             continue
         merged.append(copy.deepcopy(msg))
@@ -1620,9 +1789,11 @@ def _run_agent_streaming(
             _reasoning_text = ''  # accumulates reasoning/thinking trace for persistence
             _live_tool_calls = []  # tool progress fallback when final messages omit tool IDs
 
-            # Throttle: emit metering events at most every 100 ms so the TPS label
-            # feels live during fast token streams without flooding the SSE channel.
+            # Throttle: emit metering events at most every 100 ms so the per-message
+            # TPS label feels live during fast token streams without flooding SSE.
             _metering_last_emit = [time.monotonic() - 1]  # fire immediately on first token
+            _metering_output_deltas = [0]
+            _metering_reasoning_deltas = [0]
 
             def _emit_metering():
                 now = time.monotonic()
@@ -1631,6 +1802,8 @@ def _run_agent_streaming(
                 _metering_last_emit[0] = now
                 stats = meter().get_stats()
                 stats['session_id'] = stream_id
+                stats.setdefault('tps_available', False)
+                stats.setdefault('estimated', False)
                 put('metering', stats)
 
             def on_token(text):
@@ -1642,8 +1815,11 @@ def _run_agent_streaming(
                 if stream_id in STREAM_PARTIAL_TEXT:
                     STREAM_PARTIAL_TEXT[stream_id] += str(text)
                 put('token', {'text': text})
-                # Update global throughput meter
-                meter().record_token(stream_id, len(STREAM_PARTIAL_TEXT[stream_id]))
+                # Update live throughput from stream delta callbacks, not from
+                # byte/character length. If a backend cannot provide live deltas,
+                # the frontend hides TPS rather than showing an estimate.
+                _metering_output_deltas[0] += 1
+                meter().record_token(stream_id, _metering_output_deltas[0])
                 _emit_metering()
 
             def on_reasoning(text):
@@ -1655,8 +1831,9 @@ def _run_agent_streaming(
                 if stream_id in STREAM_REASONING_TEXT:
                     STREAM_REASONING_TEXT[stream_id] += str(text)
                 put('reasoning', {'text': str(text)})
-                # Track reasoning tokens in the meter so TPS reflects all AI output
-                meter().record_reasoning(stream_id, len(_reasoning_text))
+                # Track reasoning deltas in the meter so live TPS reflects all AI output.
+                _metering_reasoning_deltas[0] += 1
+                meter().record_reasoning(stream_id, _metering_reasoning_deltas[0])
                 _emit_metering()
 
             # Pre-initialise the activity counter here so on_tool (which
@@ -1690,7 +1867,8 @@ def _run_agent_streaming(
                         if stream_id in STREAM_REASONING_TEXT:
                             STREAM_REASONING_TEXT[stream_id] += str(reason_text)
                         put('reasoning', {'text': str(reason_text)})
-                        meter().record_reasoning(stream_id, len(_reasoning_text))
+                        _metering_reasoning_deltas[0] += 1
+                        meter().record_reasoning(stream_id, _metering_reasoning_deltas[0])
                         _emit_metering()
                     return
 
@@ -2054,10 +2232,15 @@ def _run_agent_streaming(
                 agent.ephemeral_system_prompt = _personality_prompt
             _pending_started_at = getattr(s, 'pending_started_at', None)
             # Normal chat-start sets pending_started_at before spawning this thread;
-            # fallback to now only for recovered/legacy flows where that marker is absent.
-            _turn_started_at = _pending_started_at if _pending_started_at is not None else time.time()
+            # fallback to now only for recovered/legacy flows where that marker is absent
+            # or has been zeroed out (e.g. via a buggy migration / manual file edit).
+            # Truthy-check covers None, missing-attr, and 0 uniformly.
+            _turn_started_at = _pending_started_at if _pending_started_at else time.time()
             _previous_messages = list(s.messages or [])
-            _previous_context_messages = list(_session_context_messages(s))
+            _previous_context_messages = _drop_checkpointed_current_user_from_context(
+                _session_context_messages(s),
+                msg_text,
+            )
             _pre_compression_count = getattr(
                 getattr(agent, 'context_compressor', None),
                 'compression_count', 0,
@@ -2457,10 +2640,28 @@ def _run_agent_streaming(
                     _turn_duration_seconds = max(0.0, time.time() - float(_turn_started_at))
                 except Exception:
                     _turn_duration_seconds = 0.0
+                _turn_tps = None
+                if output_tokens and _turn_duration_seconds > 0:
+                    _turn_tps = round(float(output_tokens) / _turn_duration_seconds, 1)
+                _gateway_routing = _extract_gateway_routing_metadata(
+                    agent,
+                    result,
+                    requested_model=resolved_model or model,
+                    requested_provider=resolved_provider,
+                )
+                if _gateway_routing:
+                    s.gateway_routing = _gateway_routing
+                    _history = list(getattr(s, 'gateway_routing_history', None) or [])
+                    _history.append(_gateway_routing)
+                    s.gateway_routing_history = _history[-50:]
                 if s.messages:
                     for _dm in reversed(s.messages):
                         if isinstance(_dm, dict) and _dm.get('role') == 'assistant':
                             _dm['_turnDuration'] = round(_turn_duration_seconds, 3)
+                            if _turn_tps is not None:
+                                _dm['_turnTps'] = _turn_tps
+                            if _gateway_routing:
+                                _dm['_gatewayRouting'] = _gateway_routing
                             break
                 # Persist context window data on the session so the context-ring
                 # indicator survives a page reload (#1318). Must run BEFORE
@@ -2515,6 +2716,10 @@ def _run_agent_streaming(
                 'estimated_cost': estimated_cost,
                 'duration_seconds': round(_turn_duration_seconds, 3),
             }
+            if _turn_tps is not None:
+                usage['tps'] = _turn_tps
+            if _gateway_routing:
+                usage['gateway_routing'] = _gateway_routing
             # Include context window data from the agent's compressor for the UI indicator.
             # The session-level persistence happens above (before s.save()) so the values
             # survive a page reload; this block only populates the live SSE usage payload.
@@ -2565,9 +2770,11 @@ def _run_agent_streaming(
                 logger.debug("Failed to drain pending steer for session %s", session_id)
             raw_session = s.compact() | {'messages': s.messages, 'tool_calls': tool_calls}
             put('done', {'session': redact_session_data(raw_session), 'usage': usage})
-            # Emit metering stats for the header TPS label
+            # Emit one last metering packet for the live message-header TPS label.
             meter_stats = meter().get_stats()
             meter_stats['session_id'] = session_id
+            meter_stats.setdefault('tps_available', False)
+            meter_stats.setdefault('estimated', False)
             put('metering', meter_stats)
             if _should_bg_title and _u0 and _a0:
                 threading.Thread(

@@ -91,6 +91,76 @@ def _read_active_profile_file() -> str:
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
+# ── Root-profile resolution (#1612) ────────────────────────────────────────
+#
+# Hermes Agent allows the root/default profile (~/.hermes itself) to have a
+# display name other than the legacy literal 'default'.  When that happens,
+# WebUI must NOT resolve the display name as ~/.hermes/profiles/<name> — that
+# directory doesn't exist, and every site that does `if name == 'default':`
+# will fall through to the wrong filesystem path.
+#
+# `_is_root_profile(name)` answers "does this name resolve to ~/.hermes?" and
+# is the canonical replacement for scattered `if name == 'default':` checks
+# in switch_profile, get_active_hermes_home, _validate_profile_name, etc.
+#
+# Cost note: list_profiles_api() shells out via hermes_cli (non-trivial), so
+# we memoize the lookup. The cache is invalidated whenever profiles are
+# created, deleted, renamed, or cloned — i.e. on every mutation site we
+# control.
+_root_profile_name_cache: set[str] = {'default'}
+_root_profile_name_cache_lock = threading.Lock()
+_root_profile_name_cache_loaded = False
+
+
+def _invalidate_root_profile_cache() -> None:
+    """Drop the memoized root-profile-name set.
+
+    Called whenever profile metadata might have changed: create, clone,
+    delete, rename. The next _is_root_profile() call repopulates from
+    list_profiles_api().
+    """
+    global _root_profile_name_cache_loaded
+    with _root_profile_name_cache_lock:
+        _root_profile_name_cache.clear()
+        _root_profile_name_cache.add('default')
+        _root_profile_name_cache_loaded = False
+
+
+def _is_root_profile(name: str) -> bool:
+    """True if *name* resolves to the Hermes Agent root profile (~/.hermes).
+
+    Matches the legacy 'default' alias plus any name where list_profiles_api()
+    reports is_default=True. Memoized; call _invalidate_root_profile_cache()
+    after mutating profile metadata.
+    """
+    global _root_profile_name_cache_loaded
+    if not name:
+        return False
+    if name == 'default':
+        return True
+    with _root_profile_name_cache_lock:
+        if _root_profile_name_cache_loaded:
+            return name in _root_profile_name_cache
+    # Cache miss — populate from list_profiles_api(). Done outside the lock to
+    # avoid holding it across a hermes_cli subprocess call.
+    try:
+        infos = list_profiles_api()
+    except Exception:
+        logger.debug("Failed to list profiles for root-profile lookup", exc_info=True)
+        return False
+    with _root_profile_name_cache_lock:
+        _root_profile_name_cache.clear()
+        _root_profile_name_cache.add('default')
+        for p in infos:
+            try:
+                if p.get('is_default') and p.get('name'):
+                    _root_profile_name_cache.add(p['name'])
+            except (AttributeError, TypeError):
+                continue
+        _root_profile_name_cache_loaded = True
+        return name in _root_profile_name_cache
+
+
 def get_active_profile_name() -> str:
     """Return the currently active profile name.
 
@@ -130,7 +200,7 @@ def get_active_hermes_home() -> Path:
     is respected, not just the process-level global.
     """
     name = get_active_profile_name()
-    if name == 'default':
+    if _is_root_profile(name):
         return _DEFAULT_HERMES_HOME
     profile_dir = _DEFAULT_HERMES_HOME / 'profiles' / name
     if profile_dir.is_dir():
@@ -188,6 +258,24 @@ class cron_profile_context_for_home:
                 _cj.OUTPUT_DIR = _cj.CRON_DIR / 'output'
             except (ImportError, AttributeError):
                 logger.debug("cron_profile_context_for_home: cron.jobs unavailable")
+
+            # cron.scheduler snapshots _hermes_home at import time and run_job()
+            # reads config/.env from that module global. Patch it alongside
+            # cron.jobs so manual WebUI runs actually execute under the selected
+            # profile, not merely write output metadata there (#617).
+            self._prev_cs = None
+            try:
+                import cron.scheduler as _cs
+                self._prev_cs = (
+                    getattr(_cs, '_hermes_home', None),
+                    getattr(_cs, '_LOCK_DIR', None),
+                    getattr(_cs, '_LOCK_FILE', None),
+                )
+                _cs._hermes_home = self._home
+                _cs._LOCK_DIR = self._home / 'cron'
+                _cs._LOCK_FILE = _cs._LOCK_DIR / '.tick.lock'
+            except (ImportError, AttributeError):
+                logger.debug("cron_profile_context_for_home: cron.scheduler unavailable")
         except Exception:
             _cron_env_lock.release()
             raise
@@ -203,6 +291,12 @@ class cron_profile_context_for_home:
                 try:
                     import cron.jobs as _cj
                     _cj.HERMES_DIR, _cj.CRON_DIR, _cj.JOBS_FILE, _cj.OUTPUT_DIR = self._prev_cj
+                except (ImportError, AttributeError):
+                    pass
+            if getattr(self, '_prev_cs', None) is not None:
+                try:
+                    import cron.scheduler as _cs
+                    _cs._hermes_home, _cs._LOCK_DIR, _cs._LOCK_FILE = self._prev_cs
                 except (ImportError, AttributeError):
                     pass
         finally:
@@ -243,6 +337,20 @@ class cron_profile_context:
                 _cj.OUTPUT_DIR = _cj.CRON_DIR / 'output'
             except (ImportError, AttributeError):
                 logger.debug("cron_profile_context: cron.jobs unavailable; env-var only")
+
+            self._prev_cs = None
+            try:
+                import cron.scheduler as _cs
+                self._prev_cs = (
+                    getattr(_cs, '_hermes_home', None),
+                    getattr(_cs, '_LOCK_DIR', None),
+                    getattr(_cs, '_LOCK_FILE', None),
+                )
+                _cs._hermes_home = home
+                _cs._LOCK_DIR = home / 'cron'
+                _cs._LOCK_FILE = _cs._LOCK_DIR / '.tick.lock'
+            except (ImportError, AttributeError):
+                logger.debug("cron_profile_context: cron.scheduler unavailable; env-var only")
         except Exception:
             _cron_env_lock.release()
             raise
@@ -263,6 +371,12 @@ class cron_profile_context:
                     _cj.HERMES_DIR, _cj.CRON_DIR, _cj.JOBS_FILE, _cj.OUTPUT_DIR = self._prev_cj
                 except (ImportError, AttributeError):
                     pass
+            if getattr(self, '_prev_cs', None) is not None:
+                try:
+                    import cron.scheduler as _cs
+                    _cs._hermes_home, _cs._LOCK_DIR, _cs._LOCK_FILE = self._prev_cs
+                except (ImportError, AttributeError):
+                    pass
         finally:
             _cron_env_lock.release()
         return False
@@ -279,7 +393,9 @@ def get_hermes_home_for_profile(name: str) -> Path:
     empty, 'default', or does not match the profile-name format (rejects path
     traversal such as '../../etc').
     """
-    if not name or name == 'default' or not _PROFILE_ID_RE.fullmatch(name):
+    if not name or _is_root_profile(name):
+        return _DEFAULT_HERMES_HOME
+    if not _PROFILE_ID_RE.fullmatch(name):
         return _DEFAULT_HERMES_HOME
     profile_dir = _DEFAULT_HERMES_HOME / 'profiles' / name
     return profile_dir
@@ -390,6 +506,14 @@ def _set_hermes_home(home: Path):
     except (ImportError, AttributeError):
         logger.debug("Failed to patch cron.jobs module")
 
+    try:
+        import cron.scheduler as _cs
+        _cs._hermes_home = home
+        _cs._LOCK_DIR = home / 'cron'
+        _cs._LOCK_FILE = _cs._LOCK_DIR / '.tick.lock'
+    except (ImportError, AttributeError):
+        logger.debug("Failed to patch cron.scheduler module")
+
 
 def _reload_dotenv(home: Path):
     """Load .env from the profile dir into os.environ with profile isolation.
@@ -467,7 +591,7 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
             )
 
     # Resolve profile directory
-    if name == 'default':
+    if _is_root_profile(name):
         home = _DEFAULT_HERMES_HOME
     else:
         home = _resolve_named_profile_home(name)
@@ -485,7 +609,7 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
         # Write sticky default for CLI consistency
         try:
             ap_file = _DEFAULT_HERMES_HOME / 'active_profile'
-            ap_file.write_text(name if name != 'default' else '', encoding='utf-8')
+            ap_file.write_text('' if _is_root_profile(name) else name, encoding='utf-8')
         except Exception:
             logger.debug("Failed to write active profile file")
 
@@ -655,7 +779,7 @@ def _create_profile_fallback(name: str, clone_from: str = None,
 
     # Clone config files from source profile if requested
     if clone_config and clone_from:
-        if clone_from == 'default':
+        if _is_root_profile(clone_from):
             source_dir = _DEFAULT_HERMES_HOME
         else:
             source_dir = _DEFAULT_HERMES_HOME / 'profiles' / clone_from
@@ -704,7 +828,7 @@ def create_profile_api(name: str, clone_from: str = None,
     _validate_profile_name(name)
     # Defense-in-depth: validate clone_from here too, even though routes.py
     # also validates it. Any caller that bypasses the HTTP layer gets protection.
-    if clone_from is not None and clone_from != 'default':
+    if clone_from is not None and not _is_root_profile(clone_from):
         _validate_profile_name(clone_from)
 
     try:
@@ -735,6 +859,10 @@ def create_profile_api(name: str, clone_from: str = None,
     profile_path.mkdir(parents=True, exist_ok=True)
     _write_endpoint_to_config(profile_path, base_url=base_url, api_key=api_key)
 
+    # Invalidate cached root-profile-name lookup; create_profile may have added
+    # a new profile that flips is_default semantics on the agent side (#1612).
+    _invalidate_root_profile_cache()
+
     # Find and return the newly created profile info.
     # When hermes_cli is not importable, list_profiles_api() also falls back
     # to the stub default-only list and won't find the new profile by name.
@@ -757,7 +885,7 @@ def create_profile_api(name: str, clone_from: str = None,
 
 def delete_profile_api(name: str) -> dict:
     """Delete a profile. Switches to default first if it's the active one."""
-    if name == 'default':
+    if _is_root_profile(name):
         raise ValueError("Cannot delete the default profile.")
     _validate_profile_name(name)
 
@@ -783,4 +911,6 @@ def delete_profile_api(name: str) -> dict:
         else:
             raise ValueError(f"Profile '{name}' does not exist.")
 
+    # Drop cached root-profile-name lookup — list_profiles_api() shape changed.
+    _invalidate_root_profile_cache()
     return {'ok': True, 'name': name}

@@ -110,6 +110,10 @@ async function send(){
     }
     return;
   }
+  if(S.session&&(S.session.read_only||S.session.is_read_only)){
+    if(typeof showToast==='function') showToast('Read-only imported sessions cannot be modified.',3000);
+    return;
+  }
   // Slash command intercept -- local commands handled without agent round-trip.
   // We push the user message BEFORE running the handler for echo-worthy
   // commands so chat order is correct: some handlers (e.g. cmdHelp) push
@@ -640,9 +644,12 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
           _smdWrite(displayText);
         } else {
           // Fallback: smd not loaded yet, reconnect session, or smd unavailable — use renderMd
-          assistantBody.innerHTML = (segmentStart===0
+          // for every live segment. Without this, the first segment inserts raw
+          // parsed.displayText and users see unformatted markdown until done.
+          const fallbackText = segmentStart===0
             ? parsed.displayText
-            : renderMd ? renderMd(assistantText.slice(segmentStart)) : assistantText.slice(segmentStart)) || '';
+            : _stripXmlToolCalls(assistantText.slice(segmentStart));
+          assistantBody.innerHTML = renderMd ? renderMd(fallbackText) : esc(fallbackText);
         }
       }
       scrollIfPinned();
@@ -900,6 +907,15 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
             if(typeof d.usage.duration_seconds==='number'){
               lastAsst._turnDuration=d.usage.duration_seconds;
             }
+            if(typeof d.usage.tps==='number'&&d.usage.tps>0){
+              lastAsst._turnTps=d.usage.tps;
+            }
+            if(d.usage.gateway_routing){
+              lastAsst._gatewayRouting=d.usage.gateway_routing;
+              if(S.session)S.session.gateway_routing=d.usage.gateway_routing;
+              if(S.session&&Array.isArray(S.session.gateway_routing_history))S.session.gateway_routing_history.push(d.usage.gateway_routing);
+              else if(S.session)S.session.gateway_routing_history=[d.usage.gateway_routing];
+            }
           }
         }
         if(d.session.tool_calls&&d.session.tool_calls.length){
@@ -981,16 +997,14 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     });
 
     source.addEventListener('metering',e=>{
-      // TPS + HIGH/LOW stats for the header chip — emitted at 1 Hz during a stream,
-      // silenced entirely when no sessions are active (ticker exits when idle).
       try{
         const d=JSON.parse(e.data||'{}');
-        const el=$('tpsStat');
-        if(!el) return;
-        const tps=typeof d.tps==='number'?d.tps.toFixed(1):'0.0';
-        const high=typeof d.high==='number' && d.high>=0?d.high.toFixed(1)+' high':'—';
-        const low=typeof d.low==='number' && d.low>=0?d.low.toFixed(1)+' low':'';
-        el.textContent=`${tps} t/s · ${high}${low?' · '+low:''}`;
+        if((d.session_id||activeSid)!==activeSid) return;
+        if(d.estimated===true||d.tps_available!==true||typeof d.tps!=='number'||d.tps<=0){
+          if(typeof _setLiveAssistantTps==='function') _setLiveAssistantTps(null);
+          return;
+        }
+        if(typeof _setLiveAssistantTps==='function') _setLiveAssistantTps(d.tps);
       }catch(_){}
     });
 
@@ -1393,7 +1407,7 @@ function startApprovalPolling(sid) {
   stopApprovalPolling();
   // ── SSE (preferred): long-lived connection, server pushes instantly ──
   try {
-    const es = new EventSource('/api/approval/stream?session_id=' + encodeURIComponent(sid));
+    const es = new EventSource(new URL('api/approval/stream?session_id=' + encodeURIComponent(sid), document.baseURI || location.href).href);
     let _fallbackActive = false;
 
     es.addEventListener('initial', e => {
@@ -1755,7 +1769,7 @@ function startClarifyPolling(sid) {
 
   // SSE primary path: long-lived connection pushes events instantly.
   try {
-    _clarifyEventSource = new EventSource('/api/clarify/stream?session_id=' + encodeURIComponent(sid));
+    _clarifyEventSource = new EventSource(new URL('api/clarify/stream?session_id=' + encodeURIComponent(sid), document.baseURI || location.href).href);
   } catch(e) {
     _startClarifyFallbackPoll(sid);
     return;
@@ -1873,7 +1887,7 @@ function sendBrowserNotification(title,body){
 
 function attachBtwStream(parentSid, streamId, question){
   if(!parentSid||!streamId) return;
-  const src=new EventSource('/api/chat/stream?stream_id='+encodeURIComponent(streamId));
+  const src=new EventSource(new URL('api/chat/stream?stream_id='+encodeURIComponent(streamId), document.baseURI||location.href).href);
   let answer='';
   let btwRow=null;
   let _streamDone=false;
