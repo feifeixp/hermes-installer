@@ -157,7 +157,7 @@ def _find_bootstrap_python() -> str:
         log.info("Using sys.executable: %s", sys.executable)
         return sys.executable
 
-    # Fallback: find system Python
+    # Fallback: find system Python (prefer 3.13+ for pywebview compatibility)
     for name in ("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"):
         found = shutil.which(name)
         if found:
@@ -166,7 +166,7 @@ def _find_bootstrap_python() -> str:
 
     # Last resort
     log.warning("No Python found; bootstrap.py will handle its own discovery")
-    return "python3"
+    return "python3.13" if shutil.which("python3.13") else "python3"
 
 
 # ══════════════════════════════════════════════════════════════════════════
