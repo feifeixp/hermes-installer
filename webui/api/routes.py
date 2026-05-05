@@ -2029,6 +2029,15 @@ def handle_get(handler, parsed) -> bool:
             handler, {"workspaces": load_workspaces(), "last": get_last_workspace()}
         )
 
+    # ── Neowow Studio integration ─────────────────────────────────────────
+    if parsed.path == "/api/neowow/status":
+        from api.neowow import get_status
+        try:
+            return j(handler, get_status())
+        except Exception as e:
+            logger.exception("neowow status failed")
+            return bad(handler, str(e), status=500)
+
     if parsed.path == "/api/workspaces/suggest":
         qs = parse_qs(parsed.query)
         prefix = qs.get("prefix", [""])[0]
@@ -3497,6 +3506,44 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e))
         except Exception as e:
             logger.exception("rollback/restore failed")
+            return bad(handler, str(e), status=500)
+
+    # ── Neowow Studio integration (token CRUD + deploy) ───────────────────
+    if parsed.path == "/api/neowow/token":
+        # Save: body { token: "nws_dt_..." }
+        # Clear: body { clear: true }
+        try:
+            from api.neowow import save_token, clear_token
+            if body and body.get("clear"):
+                return j(handler, clear_token())
+            token = (body or {}).get("token", "")
+            return j(handler, save_token(token))
+        except ValueError as e:
+            return bad(handler, str(e))
+        except Exception as e:
+            logger.exception("neowow token save failed")
+            return bad(handler, str(e), status=500)
+
+    if parsed.path == "/api/neowow/deploy":
+        # body { workerName: string, workspace: string }
+        # Bundles the workspace and pushes to https://app.neowow.studio.
+        # Errors come back as { error: "..." } with appropriate HTTP status
+        # so the UI can show them verbatim.
+        try:
+            from api.neowow import deploy
+            worker_name = (body or {}).get("workerName", "")
+            workspace = (body or {}).get("workspace", "")
+            if not workspace:
+                return bad(handler, "workspace path is required")
+            return j(handler, deploy(worker_name, workspace))
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            # Surfaced from the dashboard — pass the message through, 502
+            # so the UI knows it was an upstream failure not a local bug.
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow deploy failed")
             return bad(handler, str(e), status=500)
 
     return False  # 404
