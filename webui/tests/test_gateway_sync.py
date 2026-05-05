@@ -508,6 +508,51 @@ def test_compression_chain_with_all_empty_segments_is_hidden():
         post('/api/settings', {'show_cli_sessions': False})
 
 
+def test_default_title_cli_compression_chain_is_kept_by_lineage():
+    """Default-titled CLI compression chains are meaningful even with a short tip."""
+    conn = _ensure_state_db()
+    ids_to_remove = ('cli_default_compress_root_001', 'cli_default_compress_tip_001')
+    t0 = time.time() - 430
+    try:
+        _insert_agent_session_row(
+            conn,
+            'cli_default_compress_root_001',
+            source='cli',
+            title='Cli Session',
+            started_at=t0,
+            ended_at=t0 + 100,
+            end_reason='compression',
+            messages=1,
+        )
+        _insert_agent_session_row(
+            conn,
+            'cli_default_compress_tip_001',
+            source='cli',
+            title='Cli Session',
+            started_at=t0 + 101,
+            parent_session_id='cli_default_compress_root_001',
+            messages=1,
+        )
+
+        post('/api/settings', {'show_cli_sessions': True})
+        data, status = get('/api/sessions')
+        assert status == 200
+        ids = {s.get('session_id') for s in data.get('sessions', [])}
+
+        assert 'cli_default_compress_tip_001' in ids
+        assert 'cli_default_compress_root_001' not in ids
+        tip = next(s for s in data.get('sessions', []) if s.get('session_id') == 'cli_default_compress_tip_001')
+        assert tip.get('_compression_segment_count') == 2
+        assert tip.get('_lineage_root_id') == 'cli_default_compress_root_001'
+    finally:
+        try:
+            _remove_test_sessions(conn, *ids_to_remove)
+            conn.close()
+        except Exception:
+            pass
+        post('/api/settings', {'show_cli_sessions': False})
+
+
 def test_non_compression_child_is_not_collapsed_into_parent():
     """Parent/child relationships that are not compression continuations stay flat."""
     conn = _ensure_state_db()
@@ -771,6 +816,61 @@ def test_agent_session_source_normalization_contract():
             assert normalized['raw_source'] == raw_source
         else:
             assert normalized['raw_source'] is None
+
+
+def test_cross_source_parent_child_is_not_collapsed_into_root_metadata(cleanup_test_sessions):
+    """A WebUI continuation from a messaging parent must keep WebUI metadata.
+
+    Regression for a production case where a WebUI session continued from a
+    Telegram compression chain and was projected as the old Telegram root,
+    inheriting the wrong title/source and hiding from the expected sidebar view.
+    """
+    from api.agent_sessions import read_importable_agent_session_rows
+
+    conn = _ensure_state_db()
+    root_sid = 'gw_tg_cross_source_root_001'
+    webui_sid = 'webui_cross_source_tip_001'
+    now = time.time()
+    cleanup_test_sessions.extend([root_sid, webui_sid])
+    try:
+        _insert_agent_session_row(
+            conn,
+            session_id=root_sid,
+            source='telegram',
+            title='Old Telegram Root',
+            started_at=now - 20,
+            ended_at=now - 10,
+            end_reason='compression',
+            messages=2,
+        )
+        _insert_agent_session_row(
+            conn,
+            session_id=webui_sid,
+            source='webui',
+            title='Current WebUI Work',
+            started_at=now - 9,
+            parent_session_id=root_sid,
+            messages=2,
+        )
+
+        rows = read_importable_agent_session_rows(_get_state_db_path(), exclude_sources=None)
+        by_id = {row['id']: row for row in rows}
+
+        assert webui_sid in by_id
+        assert root_sid in by_id
+        webui = by_id[webui_sid]
+        assert webui.get('title') == 'Current WebUI Work'
+        assert webui.get('source') == 'webui'
+        assert webui.get('session_source') == 'webui'
+        assert webui.get('source_label') == 'WebUI'
+        assert webui.get('relationship_type') == 'child_session'
+        assert webui.get('parent_title') == 'Old Telegram Root'
+    finally:
+        try:
+            _remove_test_sessions(conn, root_sid, webui_sid)
+            conn.close()
+        except Exception:
+            pass
 
 
 def test_gateway_watcher_uses_normalized_source_metadata(monkeypatch):

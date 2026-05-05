@@ -25,6 +25,15 @@ let _sessionObservedStreaming = null;
 const _sessionStreamingById = new Map();
 const _sessionListSnapshotById = new Map();
 
+function _formatSessionModelWithGateway(s){
+  if(!s||!s.model)return'';
+  const routing=(typeof _latestGatewayRoutingForSession==='function')?_latestGatewayRoutingForSession(s):(s.gateway_routing||null);
+  if(typeof _formatGatewayModelLabel==='function'){
+    return _formatGatewayModelLabel(s.model,s.model,routing)||s.model;
+  }
+  return s.model;
+}
+
 function _getSessionViewedCounts() {
   if (_sessionViewedCounts !== null) return _sessionViewedCounts;
   try {
@@ -576,6 +585,32 @@ function _isMessagingSession(session) {
   return _MESSAGING_RAW_SOURCES.has(raw);
 }
 
+function _isReadOnlySession(session) {
+  return !!(session && (session.read_only || session.is_read_only));
+}
+
+function _sourceKeyForSession(session) {
+  return (session && (session.raw_source || session.source_tag || session.source || '') || '').toLowerCase();
+}
+
+function _isCliSession(session) {
+  if (!session) return false;
+  // session_source is set by upstream normalization for CLI sessions as 'cli'
+  if (session.session_source === 'cli') return true;
+  // Legacy payloads often use raw/source tags to convey the source.
+  const raw = (
+    session.raw_source
+    || session.source_tag
+    || session.source
+    || session.source_label
+    || ''
+  ).toLowerCase();
+  if (raw === 'cli') return true;
+  // If messaging-like, don't classify as legacy CLI even when is_cli_session is true.
+  if (_isMessagingSession(session)) return false;
+  return session.is_cli_session === true;
+}
+
 function _normalizeMessageForCliImportComparison(message) {
   if (!message || typeof message !== 'object') return message;
   const clone = { ...message };
@@ -1028,10 +1063,17 @@ let _allProjects = [];  // cached project list
 const NO_PROJECT_FILTER = '__none__';
 let _activeProject = null;  // project_id filter (null = show all, NO_PROJECT_FILTER = unassigned only)
 let _showAllProfiles = false;  // false = filter to active profile only
+let _otherProfileCount = 0;       // count of sessions from other profiles (server-reported)
 let _sessionActionMenu = null;
 let _sessionActionAnchor = null;
 let _sessionActionSessionId = null;
 const _expandedChildSessionKeys = new Set();
+let _sessionVisibleSidebarIds = [];
+const SESSION_VIRTUAL_ROW_HEIGHT = 52;
+const SESSION_VIRTUAL_BUFFER_ROWS = 12;
+const SESSION_VIRTUAL_THRESHOLD_ROWS = 80;
+let _sessionVirtualScrollList = null;
+let _sessionVirtualScrollRaf = 0;
 
 function _sessionIdFromLocation(){
   if(typeof window==='undefined'||!window.location) return null;
@@ -1099,9 +1141,13 @@ function setSessionSelected(sid, selected){
 }
 function selectAllSessions(){
   _selectedSessions.clear();
+  const ids=Array.isArray(_sessionVisibleSidebarIds)&&_sessionVisibleSidebarIds.length
+    ? _sessionVisibleSidebarIds
+    : Array.from(document.querySelectorAll('.session-select-cb')).map(cb=>cb.dataset.sid).filter(Boolean);
+  ids.forEach(sid=>_selectedSessions.add(sid));
   document.querySelectorAll('.session-select-cb').forEach(cb=>{
     const sid=cb.dataset.sid;
-    if(sid){_selectedSessions.add(sid);cb.checked=true;const item=cb.closest('.session-item');if(item)item.classList.add('selected');}
+    if(sid){cb.checked=_selectedSessions.has(sid);const item=cb.closest('.session-item');if(item)item.classList.toggle('selected',_selectedSessions.has(sid));}
   });
   _updateBatchActionBar();
 }
@@ -1255,12 +1301,15 @@ function _appendSessionDuplicateAction(menu, session){
 }
 
 function _openSessionActionMenu(session, anchorEl){
+  if(_isReadOnlySession(session)){ if(typeof showToast==='function') showToast('Read-only imported sessions cannot be modified.',3000); return; }
   if(_sessionActionMenu && _sessionActionSessionId===session.session_id && _sessionActionAnchor===anchorEl){
     closeSessionActionMenu();
     return;
   }
   closeSessionActionMenu();
   const isMessagingSession = _isMessagingSession(session);
+  const isCliSession = _isCliSession(session);
+  const isExternalSession = isMessagingSession || isCliSession;
   const menu=document.createElement('div');
   menu.className='session-action-menu open';
   menu.appendChild(_buildSessionAction(
@@ -1303,7 +1352,7 @@ function _openSessionActionMenu(session, anchorEl){
       }catch(err){showToast(t('session_archive_failed')+err.message);}
     }
   ));
-  if(!isMessagingSession){
+  if(!isExternalSession){
     _appendSessionDuplicateAction(menu, session);
   }
   if(session.active_stream_id){
@@ -1318,7 +1367,7 @@ function _openSessionActionMenu(session, anchorEl){
       }
     ));
   }
-  if(!isMessagingSession){
+  if(!isExternalSession){
     menu.appendChild(_buildSessionAction(
       t('session_delete'),
       t('session_delete_desc'),
@@ -1358,13 +1407,27 @@ window.addEventListener('resize',()=>{
   if(_sessionActionMenu && _sessionActionAnchor) _positionSessionActionMenu(_sessionActionAnchor);
 });
 
+// Generation counter to discard stale API responses (issue #1430).
+// Multiple callers (message send, rename, session switch) fire renderSessionList()
+// concurrently. Without this guard, a slower older response can overwrite _allSessions
+// with stale data, causing sessions to vanish from the sidebar.
+let _renderSessionListGen = 0;
+
 async function renderSessionList(){
+  const _gen = ++_renderSessionListGen;
   try{
     if(!($('sessionSearch').value||'').trim()) _contentSearchResults = [];
+    const allProfilesQS = _showAllProfiles ? '?all_profiles=1' : '';
     const [sessData, projData] = await Promise.all([
-      api('/api/sessions'),
-      api('/api/projects'),
+      api('/api/sessions' + allProfilesQS),
+      api('/api/projects' + allProfilesQS),
     ]);
+    // Discard stale response — a newer renderSessionList() call superseded us.
+    if (_gen !== _renderSessionListGen) return;
+    // Server's other_profile_count tells us how many sessions exist outside the
+    // active profile so the "Show N from other profiles" toggle can render
+    // without a second round-trip. Stashed on the module for renderSessionListFromCache.
+    _otherProfileCount = sessData.other_profile_count || 0;
     _allSessions = sessData.sessions||[];
     _allProjects = projData.projects||[];
     // Capture server clock for clock-skew compensation (issue #1144).
@@ -1437,7 +1500,7 @@ async function probeGatewaySSEStatus(){
   if(_gatewayProbeInFlight || !window._showCliSessions) return;
   _gatewayProbeInFlight = true;
   try{
-    const resp = await fetch('/api/sessions/gateway/stream?probe=1', { credentials:'same-origin' });
+    const resp = await fetch(new URL('api/sessions/gateway/stream?probe=1', document.baseURI || location.href).href, { credentials:'same-origin' });
     const data = await resp.json().catch(() => ({}));
     if(resp.ok && data.watcher_running){
       stopGatewayPollFallback();
@@ -1692,6 +1755,21 @@ function _sidebarLineageKeyForRow(s){
   return s._lineage_key||s._lineage_root_id||s.lineage_root_id||s.parent_session_id||s.session_id||null;
 }
 
+function _truncatedSessionId(sid){
+  sid=String(sid||'').trim();
+  if(!sid) return '';
+  if(sid.length<=16) return sid;
+  return sid.slice(0,12)+'...';
+}
+
+function _sessionTitleForForkParent(parentSid){
+  if(!parentSid||!Array.isArray(_allSessions)) return '';
+  const parent=_allSessions.find(item=>item&&item.session_id===parentSid);
+  const title=parent&&String(parent.title||'').trim();
+  if(!title||title==='Untitled') return '';
+  return title;
+}
+
 function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions){
   const rows=(collapsedRows||[]).filter(s=>!_isChildSession(s)).map(s=>({...s}));
   const visibleBySid=new Map();
@@ -1825,6 +1903,70 @@ function clearOptimisticSessionStreaming(sid){
   renderSessionListFromCache();
 }
 
+
+function _sessionVirtualWindow(opts){
+  const total=Math.max(0, Number(opts&&opts.total)||0);
+  const threshold=Math.max(1, Number(opts&&opts.threshold)||SESSION_VIRTUAL_THRESHOLD_ROWS);
+  const itemHeight=Math.max(1, Number(opts&&opts.itemHeight)||SESSION_VIRTUAL_ROW_HEIGHT);
+  const buffer=Math.max(0, Number(opts&&opts.buffer)||SESSION_VIRTUAL_BUFFER_ROWS);
+  const viewportHeight=Math.max(itemHeight, Number(opts&&opts.viewportHeight)||itemHeight*10);
+  const visibleRows=Math.max(1, Math.ceil(viewportHeight/itemHeight));
+  if(total<=threshold){
+    return {virtualized:false,start:0,end:total,topPad:0,bottomPad:0,itemHeight,total};
+  }
+  let start=Math.floor((Number(opts&&opts.scrollTop)||0)/itemHeight)-buffer;
+  start=Math.max(0, Math.min(start, Math.max(0,total-visibleRows)));
+  let end=Math.min(total, start+visibleRows+(buffer*2));
+  const activeIndex=Number.isFinite(Number(opts&&opts.activeIndex))?Number(opts.activeIndex):-1;
+  if(activeIndex>=0&&activeIndex<total&&(activeIndex<start||activeIndex>=end)){
+    start=Math.max(0, Math.min(activeIndex-buffer, Math.max(0,total-visibleRows-(buffer*2))));
+    end=Math.min(total, start+visibleRows+(buffer*2));
+  }
+  return {
+    virtualized:true,
+    start,
+    end,
+    topPad:start*itemHeight,
+    bottomPad:Math.max(0,(total-end)*itemHeight),
+    itemHeight,
+    total,
+  };
+}
+
+function _sessionVirtualSpacer(height, where){
+  const spacer=document.createElement('div');
+  spacer.className='session-virtual-spacer';
+  spacer.dataset.virtualSpacer=where||'gap';
+  spacer.setAttribute('aria-hidden','true');
+  spacer.style.height=Math.max(0,Math.round(height||0))+'px';
+  spacer.style.flex='0 0 auto';
+  return spacer;
+}
+
+function _scheduleSessionVirtualizedRender(){
+  if(_renamingSid||_sessionVirtualScrollRaf) return;
+  // Skip the re-render if the list is below the virtualization threshold —
+  // there's no virtual window to recompute, and re-rendering would just
+  // rebuild the whole DOM on every scroll tick. Without this guard, the
+  // unconditional scroll listener (attached for any list) caused
+  // user-facing scroll jumps on small lists. (#1669 follow-up)
+  const list=_sessionVirtualScrollList;
+  if(list){
+    const total=Number(list.dataset.sessionVirtualTotal||0);
+    if(total>0&&total<=SESSION_VIRTUAL_THRESHOLD_ROWS) return;
+  }
+  _sessionVirtualScrollRaf=requestAnimationFrame(()=>{_sessionVirtualScrollRaf=0;renderSessionListFromCache();});
+}
+
+function _ensureSessionVirtualScrollHandler(list){
+  if(!list||_sessionVirtualScrollList===list) return;
+  if(_sessionVirtualScrollList){
+    _sessionVirtualScrollList.removeEventListener('scroll', _scheduleSessionVirtualizedRender);
+  }
+  _sessionVirtualScrollList=list;
+  list.addEventListener('scroll', _scheduleSessionVirtualizedRender, {passive:true});
+}
+
 function renderSessionListFromCache(){
   // Don't re-render while user is actively renaming a session (would destroy the input)
   if(_renamingSid) return;
@@ -1847,10 +1989,14 @@ function renderSessionListFromCache(){
     (activeSidForSidebar&&s.session_id===activeSidForSidebar) ||
     (S.session&&s.session_id===S.session.session_id&&(S.session.message_count||0)>0)
   );
-  // Filter by active profile (unless "All profiles" is toggled on)
-  // Server backfills profile='default' for legacy sessions, so every session has a profile.
-  // Show only sessions tagged to the active profile; 'All profiles' toggle overrides.
-  const profileFiltered=_showAllProfiles?withMessages:withMessages.filter(s=>s.is_cli_session||s.profile===S.activeProfile);
+  // The server is authoritative for profile scoping (#1611): it filters by
+  // active profile when no query param is set, and returns the aggregate when
+  // we send ?all_profiles=1. The renamed-root cross-alias (a row tagged
+  // 'default' matching active 'kinni' when kinni.is_default) lives server-side
+  // in _profiles_match, and a strict-equality client filter would reject those
+  // rows incorrectly. So we trust the wire data and skip the redundant client
+  // filter entirely.
+  const profileFiltered=withMessages;
   // Filter by active project. NO_PROJECT_FILTER sentinel asks for sessions
   // with no project_id; otherwise filter to the matching project_id, or
   // pass through when no filter is active.
@@ -1863,7 +2009,9 @@ function renderSessionListFromCache(){
   const sessions=_attachChildSessionsToSidebarRows(_collapseSessionLineageForSidebar(sessionsRaw), sessionsRaw);
   _syncSidebarExpansionForActiveSession(sessions, activeSidForSidebar);
   const archivedCount=projectFiltered.filter(s=>s.archived).length;
-  const list=$('sessionList');list.innerHTML='';
+  const list=$('sessionList');
+  const listScrollTopBeforeRender=list.scrollTop||0;
+  list.innerHTML='';
   // Batch select bar (when in select mode)
   if(_sessionSelectMode){
     const selectBar=document.createElement('div');selectBar.className='session-select-bar';
@@ -1937,19 +2085,23 @@ function renderSessionListFromCache(){
     bar.appendChild(addBtn);
     list.appendChild(bar);
   }
-  // Profile filter toggle (show sessions from other profiles)
-  const otherProfileCount=withMessages.filter(s=>s.profile&&s.profile!==S.activeProfile).length;
+  // Profile filter toggle (show sessions from other profiles).
+  // Cross-profile rows live SERVER-SIDE behind ?all_profiles=1, so the toggle
+  // must trigger a refetch — there's no client-cached aggregate to slice through.
+  // The server is authoritative for the count (renamed-root cross-alias is
+  // server-side). A naive strict-equality client fallback would mis-count.
+  const otherProfileCount = _otherProfileCount;
   if(otherProfileCount>0&&!_showAllProfiles){
     const pfToggle=document.createElement('div');
     pfToggle.style.cssText='font-size:10px;padding:4px 10px;color:var(--muted);cursor:pointer;text-align:center;opacity:.7;';
     pfToggle.textContent='Show '+otherProfileCount+' from other profiles';
-    pfToggle.onclick=()=>{_showAllProfiles=true;renderSessionListFromCache();};
+    pfToggle.onclick=()=>{_showAllProfiles=true;renderSessionList();};
     list.appendChild(pfToggle);
-  } else if(_showAllProfiles&&otherProfileCount>0){
+  } else if(_showAllProfiles){
     const pfToggle=document.createElement('div');
     pfToggle.style.cssText='font-size:10px;padding:4px 10px;color:var(--muted);cursor:pointer;text-align:center;opacity:.7;';
     pfToggle.textContent='Show active profile only';
-    pfToggle.onclick=()=>{_showAllProfiles=false;renderSessionListFromCache();};
+    pfToggle.onclick=()=>{_showAllProfiles=false;renderSessionList();};
     list.appendChild(pfToggle);
   }
   // Show/hide archived toggle if there are archived sessions
@@ -1990,7 +2142,44 @@ function renderSessionListFromCache(){
     } else { curItems.push(s); }
   }
   if(curItems.length) groups.push({label:curLabel,items:curItems});
-  // Render groups with collapsible headers
+  const flatSessionRows=[];
+  for(const g of groups){
+    if(_groupCollapsed[g.label]) continue;
+    for(const s of g.items){ flatSessionRows.push({group:g,session:s}); }
+  }
+  _sessionVisibleSidebarIds=flatSessionRows.map(row=>row.session&&row.session.session_id).filter(Boolean);
+  _ensureSessionVirtualScrollHandler(list);
+  const activeIndex=flatSessionRows.findIndex(row=>_sessionLineageContainsSession(row.session,activeSidForSidebar));
+  const shouldAnchorActive=activeSidForSidebar&&activeIndex>=0&&(
+    list.dataset.sessionVirtualActiveAnchor!==activeSidForSidebar||
+    list.dataset.sessionVirtualFilter!==q
+  );
+  let virtualWindow=_sessionVirtualWindow({
+    total:flatSessionRows.length,
+    scrollTop:listScrollTopBeforeRender,
+    viewportHeight:list.clientHeight||520,
+    itemHeight:SESSION_VIRTUAL_ROW_HEIGHT,
+    buffer:SESSION_VIRTUAL_BUFFER_ROWS,
+    threshold:SESSION_VIRTUAL_THRESHOLD_ROWS,
+    activeIndex:shouldAnchorActive?activeIndex:-1,
+  });
+  let virtualAnchorScrollTop=null;
+  if(shouldAnchorActive&&virtualWindow.virtualized){
+    list.dataset.sessionVirtualActiveAnchor=activeSidForSidebar;
+    virtualAnchorScrollTop=virtualWindow.topPad;
+  }else if(activeSidForSidebar){
+    list.dataset.sessionVirtualActiveAnchor=activeSidForSidebar;
+  }else{
+    delete list.dataset.sessionVirtualActiveAnchor;
+  }
+  list.dataset.sessionVirtualTotal=String(flatSessionRows.length);
+  list.dataset.sessionVirtualFilter=q;
+  list.dataset.sessionVirtualStart=String(virtualWindow.start);
+  list.dataset.sessionVirtualEnd=String(virtualWindow.end);
+  // Render groups with collapsible headers. Large sidebars render only the
+  // current session-row window plus top/bottom spacers inside each group body;
+  // headers remain real DOM so pin/archive/date grouping and clicks survive.
+  let globalSessionRowIndex=0;
   for(const g of groups){
     const wrapper=document.createElement('div');
     wrapper.className='session-date-group';
@@ -2004,18 +2193,42 @@ function renderSessionListFromCache(){
     hdr.appendChild(caret);hdr.appendChild(label);
     const body=document.createElement('div');
     body.className='session-date-body';
-    if(_groupCollapsed[g.label]){body.style.display='none';caret.classList.add('collapsed');}
+    const isGroupCollapsed=Boolean(_groupCollapsed[g.label]);
+    if(isGroupCollapsed){body.style.display='none';caret.classList.add('collapsed');}
     hdr.onclick=()=>{
       const isCollapsed=body.style.display==='none';
       body.style.display=isCollapsed?'':'none';
       caret.classList.toggle('collapsed',!isCollapsed);
       _groupCollapsed[g.label]=!isCollapsed;
       _saveCollapsed();
+      renderSessionListFromCache();
     };
     wrapper.appendChild(hdr);
-    for(const s of g.items){ body.appendChild(_renderOneSession(s, Boolean(g.isPinned))); }
+    let groupTopPad=0;
+    let groupBottomPad=0;
+    for(const s of g.items){
+      if(isGroupCollapsed) continue;
+      const rowIndex=globalSessionRowIndex++;
+      const inWindow=!virtualWindow.virtualized||(rowIndex>=virtualWindow.start&&rowIndex<virtualWindow.end);
+      if(inWindow){ body.appendChild(_renderOneSession(s, Boolean(g.isPinned))); }
+      else if(rowIndex<virtualWindow.start){ groupTopPad+=virtualWindow.itemHeight; }
+      else { groupBottomPad+=virtualWindow.itemHeight; }
+    }
+    if(groupTopPad>0){ body.insertBefore(_sessionVirtualSpacer(groupTopPad,'before'), body.firstChild); }
+    if(groupBottomPad>0){ body.appendChild(_sessionVirtualSpacer(groupBottomPad,'after')); }
     wrapper.appendChild(body);
     list.appendChild(wrapper);
+  }
+  if(virtualAnchorScrollTop!==null){
+    list.scrollTop=virtualAnchorScrollTop;
+  }else if(listScrollTopBeforeRender>0){
+    // Always restore the user's scroll position after re-render, regardless
+    // of whether the virtualization window applies. Lists below the
+    // virtualization threshold (≤80 rows) still have their DOM rebuilt by
+    // every renderSessionListFromCache() call, and without this restore the
+    // scrollTop drops to 0 — producing a "scroll keeps jumping back" feel
+    // when the list scrolls naturally. Fixed for #1669 follow-up.
+    list.scrollTop=listScrollTopBeforeRender;
   }
   // Select mode toggle button (only when NOT in select mode)
   if(!_sessionSelectMode){
@@ -2032,7 +2245,14 @@ function renderSessionListFromCache(){
     _rememberRenderedStreamingState(s, isStreaming);
     _rememberRenderedSessionSnapshot(s);
     const hasUnread=_hasUnreadForSession(s)&&!isActive;
+    const readOnly=_isReadOnlySession(s);
     el.className='session-item'+(isActive?' active':'')+(isActive&&S.session&&S.session._flash?' new-flash':'')+(s.archived?' archived':'')+(isStreaming?' streaming':'')+(hasUnread?' unread':'');
+    if(s.is_cli_session){
+      el.classList.add('cli-session');
+      el.dataset.source=_getChannelLabel(s)||'CLI';
+      el.dataset.sourceKey=_sourceKeyForSession(s)||'cli';
+    }
+    if(readOnly) el.classList.add('read-only-session');
     if(isActive&&S.session&&S.session._flash)delete S.session._flash;
     const rawTitle=s.title||'Untitled';
     const tags=(rawTitle.match(/#[\w-]+/g)||[]);
@@ -2042,7 +2262,7 @@ function renderSessionListFromCache(){
       cleanTitle='Session';
     }
     // Checkbox for batch select mode
-    if(_sessionSelectMode){
+    if(_sessionSelectMode&&!readOnly){
       const cbWrapper=document.createElement('label');cbWrapper.className='session-select-cb-wrapper';
       const cb=document.createElement('input');cb.type='checkbox';cb.className='session-select-cb';
       cb.dataset.sid=s.session_id;cb.checked=_selectedSessions.has(s.session_id);
@@ -2069,19 +2289,15 @@ function renderSessionListFromCache(){
     if(s.parent_session_id){
       const branchInd=document.createElement('span');
       branchInd.className='session-branch-indicator';
-      branchInd.textContent='\u2442'; // ⑂
-      branchInd.title=(typeof t==='function'?t('forked_from'):'Forked from')+' '+s.parent_session_id;
-      branchInd.style.cursor='pointer';
-      branchInd.onclick=(e)=>{
-        e.stopPropagation();
-        if(typeof loadSession==='function') loadSession(s.parent_session_id);
-      };
+      branchInd.innerHTML=li('git-branch',12);
+      const parentLabel=_sessionTitleForForkParent(s.parent_session_id)||_truncatedSessionId(s.parent_session_id);
+      branchInd.title=(typeof t==='function'?t('forked_from'):'Forked from')+' '+parentLabel;
       titleRow.appendChild(branchInd);
     }
     const title=document.createElement('span');
     title.className='session-title';
     title.textContent=cleanTitle||'Untitled';
-    title.title='Double-click to rename';
+    title.title=readOnly?'Read-only imported session':'Double-click to rename';
     const tsMs=_sessionTimestampMs(s);
     const ts=document.createElement('span');
     const hasAttentionState=isStreaming||hasUnread;
@@ -2131,7 +2347,11 @@ function renderSessionListFromCache(){
         : `${msgCount} msg${msgCount===1?'':'s'}`;
       metaBits.push(msgLabel);
       if(childCount>0) metaBits.push(t('session_meta_children', childCount));
-      if(s.model) metaBits.push(s.model);
+      const modelMeta=_formatSessionModelWithGateway(s);
+      if(modelMeta) metaBits.push(modelMeta);
+      const sourceLabel=_getChannelLabel(s);
+      if(s.is_cli_session&&sourceLabel) metaBits.push(sourceLabel);
+      if(readOnly) metaBits.push('read-only');
       if(_showAllProfiles&&s.profile) metaBits.push(s.profile);
       const meta=document.createElement('div');
       meta.className='session-meta';
@@ -2182,6 +2402,7 @@ function renderSessionListFromCache(){
 
     // Rename: called directly when we confirm it's a double-click
     const startRename=()=>{
+      if(_isReadOnlySession(s)){ if(typeof showToast==='function') showToast('Read-only imported sessions cannot be renamed.',3000); return; }
       // Guard: prevent renaming if session is currently being loaded
       if (_loadingSessionId && _loadingSessionId !== s.session_id) return;
 
@@ -2254,22 +2475,25 @@ function renderSessionListFromCache(){
     state.setAttribute('aria-hidden','true');
     el.appendChild(state);
     // Single trigger button that opens a shared dropdown menu
-    const actions=document.createElement('div');
-    actions.className='session-actions';
-    const menuBtn=document.createElement('button');
-    menuBtn.type='button';
-    menuBtn.className='session-actions-trigger';
-    menuBtn.title='Conversation actions';
-    menuBtn.setAttribute('aria-haspopup','menu');
-    menuBtn.setAttribute('aria-label','Conversation actions');
-    menuBtn.innerHTML=ICONS.more;
-    menuBtn.onclick=(e)=>{
-      e.stopPropagation();
-      e.preventDefault();
-      _openSessionActionMenu(s, menuBtn);
-    };
-    actions.appendChild(menuBtn);
-    el.appendChild(actions);
+    let actions=null;
+    if(!readOnly){
+      actions=document.createElement('div');
+      actions.className='session-actions';
+      const menuBtn=document.createElement('button');
+      menuBtn.type='button';
+      menuBtn.className='session-actions-trigger';
+      menuBtn.title='Conversation actions';
+      menuBtn.setAttribute('aria-haspopup','menu');
+      menuBtn.setAttribute('aria-label','Conversation actions');
+      menuBtn.innerHTML=ICONS.more;
+      menuBtn.onclick=(e)=>{
+        e.stopPropagation();
+        e.preventDefault();
+        _openSessionActionMenu(s, menuBtn);
+      };
+      actions.appendChild(menuBtn);
+      el.appendChild(actions);
+    }
 
     // Use pointerup + manual double-tap detection instead of onclick/ondblclick.
     // onclick/ondblclick are unreliable on touch devices (iPad Safari especially):
@@ -2304,9 +2528,9 @@ function renderSessionListFromCache(){
     el.onpointerup=(e)=>{
       if(e.pointerType==='mouse' && e.button!==0) return;  // ignore right/middle click
       if(_renamingSid) return;
-      if(actions.contains(e.target)) return;
+      if(actions&&actions.contains(e.target)) return;
       if(e.target&&e.target.closest&&e.target.closest('.session-child-count,.session-child-sessions,.session-child-session')) return;
-      if(_sessionSelectMode){e.stopPropagation();toggleSessionSelect(s.session_id);return;}
+      if(_sessionSelectMode){e.stopPropagation();if(!readOnly)toggleSessionSelect(s.session_id);return;}
       // If the pointer moved enough to be a drag, cancel any pending tap
       if(_isDragging){clearTimeout(_tapTimer);_tapTimer=null;_lastTapTime=0;_clearDragTimer=setTimeout(()=>{el.classList.remove('dragging');_clearDragTimer=null;},50);return;}
       const now=Date.now();
@@ -2342,8 +2566,8 @@ function renderSessionListFromCache(){
     el.ondblclick=(e)=>{
       if(e.pointerType==='mouse' && e.button!==0) return;
       if(_renamingSid) return;
-      if(actions.contains(e.target)) return;
-      if(_sessionSelectMode){e.stopPropagation();toggleSessionSelect(s.session_id);return;}
+      if(actions&&actions.contains(e.target)) return;
+      if(_sessionSelectMode){e.stopPropagation();if(!readOnly)toggleSessionSelect(s.session_id);return;}
       // Guard: prevent renaming if session is currently being loaded
       if (_loadingSessionId && _loadingSessionId !== s.session_id) return;
       startRename();

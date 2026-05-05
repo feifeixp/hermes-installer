@@ -12,6 +12,7 @@ import queue
 import re
 import platform
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -19,8 +20,13 @@ import time
 import uuid
 import re
 from pathlib import Path
+from contextlib import closing
 from urllib.parse import parse_qs
-from api.agent_sessions import MESSAGING_SOURCES
+from api.agent_sessions import (
+    MESSAGING_SOURCES,
+    is_cli_session_row,
+    is_cli_session_row_visible,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +57,69 @@ _MESSAGING_SESSION_METADATA_CACHE: dict[str, object] = {
 }
 _MESSAGING_SESSION_METADATA_LOCK = threading.Lock()
 _STALE_MESSAGING_END_REASONS = {"session_reset", "session_switch"}
+
+
+# ── Profile-scoped session/project filtering (#1611, #1614) ────────────────
+#
+# Sessions and projects are stored in the WebUI sidecar without per-row
+# isolation by default — they're tagged with a `profile` field but every
+# query saw all rows. The fix scopes both endpoints to the active profile
+# by default, with `?all_profiles=1` opting into aggregate mode.
+#
+# Renamed-root profile handling (#1612): a row tagged `profile='default'`
+# matches the active root regardless of the root's display name, and a row
+# tagged with the renamed-root display name (e.g. 'kinni') likewise matches
+# when the active profile is `'default'`. _is_root_profile() is the
+# canonical check.
+
+def _profiles_match(row_profile, active_profile) -> bool:
+    """Return True if a session/project row's profile matches the active profile.
+
+    Treats both the literal alias 'default' and any renamed-root display name
+    (per _is_root_profile) as equivalent, so legacy rows tagged 'default'
+    still surface when the user has renamed the root profile to e.g. 'kinni',
+    and vice versa.
+
+    A row with no profile (`None` or empty string) is treated as belonging to
+    the root profile — that's the convention used by the legacy backfill at
+    api/models.py::all_sessions, and matches the default seen in
+    `static/sessions.js` (`S.activeProfile||'default'`).
+    """
+    from api.profiles import _is_root_profile
+
+    row = row_profile or 'default'
+    active = active_profile or 'default'
+    if row == active:
+        return True
+    # Cross-alias the renamed root.
+    if _is_root_profile(row) and _is_root_profile(active):
+        return True
+    return False
+
+
+def _all_profiles_query_flag(parsed_url) -> bool:
+    """Return True if the request URL has `?all_profiles=1` (or true/yes).
+
+    Centralizes the opt-in parsing so /api/sessions and /api/projects use
+    the same shape. Accepts 1/true/yes (case-insensitive) for ergonomics.
+    """
+    qs = parse_qs(parsed_url.query)
+    raw = qs.get('all_profiles', [''])[0].strip().lower()
+    return raw in ('1', 'true', 'yes', 'on')
+
+# ── SSE app-level heartbeat (#1623) ────────────────────────────────────────
+#
+# Kernel TCP keepalive (server.py setsockopt block) declares a peer dead at
+# KEEPIDLE (10s) + KEEPINTVL (5s) * KEEPCNT (3) = 25s in the worst case. The
+# app-level SSE heartbeat must fire well below that window so flaky-network
+# probes never get the chance to kill an idle stream during long LLM thinking
+# phases. 5s gives the kernel ~5x headroom: probe at 10s, heartbeat byte at
+# every 5s of idle keeps the socket warm.
+#
+# Cost: ~12 bytes per heartbeat * 12 extra heartbeats/min = ~150B/min idle.
+# Trivial; many production SSE deployments run 5-15s heartbeats specifically
+# to handle proxies and mobile NAT.
+_SSE_HEARTBEAT_INTERVAL_SECONDS = 5
 
 
 def _normalize_messaging_source(raw_source) -> str:
@@ -180,56 +249,119 @@ def _cron_output_content_window(text: str, limit: int = _CRON_OUTPUT_CONTENT_LIM
     return text[-limit:]
 
 
-def _run_cron_tracked(job, profile_home=None):
+
+
+def _cron_job_for_api(job: dict) -> dict:
+    """Return a cron job payload with the #617 optional profile field present.
+
+    Legacy jobs intentionally persist without ``profile`` so they keep the
+    scheduler's server-default behavior. The API still returns ``profile: None``
+    so the UI can label that state explicitly instead of guessing.
+    """
+    payload = dict(job or {})
+    payload.setdefault("profile", None)
+    return payload
+
+
+def _cron_jobs_for_api(jobs) -> list[dict]:
+    return [_cron_job_for_api(job) for job in (jobs or [])]
+
+
+def _available_cron_profile_names() -> set[str]:
+    from api.profiles import list_profiles_api
+
+    names = {"default"}
+    for profile in list_profiles_api():
+        try:
+            name = str(profile.get("name") or "").strip()
+        except AttributeError:
+            continue
+        if name:
+            names.add(name)
+    return names
+
+
+def _normalize_cron_profile_value(value) -> str | None:
+    if value is None:
+        return None
+    profile = str(value).strip()
+    if not profile:
+        return None
+    if profile not in _available_cron_profile_names():
+        raise ValueError(f"Unknown profile: {profile}")
+    return profile
+
+
+def _profile_home_for_cron_job(job: dict):
+    """Resolve the execution profile for a cron job, with graceful fallback.
+
+    A missing/blank profile preserves legacy server-default behavior. If a job
+    points at a profile that was deleted after save, fall back to the active
+    server profile and log a warning instead of crashing the Run Now path.
+    """
+    from api.profiles import get_active_hermes_home, get_hermes_home_for_profile
+
+    raw = str((job or {}).get("profile") or "").strip()
+    if not raw:
+        return get_active_hermes_home()
+    if raw not in _available_cron_profile_names():
+        logger.warning(
+            "Cron job %s references missing profile %r; falling back to server default",
+            (job or {}).get("id", "?"), raw,
+        )
+        return get_active_hermes_home()
+    return get_hermes_home_for_profile(raw)
+
+
+def _run_cron_tracked(job, profile_home=None, execution_profile_home=None):
     """Wrapper that tracks running state around cron.scheduler.run_job.
 
-    ``profile_home`` pins HERMES_HOME for this worker thread so output files
-    and run metadata land in the profile that triggered the run, not the
-    process-global default. Captured at dispatch time because the thread runs
-    after the HTTP request (and its TLS profile) has already been cleared.
+    ``profile_home`` is the cron store that owns the job row/output metadata.
+    ``execution_profile_home`` is the selected per-job profile used to load
+    agent config/.env while running. When no job profile is selected, both homes
+    are the same and legacy server-default behavior is preserved.
     """
     from cron.scheduler import run_job  # import here — runs inside a worker thread
     from cron.jobs import mark_job_run, save_job_output
 
     job_id = job.get("id", "")
+    execution_profile_home = execution_profile_home or profile_home
 
-    # Pin HERMES_HOME for the duration of this thread using a dedicated
-    # context manager variant that accepts the profile home directly
-    # (threads have no TLS, so get_active_hermes_home() can't resolve).
-    ctx = None
-    if profile_home is not None:
-        try:
-            from api.profiles import cron_profile_context_for_home
+    def _with_cron_home(home, fn):
+        if home is None:
+            return fn()
+        from api.profiles import cron_profile_context_for_home
 
-            ctx = cron_profile_context_for_home(profile_home)
-            ctx.__enter__()
-        except Exception:
-            logger.exception("Failed to pin profile %s for cron run", profile_home)
-            ctx = None
+        with cron_profile_context_for_home(home):
+            return fn()
 
     try:
-        success, output, final_response, error = run_job(job)
-        save_job_output(job_id, output)
+        success, output, final_response, error = _with_cron_home(
+            execution_profile_home, lambda: run_job(job)
+        )
 
-        # Match the scheduled cron path: an apparently successful run with no
-        # final response should not leave the job looking healthy.
-        if success and not final_response:
-            success = False
-            error = "Agent completed but produced empty response (model error, timeout, or misconfiguration)"
+        # Persist output and run metadata back to the job's owning cron store,
+        # even when the selected execution profile is different.
+        def _persist_success():
+            save_job_output(job_id, output)
 
-        mark_job_run(job_id, success, error)
+            # Match the scheduled cron path: an apparently successful run with no
+            # final response should not leave the job looking healthy.
+            _success, _error = success, error
+            if _success and not final_response:
+                _success = False
+                _error = "Agent completed but produced empty response (model error, timeout, or misconfiguration)"
+
+            mark_job_run(job_id, _success, _error)
+
+        _with_cron_home(profile_home, _persist_success)
     except Exception as e:
         logger.exception("Manual cron run failed for job %s", job_id)
         try:
-            mark_job_run(job_id, False, str(e))
+            _with_cron_home(profile_home, lambda: mark_job_run(job_id, False, str(e)))
         except Exception:
             logger.debug("Failed to mark manual cron run failure for %s", job_id)
     finally:
-        if ctx is not None:
-            try:
-                ctx.__exit__(None, None, None)
-            except Exception:
-                logger.debug("Failed to release cron_profile_context for %s", job_id)
         _mark_cron_done(job_id)
 
 _PROVIDER_ALIASES = {
@@ -332,6 +464,8 @@ from api.config import (
     get_reasoning_status,
     set_reasoning_display,
     set_reasoning_effort,
+    create_stream_channel,
+    get_webui_session_save_mode,
 )
 from api.helpers import (
     require,
@@ -345,6 +479,7 @@ from api.helpers import (
     redact_session_data,
     _redact_text,
 )
+from api.agent_health import build_agent_health_payload
 
 
 def _clear_stale_stream_state(session) -> bool:
@@ -1055,6 +1190,44 @@ def _session_sort_timestamp(session: dict) -> float:
     ) or 0.0
 
 
+def _is_cli_session_for_settings(session: dict) -> bool:
+    """Return True for importable CLI sessions that are safe to classify for settings."""
+    if not isinstance(session, dict):
+        return False
+    if is_cli_session_row(session):
+        return True
+
+    # Fallback for legacy local copies that had weak/empty metadata:
+    # keep this conservative so messaging sessions do not collapse incorrectly.
+    if not session.get("is_cli_session"):
+        return False
+    source = str(session.get("source") or "").strip().lower()
+    if source in MESSAGING_SOURCES:
+        return False
+    title = str(session.get("title") or "").strip().lower()
+    return title in ("", "untitled", "cli", "cli session") or title.endswith(" session") and (
+        not source or source == "cli"
+    )
+
+
+CLI_VISIBLE_SESSION_CAP = 20
+
+
+def _cap_recent_cli_sessions(sessions: list[dict], cli_cap: int = CLI_VISIBLE_SESSION_CAP) -> list[dict]:
+    """Keep only the most recent CLI-visible sessions after filtering."""
+    if cli_cap <= 0:
+        return sessions
+    kept = []
+    cli_seen = 0
+    for session in sessions:
+        if _is_cli_session_for_settings(session):
+            cli_seen += 1
+            if cli_seen > cli_cap:
+                continue
+        kept.append(session)
+    return kept
+
+
 def _merge_cli_sidebar_metadata(ui_session: dict, cli_meta: dict) -> dict:
     """Merge source-of-truth CLI metadata into a sidebar session row.
 
@@ -1161,6 +1334,7 @@ from api.models import (
     title_from,
     _write_session_index,
     SESSION_INDEX_FILE,
+    _active_state_db_path,
     load_projects,
     save_projects,
     import_cli_session,
@@ -1185,12 +1359,17 @@ from api.workspace import (
 )
 from api.upload import handle_upload, handle_upload_extract, handle_transcribe
 from api.streaming import _sse, _run_agent_streaming, cancel_stream
-from api.providers import get_providers, set_provider_key, remove_provider_key
+from api.providers import get_providers, get_provider_quota, set_provider_key, remove_provider_key
 from api.onboarding import (
     apply_onboarding_setup,
     get_onboarding_status,
     complete_onboarding,
     probe_provider_endpoint,
+)
+from api.oauth import (
+    cancel_onboarding_oauth_flow,
+    poll_onboarding_oauth_flow,
+    start_onboarding_oauth_flow,
 )
 
 # Approval system (optional -- graceful fallback if agent not available)
@@ -1493,7 +1672,293 @@ button:hover{background:rgba(124,185,255,.25)}
 <script src="static/login.js?v={{WEBUI_VERSION}}"></script>
 </body></html>"""
 
+
+# ── Logs endpoint ─────────────────────────────────────────────────────────────
+_LOG_FILE_WHITELIST = {
+    "agent": "agent.log",
+    "errors": "errors.log",
+    "gateway": "gateway.log",
+}
+_LOG_TAIL_VALUES = {100, 200, 500, 1000}
+_LOG_DEFAULT_TAIL = 200
+_LOG_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _normalize_logs_tail(raw_tail) -> int:
+    try:
+        tail = int(str(raw_tail or "").strip())
+    except (TypeError, ValueError):
+        return _LOG_DEFAULT_TAIL
+    return tail if tail in _LOG_TAIL_VALUES else _LOG_DEFAULT_TAIL
+
+
+def _handle_logs(handler, parsed) -> bool:
+    """Return a bounded tail window for an active-profile Hermes log file."""
+    query = parse_qs(parsed.query)
+    file_key = (query.get("file", ["agent"])[0] or "agent").strip().lower()
+    filename = _LOG_FILE_WHITELIST.get(file_key)
+    if not filename:
+        return bad(handler, "Unknown log file", status=400)
+
+    tail = _normalize_logs_tail(query.get("tail", [None])[0])
+    try:
+        from api.profiles import get_active_hermes_home
+
+        hermes_home = Path(get_active_hermes_home()).expanduser()
+    except Exception:
+        hermes_home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes")).expanduser()
+
+    log_dir = hermes_home / "logs"
+    log_path = log_dir / filename
+    try:
+        # Defense in depth: the filename is hardcoded above, but keep the final
+        # path anchored under the active profile's logs directory.
+        if log_path.resolve(strict=False).parent != log_dir.resolve(strict=False):
+            return bad(handler, "Invalid log file", status=400)
+        if not log_path.exists() or not log_path.is_file():
+            return j(handler, {
+                "file": file_key,
+                "tail": tail,
+                "lines": [],
+                "truncated": False,
+                "total_bytes": 0,
+                "mtime": None,
+                "hint": f"Log file for {file_key} not found yet.",
+            })
+        st = log_path.stat()
+        total_bytes = int(st.st_size)
+        read_bytes = min(total_bytes, _LOG_MAX_BYTES)
+        with log_path.open("rb") as fh:
+            if total_bytes > read_bytes:
+                fh.seek(total_bytes - read_bytes)
+            raw = fh.read(read_bytes)
+        text = raw.decode("utf-8", errors="replace")
+        lines = text.splitlines()[-tail:]
+        return j(handler, {
+            "file": file_key,
+            "tail": tail,
+            "lines": lines,
+            "truncated": total_bytes > read_bytes,
+            "total_bytes": total_bytes,
+            "mtime": st.st_mtime,
+            "hint": "",
+        })
+    except Exception as exc:
+        logger.exception("Failed to read whitelisted log file %s", file_key)
+        return bad(handler, _sanitize_error(exc), status=500)
+
 # ── Insights endpoint ──────────────────────────────────────────────────────────
+
+_LLM_WIKI_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/user-guide/skills/bundled/research/research-llm-wiki"
+_LLM_WIKI_PAGE_DIRS = ("entities", "concepts", "comparisons", "queries")
+
+
+def _llm_wiki_active_hermes_home() -> Path:
+    try:
+        from api.profiles import get_active_hermes_home
+        return Path(get_active_hermes_home()).expanduser()
+    except Exception:
+        return Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+
+
+def _llm_wiki_env_file_path(hermes_home: Path) -> str | None:
+    env_path = hermes_home / ".env"
+    if not env_path.exists() or not env_path.is_file():
+        return None
+    try:
+        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            if key.strip() != "WIKI_PATH":
+                continue
+            value = value.strip().strip('"').strip("'")
+            return value or None
+    except Exception:
+        return None
+    return None
+
+
+def _llm_wiki_get_config_path_value(config: dict, dotted_key: str) -> str | None:
+    if not isinstance(config, dict):
+        return None
+    if dotted_key in config and config.get(dotted_key):
+        return str(config.get(dotted_key))
+    cur = config
+    for part in dotted_key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return str(cur) if cur else None
+
+
+def _llm_wiki_config_path() -> str | None:
+    try:
+        from api.config import get_config as _get_cfg
+        cfg = _get_cfg()
+    except Exception:
+        return None
+    return (
+        _llm_wiki_get_config_path_value(cfg, "skills.config.wiki.path")
+        or _llm_wiki_get_config_path_value(cfg, "wiki.path")
+    )
+
+
+# Cap WIKI walks to prevent self-DoS if WIKI_PATH points at /, /etc, /home, etc.
+# Real LLM wikis have under a few thousand files; 10k is generous and catches misconfig.
+_LLM_WIKI_MAX_FILES = 10000
+# Refuse to walk these system roots even if explicitly configured.
+_LLM_WIKI_FORBIDDEN_ROOTS = frozenset(
+    str(Path(p).expanduser().resolve()) for p in ("/", "/etc", "/usr", "/var", "/opt", "/sys", "/proc")
+)
+
+
+def _llm_wiki_resolve_path() -> tuple[Path, str, bool]:
+    hermes_home = _llm_wiki_active_hermes_home()
+    raw = os.getenv("WIKI_PATH") or _llm_wiki_env_file_path(hermes_home)
+    source = "WIKI_PATH" if raw else "default"
+    configured = bool(raw)
+    if not raw:
+        raw = _llm_wiki_config_path()
+        if raw:
+            source = "skills.config.wiki.path"
+            configured = True
+    if not raw:
+        raw = "~/wiki"
+    return Path(os.path.expandvars(raw)).expanduser(), source, configured
+
+
+def _llm_wiki_safe_iso(ts: float | None) -> str | None:
+    if not ts:
+        return None
+    try:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return None
+
+
+def _llm_wiki_count_files(root: Path) -> int:
+    if not root.exists() or not root.is_dir():
+        return 0
+    # Defense in depth: refuse to walk forbidden system roots even if WIKI_PATH
+    # was set to one. The endpoint is auth-gated but a misconfigured server
+    # shouldn't self-DoS by rglob'ing all of /etc on every Insights load.
+    try:
+        if str(root.resolve()) in _LLM_WIKI_FORBIDDEN_ROOTS:
+            return 0
+    except Exception:
+        return 0
+    count = 0
+    iterated = 0
+    for item in root.rglob("*"):
+        iterated += 1
+        if iterated > _LLM_WIKI_MAX_FILES:
+            break  # bounded — prevents hangs on symlink loops or huge trees
+        try:
+            if item.is_file() and not any(part.startswith(".") for part in item.relative_to(root).parts):
+                count += 1
+        except Exception:
+            continue
+    return count
+
+
+def _llm_wiki_page_files(wiki_path: Path) -> list[Path]:
+    pages: list[Path] = []
+    # Defense in depth: refuse forbidden system roots.
+    try:
+        if str(wiki_path.resolve()) in _LLM_WIKI_FORBIDDEN_ROOTS:
+            return pages
+    except Exception:
+        return pages
+    iterated = 0
+    for dirname in _LLM_WIKI_PAGE_DIRS:
+        section = wiki_path / dirname
+        if not section.exists() or not section.is_dir():
+            continue
+        for item in section.rglob("*.md"):
+            iterated += 1
+            if iterated > _LLM_WIKI_MAX_FILES:
+                return pages  # bounded
+            try:
+                rel = item.relative_to(section)
+                if item.is_file() and not any(part.startswith(".") for part in rel.parts):
+                    pages.append(item)
+            except Exception:
+                continue
+    return pages
+
+
+def _build_llm_wiki_status() -> dict:
+    """Return private-safe LLM Wiki status metadata without reading page bodies."""
+    try:
+        wiki_path, path_source, path_configured = _llm_wiki_resolve_path()
+        base = {
+            "available": False,
+            "enabled": False,
+            "status": "missing",
+            "entry_count": 0,
+            "page_count": 0,
+            "raw_source_count": 0,
+            "last_updated": None,
+            "last_writer": None,
+            "path_configured": path_configured,
+            "path_source": path_source,
+            "toggle_available": False,
+            "toggle_reason": "Hermes Agent exposes WIKI_PATH/wiki.path for location, but no stable on/off config flag is currently available.",
+            "docs_url": _LLM_WIKI_DOCS_URL,
+        }
+        if not wiki_path.exists():
+            return base
+        if not wiki_path.is_dir():
+            base["status"] = "not_directory"
+            return base
+
+        page_files = _llm_wiki_page_files(wiki_path)
+        status_files = [p for p in (wiki_path / "SCHEMA.md", wiki_path / "index.md", wiki_path / "log.md") if p.exists() and p.is_file()]
+        status_files.extend(page_files)
+        latest = None
+        for item in status_files:
+            try:
+                mtime = item.stat().st_mtime
+            except Exception:
+                continue
+            latest = mtime if latest is None else max(latest, mtime)
+
+        base.update({
+            "available": True,
+            "enabled": True,
+            "status": "ready" if page_files else "empty",
+            "entry_count": len(page_files),
+            "page_count": len(page_files),
+            "raw_source_count": _llm_wiki_count_files(wiki_path / "raw"),
+            "last_updated": _llm_wiki_safe_iso(latest),
+        })
+        return base
+    except Exception as exc:
+        return {
+            "available": False,
+            "enabled": False,
+            "status": "error",
+            "entry_count": 0,
+            "page_count": 0,
+            "raw_source_count": 0,
+            "last_updated": None,
+            "last_writer": None,
+            "path_configured": False,
+            "path_source": "unknown",
+            "toggle_available": False,
+            "toggle_reason": "Unable to inspect LLM Wiki status safely.",
+            "docs_url": _LLM_WIKI_DOCS_URL,
+            "error": type(exc).__name__,
+        }
+
+
+def _handle_llm_wiki_status(handler, parsed) -> bool:
+    j(handler, _build_llm_wiki_status())
+    return True
+
 
 def _handle_insights(handler, parsed) -> bool:
     """Return usage analytics from local WebUI session data."""
@@ -1507,7 +1972,32 @@ def _handle_insights(handler, parsed) -> bool:
         days = 30
 
     now = _time.time()
-    cutoff = now - (days * 86400)
+    today = _time.localtime(now)
+    today_midnight = _time.mktime((today.tm_year, today.tm_mon, today.tm_mday, 0, 0, 0, today.tm_wday, today.tm_yday, today.tm_isdst))
+    day_secs = 86400
+    first_day_ts = today_midnight - ((days - 1) * day_secs)
+    cutoff = first_day_ts
+
+    def _safe_usage_int(value) -> int:
+        try:
+            return max(int(float(value or 0)), 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _safe_cost_float(value) -> float:
+        if value is None:
+            return 0.0
+        try:
+            if isinstance(value, str):
+                value = value.strip().replace("$", "").replace(",", "")
+                if not value:
+                    return 0.0
+            return max(float(value), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _session_usage_ts(session: dict) -> float:
+        return session.get("updated_at", session.get("created_at", 0)) or session.get("created_at", 0) or 0
 
     # Walk session index (fast, no full JSON parse)
     sessions_data = []
@@ -1523,7 +2013,7 @@ def _handle_insights(handler, parsed) -> bool:
     for entry in idx:
         created = entry.get("created_at", 0) or 0
         updated = entry.get("updated_at", 0) or 0
-        # Session is relevant if it was created or updated within the window
+        # Session is relevant if it was created or updated within the calendar window.
         if max(created, updated) < cutoff:
             continue
         sessions_data.append(entry)
@@ -1534,39 +2024,91 @@ def _handle_insights(handler, parsed) -> bool:
     total_input_tokens = 0
     total_output_tokens = 0
     total_cost = 0.0
-    model_counts = collections.Counter()
+    model_stats: dict[str, dict] = {}
+    daily_tokens: dict[str, dict] = {}
     # Activity by day of week (0=Mon .. 6=Sun)
     dow_activity = collections.Counter()
     # Activity by hour of day (0-23)
     hod_activity = collections.Counter()
 
     for s in sessions_data:
-        total_messages += max(s.get("message_count", 0) or 0, 0)
-        total_input_tokens += max(s.get("input_tokens", 0) or 0, 0)
-        total_output_tokens += max(s.get("output_tokens", 0) or 0, 0)
-        cost = s.get("estimated_cost")
-        if cost is not None:
-            try:
-                total_cost += float(cost)
-            except (ValueError, TypeError):
-                pass
+        input_tokens = _safe_usage_int(s.get("input_tokens"))
+        output_tokens = _safe_usage_int(s.get("output_tokens"))
+        cost_value = _safe_cost_float(s.get("estimated_cost"))
+        total_messages += _safe_usage_int(s.get("message_count"))
+        total_input_tokens += input_tokens
+        total_output_tokens += output_tokens
+        total_cost += cost_value
+
         model = s.get("model") or "unknown"
-        if model:
-            model_counts[model] += 1
+        bucket = model_stats.setdefault(model, {
+            "sessions": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost": 0.0,
+        })
+        bucket["sessions"] += 1
+        bucket["input_tokens"] += input_tokens
+        bucket["output_tokens"] += output_tokens
+        bucket["cost"] += cost_value
+
         # Activity patterns
-        ts = s.get("updated_at", s.get("created_at", 0)) or 0
+        ts = _session_usage_ts(s)
         if ts:
             try:
                 dt = _time.localtime(ts)
+                day_key = _time.strftime("%Y-%m-%d", dt)
+                daily_bucket = daily_tokens.setdefault(day_key, {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "sessions": 0,
+                    "cost": 0.0,
+                })
+                daily_bucket["input_tokens"] += input_tokens
+                daily_bucket["output_tokens"] += output_tokens
+                daily_bucket["sessions"] += 1
+                daily_bucket["cost"] += cost_value
                 dow_activity[dt.tm_wday] += 1
                 hod_activity[dt.tm_hour] += 1
             except Exception:
                 pass
 
     # Build model breakdown
+    total_tokens = total_input_tokens + total_output_tokens
     models_breakdown = []
-    for model, count in model_counts.most_common():
-        models_breakdown.append({"model": model, "sessions": count})
+    for model, stats in model_stats.items():
+        row_total_tokens = stats["input_tokens"] + stats["output_tokens"]
+        row_cost = round(stats["cost"], 6)
+        models_breakdown.append({
+            "model": model,
+            "sessions": stats["sessions"],
+            "input_tokens": stats["input_tokens"],
+            "output_tokens": stats["output_tokens"],
+            "total_tokens": row_total_tokens,
+            "cost": row_cost,
+            "session_share": int(round((stats["sessions"] / total_sessions) * 100)) if total_sessions else 0,
+            "token_share": int(round((row_total_tokens / total_tokens) * 100)) if total_tokens else 0,
+            "cost_share": int(round((row_cost / total_cost) * 100)) if total_cost else 0,
+        })
+    models_breakdown.sort(key=lambda r: (-r["cost"], -r["sessions"], r["model"]))
+
+    daily_series = []
+    for i in range(days):
+        day_ts = first_day_ts + (i * day_secs)
+        day_key = _time.strftime("%Y-%m-%d", _time.localtime(day_ts))
+        bucket = daily_tokens.get(day_key, {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "sessions": 0,
+            "cost": 0.0,
+        })
+        daily_series.append({
+            "date": day_key,
+            "input_tokens": bucket["input_tokens"],
+            "output_tokens": bucket["output_tokens"],
+            "sessions": bucket["sessions"],
+            "cost": round(bucket["cost"], 6),
+        })
 
     # Day-of-week labels
     dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -1581,15 +2123,240 @@ def _handle_insights(handler, parsed) -> bool:
         "total_messages": total_messages,
         "total_input_tokens": total_input_tokens,
         "total_output_tokens": total_output_tokens,
-        "total_tokens": total_input_tokens + total_output_tokens,
+        "total_tokens": total_tokens,
         "total_cost": round(total_cost, 6),
         "models": models_breakdown,
+        "daily_tokens": daily_series,
         "activity_by_day": dow_data,
         "activity_by_hour": hod_data,
     })
 
 
 # ── GET routes ────────────────────────────────────────────────────────────────
+
+
+def _accept_loop_health(handler) -> dict:
+    server = getattr(handler, "server", None)
+    return {
+        "requests_total": int(getattr(server, "accept_loop_requests_total", 0) or 0),
+        "last_request_at": round(float(getattr(server, "accept_loop_last_request_at", 0.0) or 0.0), 3),
+    }
+
+
+def _streams_lock_health(timeout_seconds: float = 0.5) -> dict:
+    t0 = time.time()
+    acquired = STREAMS_LOCK.acquire(timeout=timeout_seconds)
+    elapsed_ms = round((time.time() - t0) * 1000, 1)
+    if not acquired:
+        return {
+            "status": "blocked",
+            "timeout_seconds": timeout_seconds,
+            "ms": elapsed_ms,
+        }
+    try:
+        return {
+            "status": "ok",
+            "active_streams": len(STREAMS),
+            "ms": elapsed_ms,
+        }
+    finally:
+        STREAMS_LOCK.release()
+
+
+def _deep_health_checks(stream_check: dict | None = None) -> tuple[dict, bool]:
+    """Run cheap probes that exercise the state paths used by the UI shell.
+
+    Plain /health intentionally stays tiny. /health?deep=1 is for supervisors
+    and watchdogs that need to know whether the process can still touch the
+    shared stream map, sidebar/session path, project state, and Hermes state.db
+    without hitting the RST-before-write failure mode from #1458.
+
+    `stream_check` is the result from a prior `_streams_lock_health()` call;
+    if provided, it's reused so we don't acquire `STREAMS_LOCK` twice on the
+    same /health?deep=1 request (per Opus advisor on stage-297).
+    """
+    checks: dict[str, dict] = {}
+
+    checks["streams_lock"] = stream_check if stream_check is not None else _streams_lock_health()
+    if checks["streams_lock"].get("status") != "ok":
+        return checks, False
+
+    t0 = time.time()
+    try:
+        sessions = all_sessions()
+        checks["sessions"] = {
+            "status": "ok",
+            "count": len(sessions),
+            "ms": round((time.time() - t0) * 1000, 1),
+        }
+    except Exception as exc:
+        checks["sessions"] = {
+            "status": "error",
+            "error": type(exc).__name__,
+            "ms": round((time.time() - t0) * 1000, 1),
+        }
+
+    t0 = time.time()
+    try:
+        projects = load_projects(_migrate=False)
+        checks["projects"] = {
+            "status": "ok",
+            "count": len(projects),
+            "ms": round((time.time() - t0) * 1000, 1),
+        }
+    except Exception as exc:
+        checks["projects"] = {
+            "status": "error",
+            "error": type(exc).__name__,
+            "ms": round((time.time() - t0) * 1000, 1),
+        }
+
+    t0 = time.time()
+    try:
+        db_path = _active_state_db_path()
+        if not db_path.exists():
+            checks["state_db"] = {
+                "status": "missing",
+                "ms": round((time.time() - t0) * 1000, 1),
+            }
+        else:
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                conn.execute("PRAGMA schema_version").fetchone()
+            checks["state_db"] = {
+                "status": "ok",
+                "ms": round((time.time() - t0) * 1000, 1),
+            }
+    except Exception as exc:
+        checks["state_db"] = {
+            "status": "error",
+            "error": type(exc).__name__,
+            "ms": round((time.time() - t0) * 1000, 1),
+        }
+
+    healthy = all(
+        check.get("status") in {"ok", "missing"}
+        for check in checks.values()
+    )
+    return checks, healthy
+
+
+def _handle_health(handler, parsed):
+    deep = parse_qs(parsed.query or "").get("deep", [""])[0].lower() in {"1", "true", "yes", "on"}
+    stream_check = _streams_lock_health()
+    payload = {
+        "status": "ok" if stream_check.get("status") == "ok" else "degraded",
+        "sessions": len(SESSIONS),
+        "active_streams": int(stream_check.get("active_streams") or 0),
+        "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+        "accept_loop": _accept_loop_health(handler),
+    }
+    if deep:
+        if stream_check.get("status") != "ok":
+            payload["checks"] = {"streams_lock": stream_check}
+            return j(handler, payload, status=503)
+        checks, healthy = _deep_health_checks(stream_check=stream_check)
+        payload["checks"] = checks
+        if not healthy:
+            payload["status"] = "degraded"
+            return j(handler, payload, status=503)
+    if payload["status"] != "ok":
+        return j(handler, payload, status=503)
+    return j(handler, payload)
+
+
+# ── Plugin visibility endpoint (#539) ───────────────────────────────────────
+_PLUGIN_VISIBILITY_HOOKS = (
+    "pre_tool_call",
+    "post_tool_call",
+    "pre_llm_call",
+    "post_llm_call",
+)
+_PLUGIN_VISIBILITY_HOOK_SET = set(_PLUGIN_VISIBILITY_HOOKS)
+
+
+def _get_plugin_manager_for_visibility():
+    """Return Hermes Agent's plugin manager for read-only WebUI visibility."""
+    from hermes_cli.plugins import get_plugin_manager
+
+    return get_plugin_manager()
+
+
+def _clean_plugin_visibility_text(value, *, limit=240) -> str:
+    """Return bounded display text without path/callback-like internals."""
+    if value is None:
+        return ""
+    text = str(value).replace("\x00", "").strip()
+    # Display metadata should be plain labels/descriptions. Drop multiline text
+    # and common path separators rather than risk leaking local plugin paths.
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
+def _plugin_visibility_payload(manager=None) -> dict:
+    """Build a sanitized plugin/hook visibility payload for Settings.
+
+    The Hermes Agent manager stores manifests and callback objects internally.
+    This endpoint intentionally exposes only safe, user-facing metadata and the
+    four lifecycle hook names called out by the Settings visibility MVP. It
+    never includes plugin source paths, callback names, callback reprs, or raw
+    load errors because those can contain private filesystem details.
+    """
+    manager = manager or _get_plugin_manager_for_visibility()
+    manager.discover_and_load(force=False)
+
+    plugins = []
+    raw_plugins = getattr(manager, "_plugins", {}) or {}
+    for key, loaded in sorted(raw_plugins.items(), key=lambda item: str(item[0])):
+        manifest = getattr(loaded, "manifest", None)
+        if manifest is None:
+            continue
+        plugin_key = _clean_plugin_visibility_text(
+            getattr(manifest, "key", None) or key or getattr(manifest, "name", ""),
+            limit=120,
+        )
+        name = _clean_plugin_visibility_text(getattr(manifest, "name", "") or plugin_key, limit=120)
+        version = _clean_plugin_visibility_text(getattr(manifest, "version", ""), limit=80)
+        description = _clean_plugin_visibility_text(getattr(manifest, "description", ""), limit=280)
+        registered = []
+        for hook in list(getattr(manifest, "provides_hooks", []) or []) + list(getattr(loaded, "hooks_registered", []) or []):
+            hook_name = str(hook or "").strip()
+            if hook_name in _PLUGIN_VISIBILITY_HOOK_SET and hook_name not in registered:
+                registered.append(hook_name)
+        registered.sort(key=_PLUGIN_VISIBILITY_HOOKS.index)
+        plugins.append({
+            "name": name,
+            "key": plugin_key or name,
+            "version": version,
+            "description": description,
+            "enabled": bool(getattr(loaded, "enabled", False)),
+            "hooks": registered,
+        })
+
+    return {
+        "plugins": plugins,
+        "empty": not bool(plugins),
+        "supported_hooks": list(_PLUGIN_VISIBILITY_HOOKS),
+        "read_only": True,
+    }
+
+
+def _handle_plugins(handler, parsed) -> bool:
+    try:
+        return j(handler, _plugin_visibility_payload())
+    except Exception as exc:
+        logger.warning("Failed to build plugin visibility payload: %s", exc)
+        return j(
+            handler,
+            {
+                "plugins": [],
+                "empty": True,
+                "supported_hooks": list(_PLUGIN_VISIBILITY_HOOKS),
+                "read_only": True,
+                "unavailable": True,
+            },
+        )
 
 
 def handle_get(handler, parsed) -> bool:
@@ -1705,22 +2472,24 @@ def handle_get(handler, parsed) -> bool:
             handler.end_headers()
         return True
 
-    # ── Insights ──
+    # ── Insights / knowledge status ──
     if parsed.path == "/api/insights":
         return _handle_insights(handler, parsed)
 
+    if parsed.path.startswith("/api/kanban/"):
+        from api.kanban_bridge import handle_kanban_get
+
+        return handle_kanban_get(handler, parsed)
+    if parsed.path == "/api/wiki/status":
+        return _handle_llm_wiki_status(handler, parsed)
+    if parsed.path == "/api/logs":
+        return _handle_logs(handler, parsed)
+
     if parsed.path == "/health":
-        with STREAMS_LOCK:
-            n_streams = len(STREAMS)
-        return j(
-            handler,
-            {
-                "status": "ok",
-                "sessions": len(SESSIONS),
-                "active_streams": n_streams,
-                "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
-            },
-        )
+        return _handle_health(handler, parsed)
+
+    if parsed.path == "/api/health/agent":
+        return j(handler, build_agent_health_payload())
 
     if parsed.path == "/api/models":
         return j(handler, get_available_models())
@@ -1728,9 +2497,32 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/models/live":
         return _handle_live_models(handler, parsed)
 
+    if parsed.path == "/api/dashboard/status":
+        from api import dashboard_probe
+
+        j(handler, dashboard_probe.get_dashboard_status())
+        return True
+
+    if parsed.path == "/api/dashboard/config":
+        from api import dashboard_probe
+
+        try:
+            j(handler, dashboard_probe.get_dashboard_config())
+        except ValueError as exc:
+            bad(handler, str(exc), status=400)
+        return True
+
     # ── Providers (GET) ──
     if parsed.path == "/api/providers":
         return j(handler, get_providers())
+
+    # ── Plugins/hooks visibility (read-only, no callback/source internals) ──
+    if parsed.path == "/api/plugins":
+        return _handle_plugins(handler, parsed)
+    if parsed.path == "/api/provider/quota":
+        query = parse_qs(parsed.query)
+        provider_id = (query.get("provider", [""])[0] or None)
+        return j(handler, get_provider_quota(provider_id))
 
     if parsed.path == "/api/settings":
         settings = load_settings()
@@ -1746,8 +2538,9 @@ def handle_get(handler, parsed) -> bool:
         # Inject the running version so the UI badge stays in sync with git tags
         # without any manual release step.
         try:
-            from api.updates import WEBUI_VERSION
+            from api.updates import AGENT_VERSION, WEBUI_VERSION
             settings["webui_version"] = WEBUI_VERSION
+            settings["agent_version"] = AGENT_VERSION
         except Exception:
             pass
         return j(handler, settings)
@@ -1933,6 +2726,7 @@ def handle_get(handler, parsed) -> bool:
                     "raw_source": (cli_meta or {}).get("raw_source"),
                     "session_source": (cli_meta or {}).get("session_source"),
                     "source_label": (cli_meta or {}).get("source_label"),
+                    "read_only": bool((cli_meta or {}).get("read_only")),
                     "messages": msgs,
                     "tool_calls": [],
                 }
@@ -1977,7 +2771,8 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/sessions":
         webui_sessions = all_sessions()
         settings = load_settings()
-        if settings.get("show_cli_sessions"):
+        show_cli_sessions = bool(settings.get("show_cli_sessions"))
+        if show_cli_sessions:
             cli = get_cli_sessions()
             cli_by_id = {s["session_id"]: s for s in cli}
             for s in webui_sessions:
@@ -1992,21 +2787,49 @@ def handle_get(handler, parsed) -> bool:
                     for key in ("source_tag", "raw_source", "session_source", "source_label"):
                         if not s.get(key) and meta.get(key):
                             s[key] = meta[key]
+            # Apply the same CLI visibility semantics to imported local copies so
+            # low-value imported artifacts do not leak into the sidebar.
+            webui_sessions = [s for s in webui_sessions if is_cli_session_row_visible(s)]
             webui_ids = {s["session_id"] for s in webui_sessions}
             from api.models import _hide_from_default_sidebar as _cron_hide
-            deduped_cli = [s for s in cli
-                           if s["session_id"] not in webui_ids
-                           and not _cron_hide(s)]
+            deduped_cli = [s for s in cli if s["session_id"] not in webui_ids and is_cli_session_row_visible(s) and not _cron_hide(s)]
         else:
+            webui_sessions = [s for s in webui_sessions if not _is_cli_session_for_settings(s)]
             deduped_cli = []
         merged = webui_sessions + deduped_cli
         merged.sort(
             key=lambda s: s.get("last_message_at") or s.get("updated_at", 0) or 0,
             reverse=True,
         )
-        merged = _keep_latest_messaging_session_per_source(merged)
+        # ── Profile scoping (#1611) ────────────────────────────────────────
+        # Default: filter to the active profile. ?all_profiles=1 opts into
+        # the aggregate view used by the "All profiles" sidebar toggle.
+        # The other_profile_count is always returned so the UI can render
+        # the "Show N from other profiles" affordance without sending the
+        # cross-profile rows by default.
+        #
+        # IMPORTANT: scope BEFORE _keep_latest_messaging_session_per_source.
+        # _messaging_source_key is profile-blind (#1614 follow-up): if the
+        # same Slack/Telegram identity has sessions in profiles A and B, a
+        # profile-blind dedupe would discard the older one even when scoped
+        # to its own profile, leaving that profile with zero rows for that
+        # source. Filter first so the dedupe operates only within the active
+        # profile's rows.
+        from api.profiles import get_active_profile_name
+        active_profile = get_active_profile_name()
+        all_profiles = _all_profiles_query_flag(parsed)
+        if all_profiles:
+            scoped = merged
+            other_profile_count = 0
+        else:
+            scoped = [s for s in merged
+                      if _profiles_match(s.get("profile"), active_profile)]
+            other_profile_count = len(merged) - len(scoped)
+        scoped = _keep_latest_messaging_session_per_source(scoped)
+        if show_cli_sessions:
+            scoped = _cap_recent_cli_sessions(scoped, cli_cap=CLI_VISIBLE_SESSION_CAP)
         safe_merged = []
-        for s in merged:
+        for s in scoped:
             item = dict(s)
             if isinstance(item.get("title"), str):
                 item["title"] = _redact_text(item["title"])
@@ -2014,12 +2837,32 @@ def handle_get(handler, parsed) -> bool:
         return j(handler, {
             "sessions": safe_merged,
             "cli_count": len(deduped_cli),
+            "all_profiles": all_profiles,
+            "active_profile": active_profile,
+            "other_profile_count": other_profile_count,
             "server_time": time.time(),
             "server_tz": time.strftime("%z"),
         })
 
     if parsed.path == "/api/projects":
-        return j(handler, {"projects": load_projects()})
+        # ── Profile scoping (#1614) ────────────────────────────────────────
+        # Default: filter to the active profile. ?all_profiles=1 returns the
+        # aggregate list so settings/admin UIs can still see everything.
+        from api.profiles import get_active_profile_name
+        active_profile = get_active_profile_name()
+        all_projects = load_projects()
+        all_profiles = _all_profiles_query_flag(parsed)
+        if all_profiles:
+            scoped = all_projects
+        else:
+            scoped = [p for p in all_projects
+                      if _profiles_match(p.get("profile"), active_profile)]
+        return j(handler, {
+            "projects": scoped,
+            "all_profiles": all_profiles,
+            "active_profile": active_profile,
+            "other_profile_count": len(all_projects) - len(scoped),
+        })
 
     if parsed.path == "/api/session/export":
         return _handle_session_export(handler, parsed)
@@ -2174,38 +3017,19 @@ def handle_get(handler, parsed) -> bool:
             return j(handler, {"error": "not found"}, status=404)
         return _handle_clarify_inject(handler, parsed)
 
-    # ── OAuth (Codex device-code) ──
-    if parsed.path == "/api/oauth/codex/start":
-        """Start Codex device-code OAuth flow. Returns user_code + verification_uri."""
-        try:
-            from api.oauth import start_codex_device_code
-            result = start_codex_device_code()
-            return j(handler, result)
-        except Exception as e:
-            return j(handler, {"error": str(e)}, status=500)
-
-    if parsed.path == "/api/oauth/codex/poll":
-        """SSE endpoint for polling Codex OAuth token."""
+    if parsed.path == "/api/onboarding/oauth/poll":
         qs = parse_qs(parsed.query)
-        device_code = qs.get("device_code", [""])[0]
-        if not device_code:
-            return j(handler, {"error": "device_code required"}, status=400)
-        handler.send_response(200)
-        handler.send_header("Content-Type", "text/event-stream")
-        handler.send_header("Cache-Control", "no-cache")
-        handler.send_header("Connection", "keep-alive")
-        handler.end_headers()
+        flow_id = qs.get("flow_id", [""])[0]
         try:
-            from api.oauth import poll_codex_token
-            for event in poll_codex_token(device_code):
-                handler.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
-                handler.wfile.flush()
-                if event.get("status") in ("success", "error"):
-                    break
-        except Exception as e:
-            handler.wfile.write(f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n".encode())
-            handler.wfile.flush()
-        return  # SSE handled, no JSON response
+            return j(
+                handler,
+                poll_onboarding_oauth_flow(flow_id),
+                extra_headers={"Cache-Control": "no-store"},
+            )
+        except ValueError as e:
+            return bad(handler, str(e))
+        except KeyError as e:
+            return bad(handler, str(e), 404)
 
     # ── Cron API (GET) ──
     # All cron handlers touch cron.jobs which resolves HERMES_HOME from
@@ -2216,7 +3040,7 @@ def handle_get(handler, parsed) -> bool:
         from api.profiles import cron_profile_context
 
         with cron_profile_context():
-            return j(handler, {"jobs": list_jobs(include_disabled=True)})
+            return j(handler, {"jobs": _cron_jobs_for_api(list_jobs(include_disabled=True))})
 
     if parsed.path == "/api/crons/output":
         from api.profiles import cron_profile_context
@@ -2356,6 +3180,10 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/mcp/servers":
         return _handle_mcp_servers_list(handler)
 
+    # ── MCP Tools (GET) ──
+    if parsed.path == "/api/mcp/tools":
+        return _handle_mcp_tools_list(handler)
+
     # ── Checkpoints / Rollback (GET) ──
     if parsed.path == "/api/rollback/list":
         qs = parse_qs(parsed.query)
@@ -2407,6 +3235,22 @@ def handle_post(handler, parsed) -> bool:
         return handle_transcribe(handler)
 
     body = read_body(handler)
+
+    if parsed.path.startswith("/api/kanban/"):
+        from api.kanban_bridge import handle_kanban_post
+
+        return handle_kanban_post(handler, parsed, body)
+    if parsed.path == "/api/dashboard/config":
+        from api import dashboard_probe
+
+        try:
+            j(handler, dashboard_probe.save_dashboard_config(body))
+        except ValueError as exc:
+            bad(handler, str(exc), status=400)
+        except Exception as exc:
+            logger.exception("dashboard config save failed")
+            bad(handler, str(exc), status=500)
+        return True
 
     if parsed.path == "/api/session/new":
         try:
@@ -2694,6 +3538,9 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "session_id is required")
         if not all(c in '0123456789abcdefghijklmnopqrstuvwxyz_' for c in sid):
             return bad(handler, "Invalid session_id", 400)
+        cli_meta_for_delete = _lookup_cli_session_metadata(sid)
+        if cli_meta_for_delete.get("read_only"):
+            return bad(handler, "Read-only imported sessions cannot be deleted from WebUI", 400)
         is_messaging_session = _is_messaging_session_id(sid)
         # Delete from WebUI session store
         with LOCK:
@@ -3175,6 +4022,34 @@ def handle_post(handler, parsed) -> bool:
         handler.wfile.write(response_body)
         return True
 
+    if parsed.path == "/api/onboarding/oauth/start":
+        from api.auth import is_auth_enabled
+        import os as _os
+        if not is_auth_enabled() and not _os.getenv("HERMES_WEBUI_ONBOARDING_OPEN"):
+            import ipaddress
+            try:
+                _xff = handler.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                _xri = handler.headers.get("X-Real-IP", "").strip()
+                _raw = handler.client_address[0]
+                addr = ipaddress.ip_address(_xff or _xri or _raw)
+                is_local = addr.is_loopback or addr.is_private
+            except ValueError:
+                is_local = False
+            if not is_local:
+                return bad(handler, "Onboarding OAuth is only available from local networks when auth is not enabled. To bypass this on a remote server, set HERMES_WEBUI_ONBOARDING_OPEN=1.", 403)
+        try:
+            return j(handler, start_onboarding_oauth_flow(body), extra_headers={"Cache-Control": "no-store"})
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), 500)
+
+    if parsed.path == "/api/onboarding/oauth/cancel":
+        try:
+            return j(handler, cancel_onboarding_oauth_flow(body), extra_headers={"Cache-Control": "no-store"})
+        except ValueError as e:
+            return bad(handler, str(e))
+
     if parsed.path == "/api/onboarding/setup":
         # Writing API keys to disk - restrict to local/private networks unless auth is active.
         # In Docker, requests arrive from the bridge network (172.x.x.x), not 127.0.0.1,
@@ -3267,6 +4142,8 @@ def handle_post(handler, parsed) -> bool:
             cli_meta = _lookup_cli_session_metadata(sid)
             if not cli_meta:
                 return bad(handler, "Session not found", 404)
+            if cli_meta.get("read_only"):
+                return bad(handler, "Read-only imported sessions cannot be archived from WebUI", 400)
             if _is_messaging_session_record(cli_meta):
                 s = Session(
                     session_id=sid,
@@ -3328,8 +4205,21 @@ def handle_post(handler, parsed) -> bool:
             s = get_session(body["session_id"])
         except KeyError:
             return bad(handler, "Session not found", 404)
+        # #1614: refuse moves into a project owned by another profile.
+        target_pid = body.get("project_id") or None
+        if target_pid:
+            from api.profiles import get_active_profile_name
+            active_profile = get_active_profile_name()
+            target = next(
+                (p for p in load_projects() if p["project_id"] == target_pid),
+                None,
+            )
+            if not target:
+                return bad(handler, "Project not found", 404)
+            if not _profiles_match(target.get("profile"), active_profile):
+                return bad(handler, "Project not found", 404)
         with _get_session_agent_lock(body["session_id"]):
-            s.project_id = body.get("project_id") or None
+            s.project_id = target_pid
             s.save()
         return j(handler, {"ok": True, "session": s.compact()})
 
@@ -3340,6 +4230,7 @@ def handle_post(handler, parsed) -> bool:
         except ValueError as e:
             return bad(handler, str(e))
         import re as _re
+        from api.profiles import get_active_profile_name
 
         name = body["name"].strip()[:128]
         if not name:
@@ -3352,6 +4243,7 @@ def handle_post(handler, parsed) -> bool:
             "project_id": uuid.uuid4().hex[:12],
             "name": name,
             "color": color,
+            "profile": get_active_profile_name() or 'default',
             "created_at": time.time(),
         }
         projects.append(proj)
@@ -3364,12 +4256,17 @@ def handle_post(handler, parsed) -> bool:
         except ValueError as e:
             return bad(handler, str(e))
         import re as _re
+        from api.profiles import get_active_profile_name
 
         projects = load_projects()
         proj = next(
             (p for p in projects if p["project_id"] == body["project_id"]), None
         )
         if not proj:
+            return bad(handler, "Project not found", 404)
+        # #1614: a project can only be renamed by the profile that owns it.
+        active_profile = get_active_profile_name()
+        if not _profiles_match(proj.get("profile"), active_profile):
             return bad(handler, "Project not found", 404)
         proj["name"] = body["name"].strip()[:128]
         if "color" in body:
@@ -3385,11 +4282,16 @@ def handle_post(handler, parsed) -> bool:
             require(body, "project_id")
         except ValueError as e:
             return bad(handler, str(e))
+        from api.profiles import get_active_profile_name
         projects = load_projects()
         proj = next(
             (p for p in projects if p["project_id"] == body["project_id"]), None
         )
         if not proj:
+            return bad(handler, "Project not found", 404)
+        # #1614: a project can only be deleted by the profile that owns it.
+        active_profile = get_active_profile_name()
+        if not _profiles_match(proj.get("profile"), active_profile):
             return bad(handler, "Project not found", 404)
         projects = [p for p in projects if p["project_id"] != body["project_id"]]
         save_projects(projects)
@@ -3500,6 +4402,30 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e), status=500)
 
     return False  # 404
+
+
+def handle_patch(handler, parsed) -> bool:
+    """Handle all PATCH routes. Returns True if handled, False for 404."""
+    if not _check_csrf(handler):
+        return j(handler, {"error": "Cross-origin request rejected"}, status=403)
+    body = read_body(handler)
+    if parsed.path.startswith("/api/kanban/"):
+        from api.kanban_bridge import handle_kanban_patch
+
+        return handle_kanban_patch(handler, parsed, body)
+    return False
+
+
+def handle_delete(handler, parsed) -> bool:
+    """Handle all DELETE routes. Returns True if handled, False for 404."""
+    if not _check_csrf(handler):
+        return j(handler, {"error": "Cross-origin request rejected"}, status=403)
+    body = read_body(handler)
+    if parsed.path.startswith("/api/kanban/"):
+        from api.kanban_bridge import handle_kanban_delete
+
+        return handle_kanban_delete(handler, parsed, body)
+    return False
 
 # ── GET route helpers ─────────────────────────────────────────────────────────
 
@@ -3649,9 +4575,10 @@ def _handle_list_dir(handler, parsed):
 
 def _handle_sse_stream(handler, parsed):
     stream_id = parse_qs(parsed.query).get("stream_id", [""])[0]
-    q = STREAMS.get(stream_id)
-    if q is None:
+    stream = STREAMS.get(stream_id)
+    if stream is None:
         return j(handler, {"error": "stream not found"}, status=404)
+    subscriber = stream.subscribe() if hasattr(stream, "subscribe") else stream
     handler.send_response(200)
     handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
     handler.send_header("Cache-Control", "no-cache")
@@ -3661,7 +4588,7 @@ def _handle_sse_stream(handler, parsed):
     try:
         while True:
             try:
-                event, data = q.get(timeout=30)
+                event, data = subscriber.get(timeout=_SSE_HEARTBEAT_INTERVAL_SECONDS)
             except queue.Empty:
                 handler.wfile.write(b": heartbeat\n\n")
                 handler.wfile.flush()
@@ -3671,6 +4598,12 @@ def _handle_sse_stream(handler, parsed):
                 break
     except _CLIENT_DISCONNECT_ERRORS:
         pass
+    finally:
+        if subscriber is not stream and hasattr(stream, "unsubscribe"):
+            try:
+                stream.unsubscribe(subscriber)
+            except Exception:
+                pass
     return True
 
 
@@ -3778,7 +4711,7 @@ def _handle_terminal_output(handler, parsed):
     try:
         while True:
             try:
-                event, data = term.output.get(timeout=25)
+                event, data = term.output.get(timeout=_SSE_HEARTBEAT_INTERVAL_SECONDS)
             except queue.Empty:
                 handler.wfile.write(b": terminal heartbeat\n\n")
                 handler.wfile.flush()
@@ -3863,7 +4796,7 @@ def _handle_gateway_sse_stream(handler, parsed):
 
         while True:
             try:
-                event_data = q.get(timeout=30)
+                event_data = q.get(timeout=_SSE_HEARTBEAT_INTERVAL_SECONDS)
             except queue.Empty:
                 handler.wfile.write(b': keepalive\n\n')
                 handler.wfile.flush()
@@ -4186,7 +5119,7 @@ def _handle_approval_sse_stream(handler, parsed):
     try:
         while True:
             try:
-                payload = q.get(timeout=30)
+                payload = q.get(timeout=_SSE_HEARTBEAT_INTERVAL_SECONDS)
             except queue.Empty:
                 # Keepalive — SSE comment line prevents proxy/CDN timeout.
                 handler.wfile.write(b': keepalive\n\n')
@@ -4287,7 +5220,7 @@ def _handle_clarify_sse_stream(handler, parsed):
     try:
         while True:
             try:
-                payload = q.get(timeout=30)
+                payload = q.get(timeout=_SSE_HEARTBEAT_INTERVAL_SECONDS)
             except queue.Empty:
                 handler.wfile.write(b': keepalive\n\n')
                 handler.wfile.flush()
@@ -4386,11 +5319,12 @@ def _handle_live_models(handler, parsed):
             ids = []
 
         if not ids:
-            # For 'custom' provider, provider_model_ids() returns [] because
-            # 'custom' isn't a real endpoint.  Fall back to the custom_providers
-            # entries from config.yaml so the live-model enrichment step can
-            # add any models that weren't already in the static list.
-            if provider == "custom":
+            # For 'custom' and 'custom:*' providers, provider_model_ids()
+            # returns [] because they aren't real hermes_cli endpoints.
+            # Fall back to the custom_providers entries from config.yaml so
+            # the live-model enrichment step can add any models that weren't
+            # already in the static list (issue #1619).
+            if provider == "custom" or provider.startswith("custom:"):
                 try:
                     _cp_entries = cfg.get("custom_providers", [])
                     if isinstance(_cp_entries, list):
@@ -4402,8 +5336,8 @@ def _handle_live_models(handler, parsed):
                 except Exception:
                     pass
             
-            # If still no ids, try fetching from model.base_url directly (OpenAI-compat endpoint)
-            if not ids and provider == "custom":
+            # If still no ids, try fetching from base_url directly (OpenAI-compat endpoint)
+            if not ids and (provider == "custom" or provider.startswith("custom:")):
                 _base_url = cfg.get("model", {}).get("base_url")
                 _api_key = cfg.get("model", {}).get("api_key")
                 if _base_url and _api_key:
@@ -4812,9 +5746,9 @@ def _handle_btw(handler, body):
     stream_id = uuid.uuid4().hex
     ephemeral.active_stream_id = stream_id
     ephemeral.save()
-    q = queue.Queue()
+    stream = create_stream_channel()
     with STREAMS_LOCK:
-        STREAMS[stream_id] = q
+        STREAMS[stream_id] = stream
     from api.background import track_btw
     track_btw(body["session_id"], ephemeral.session_id, stream_id, question)
     thr = threading.Thread(
@@ -4858,9 +5792,9 @@ def _handle_background(handler, body):
     stream_id = uuid.uuid4().hex
     bg.active_stream_id = stream_id
     bg.save()
-    q = queue.Queue()
+    stream = create_stream_channel()
     with STREAMS_LOCK:
-        STREAMS[stream_id] = q
+        STREAMS[stream_id] = stream
     task_id = uuid.uuid4().hex[:8]
     from api.background import track_background, complete_background
     parent_sid = body["session_id"]
@@ -4918,6 +5852,68 @@ def _handle_background(handler, body):
     return j(handler, {"task_id": task_id, "stream_id": stream_id, "session_id": bg.session_id})
 
 
+def _checkpoint_user_message_for_eager_session_save(s, msg: str, attachments, started_at: float | None) -> None:
+    """Materialize the current user turn for eager first-turn persistence.
+
+    The streaming thread still receives ``pending_user_message`` so existing
+    cancel/recovery/final-merge paths keep their current contract. Eager mode
+    only adds a durable display-message checkpoint before the agent launches.
+    """
+    if not msg:
+        return
+    existing = list(getattr(s, "messages", None) or [])
+    if existing:
+        latest = existing[-1]
+        if isinstance(latest, dict) and latest.get("role") == "user":
+            latest_text = " ".join(str(latest.get("content") or "").split())
+            msg_text = " ".join(str(msg or "").split())
+            if latest_text == msg_text:
+                return
+    user_msg = {"role": "user", "content": msg}
+    if isinstance(started_at, (int, float)) and started_at > 0:
+        user_msg["timestamp"] = int(started_at)
+    if attachments:
+        user_msg["attachments"] = list(attachments)
+    s.messages.append(user_msg)
+
+
+def _prepare_chat_start_session_for_stream(
+    s,
+    *,
+    msg: str,
+    attachments,
+    workspace: str,
+    model: str,
+    model_provider,
+    stream_id: str,
+    started_at: float | None = None,
+):
+    """Persist chat-start state according to webui.session_save_mode.
+
+    ``deferred`` keeps the existing sidecar/WAL-backed behaviour: save pending
+    fields but leave the display transcript empty until the agent merges the
+    result. ``eager`` additionally writes the current user turn into messages so
+    a process restart immediately after /api/chat/start preserves the prompt as
+    a normal session message. Empty sessions are never saved here because this
+    helper only runs after a non-empty message is validated.
+    """
+    s.workspace = workspace
+    s.model = model
+    s.model_provider = model_provider
+    s.active_stream_id = stream_id
+    s.pending_user_message = msg
+    s.pending_attachments = attachments
+    s.pending_started_at = started_at if started_at is not None else time.time()
+    if get_webui_session_save_mode() == "eager":
+        _checkpoint_user_message_for_eager_session_save(
+            s,
+            msg,
+            attachments,
+            s.pending_started_at,
+        )
+    s.save()
+
+
 def _handle_chat_start(handler, body):
     try:
         require(body, "session_id")
@@ -4965,18 +5961,19 @@ def _handle_chat_start(handler, body):
         _clear_stale_stream_state(s)
     stream_id = uuid.uuid4().hex
     with _get_session_agent_lock(s.session_id):
-        s.workspace = workspace
-        s.model = model
-        s.model_provider = model_provider
-        s.active_stream_id = stream_id
-        s.pending_user_message = msg
-        s.pending_attachments = attachments
-        s.pending_started_at = time.time()
-        s.save()
+        _prepare_chat_start_session_for_stream(
+            s,
+            msg=msg,
+            attachments=attachments,
+            workspace=workspace,
+            model=model,
+            model_provider=model_provider,
+            stream_id=stream_id,
+        )
     set_last_workspace(workspace)
-    q = queue.Queue()
+    stream = create_stream_channel()
     with STREAMS_LOCK:
-        STREAMS[stream_id] = q
+        STREAMS[stream_id] = stream
     thr = threading.Thread(
         target=_run_agent_streaming,
         args=(s.session_id, msg, model, workspace, stream_id, attachments),
@@ -5180,8 +6177,9 @@ def _handle_cron_create(handler, body):
     except ValueError as e:
         return bad(handler, str(e))
     try:
-        from cron.jobs import create_job
+        from cron.jobs import create_job, update_job
 
+        profile = _normalize_cron_profile_value(body.get("profile"))
         job = create_job(
             prompt=body["prompt"],
             schedule=body["schedule"],
@@ -5190,7 +6188,9 @@ def _handle_cron_create(handler, body):
             skills=body.get("skills") or [],
             model=body.get("model") or None,
         )
-        return j(handler, {"ok": True, "job": job})
+        if profile is not None:
+            job = update_job(job["id"], {"profile": profile}) or job
+        return j(handler, {"ok": True, "job": _cron_job_for_api(job)})
     except Exception as e:
         return j(handler, {"error": str(e)}, status=400)
 
@@ -5202,11 +6202,21 @@ def _handle_cron_update(handler, body):
         return bad(handler, str(e))
     from cron.jobs import update_job
 
-    updates = {k: v for k, v in body.items() if k != "job_id" and v is not None}
+    try:
+        updates = {}
+        for k, v in body.items():
+            if k == "job_id":
+                continue
+            if k == "profile":
+                updates[k] = _normalize_cron_profile_value(v)
+            elif v is not None:
+                updates[k] = v
+    except ValueError as e:
+        return bad(handler, str(e))
     job = update_job(body["job_id"], updates)
     if not job:
         return bad(handler, "Job not found", 404)
-    return j(handler, {"ok": True, "job": job})
+    return j(handler, {"ok": True, "job": _cron_job_for_api(job)})
 
 
 def _handle_cron_delete(handler, body):
@@ -5252,7 +6262,8 @@ def _handle_cron_run(handler, body):
     from api.profiles import get_active_hermes_home
 
     _profile_home = get_active_hermes_home()
-    threading.Thread(target=_run_cron_tracked, args=(job, _profile_home), daemon=True).start()
+    _execution_profile_home = _profile_home_for_cron_job(job)
+    threading.Thread(target=_run_cron_tracked, args=(job, _profile_home, _execution_profile_home), daemon=True).start()
     return j(handler, {"ok": True, "job_id": job_id, "status": "running"})
 
 
@@ -6659,6 +7670,7 @@ def _handle_session_import_cli(handler, body):
                 | {
                     "messages": existing.messages,
                     "is_cli_session": True,
+                    "read_only": bool((cli_meta or {}).get("read_only")),
                 },
                 "imported": False,
             },
@@ -6685,6 +7697,7 @@ def _handle_session_import_cli(handler, body):
     cli_thread_id = None
     cli_session_key = None
     cli_platform = None
+    cli_read_only = False
     for cs in get_cli_sessions():
         if cs["session_id"] == sid:
             profile = cs.get("profile")
@@ -6702,6 +7715,7 @@ def _handle_session_import_cli(handler, body):
             cli_thread_id = cs.get("thread_id")
             cli_session_key = cs.get("session_key")
             cli_platform = cs.get("platform")
+            cli_read_only = bool(cs.get("read_only"))
             break
 
     # Use the CLI session title if available (e.g., cron job name), otherwise derive from messages
@@ -6711,6 +7725,31 @@ def _handle_session_import_cli(handler, body):
     cron_project_id = None
     if is_cron_session(sid, cli_source_tag):
         cron_project_id = ensure_cron_project()
+
+    if cli_read_only:
+        session_payload = {
+            "session_id": sid,
+            "title": title,
+            "workspace": str(get_last_workspace()),
+            "model": model,
+            "message_count": len(msgs),
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "last_message_at": updated_at or created_at,
+            "pinned": False,
+            "archived": False,
+            "project_id": None,
+            "profile": profile,
+            "is_cli_session": True,
+            "source_tag": cli_source_tag,
+            "raw_source": cli_raw_source or cli_source_tag,
+            "session_source": cli_session_source,
+            "source_label": cli_source_label,
+            "read_only": True,
+            "messages": msgs,
+            "tool_calls": [],
+        }
+        return j(handler, {"session": session_payload, "imported": False})
 
     s = import_cli_session(
         sid,
@@ -6795,33 +7834,291 @@ def _mask_secrets(obj):
     return masked
 
 
-def _server_summary(name, cfg):
+def _parse_mcp_enabled(value) -> bool:
+    """Parse Hermes MCP ``enabled`` values without raising on bad config."""
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return True
+
+
+def _mcp_runtime_status_by_name() -> dict[str, dict]:
+    """Return already-known MCP runtime status without starting servers.
+
+    ``tools.mcp_tool.get_mcp_status()`` only reads the existing MCP registry and
+    configuration; it does not probe or spawn MCP subprocesses. If Hermes Agent
+    is unavailable, fall back to an empty map so the API remains safe.
+    """
+    try:
+        from tools.mcp_tool import get_mcp_status
+        statuses = get_mcp_status()
+    except Exception:
+        return {}
+    if not isinstance(statuses, list):
+        return {}
+    return {
+        str(entry.get("name")): entry
+        for entry in statuses
+        if isinstance(entry, dict) and entry.get("name")
+    }
+
+
+def _server_summary(name, cfg, runtime_status=None):
     """Return a safe summary of an MCP server config."""
+    runtime_status = runtime_status if isinstance(runtime_status, dict) else {}
     out = {"name": name}
+    if not isinstance(cfg, dict):
+        out.update({
+            "transport": "invalid",
+            "timeout": 120,
+            "connect_timeout": 60,
+            "enabled": False,
+            "active": False,
+            "status": "invalid_config",
+            "tool_count": None,
+        })
+        return out
+
+    enabled = _parse_mcp_enabled(cfg.get("enabled", True))
+    connected = bool(runtime_status.get("connected")) if enabled else False
     if "url" in cfg:
         out["transport"] = "http"
         # Mask auth headers
         if "headers" in cfg:
             out["headers"] = _mask_secrets(cfg["headers"])
         out["url"] = cfg["url"]
-    else:
+    elif "command" in cfg:
         out["transport"] = "stdio"
         out["command"] = cfg.get("command", "")
         out["args"] = cfg.get("args", [])
         if "env" in cfg:
             out["env"] = _mask_secrets(cfg["env"])
+    else:
+        out["transport"] = "invalid"
+        enabled = False
+        connected = False
+
     out["timeout"] = cfg.get("timeout", 120)
+    out["connect_timeout"] = cfg.get("connect_timeout", 60)
+    out["enabled"] = enabled
+    out["active"] = connected
+    if out["transport"] == "invalid":
+        out["status"] = "invalid_config"
+    elif not enabled:
+        out["status"] = "disabled"
+    elif connected:
+        out["status"] = "active"
+    else:
+        out["status"] = "configured"
+    out["tool_count"] = runtime_status.get("tools") if runtime_status else None
     return out
 
 
-def _handle_mcp_servers_list(handler):
-    """List all configured MCP servers."""
+def _mcp_safe_display_text(value, *, limit: int) -> str:
+    """Return redacted, bounded MCP text safe for WebUI inventory rows."""
+    if not isinstance(value, str):
+        value = "" if value is None else str(value)
+    value = _redact_text(value).strip()
+    value = re.sub(r"Authorization:\s*Bearer\s+\S+", "[REDACTED CREDENTIAL]", value, flags=re.I)
+    if len(value) > limit:
+        value = value[: max(0, limit - 1)].rstrip() + "…"
+    return value
+
+
+def _mcp_schema_type(schema) -> str:
+    """Return a compact, non-sensitive display type for a JSON schema node."""
+    if not isinstance(schema, dict):
+        return "unknown"
+    typ = schema.get("type")
+    if isinstance(typ, list):
+        typ = "/".join(str(t) for t in typ if t)
+    if isinstance(typ, str) and typ:
+        return typ
+    for composite in ("anyOf", "oneOf", "allOf"):
+        if isinstance(schema.get(composite), list) and schema[composite]:
+            return composite
+    if "enum" in schema:
+        return "enum"
+    return "unknown"
+
+
+def _mcp_schema_summary(schema, *, limit: int = 12) -> list[dict]:
+    """Summarize an MCP input schema without exposing raw defaults/examples.
+
+    The WebUI only needs searchable/displayable argument hints. Returning raw
+    JSON Schema can overexpose server-provided defaults, examples, enums, or
+    vendor extensions, so this strips each parameter down to name/type/required
+    and a redacted description.
+    """
+    if not isinstance(schema, dict):
+        return []
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    required = schema.get("required")
+    required_names = set(required) if isinstance(required, list) else set()
+    out = []
+    for name, prop in properties.items():
+        if len(out) >= limit:
+            break
+        if not isinstance(name, str):
+            continue
+        prop = prop if isinstance(prop, dict) else {}
+        desc = prop.get("description", "")
+        if not isinstance(desc, str):
+            desc = ""
+        desc = _mcp_safe_display_text(desc, limit=180)
+        out.append({
+            "name": name,
+            "type": _mcp_schema_type(prop),
+            "required": name in required_names,
+            "description": desc,
+        })
+    return out
+
+
+def _mcp_tool_schema_from_payload(tool):
+    if not isinstance(tool, dict):
+        return {}
+    for key in ("parameters", "inputSchema", "input_schema", "schema"):
+        value = tool.get(key)
+        if isinstance(value, dict):
+            if key == "schema" and isinstance(value.get("parameters"), dict):
+                return value["parameters"]
+            return value
+    return {}
+
+
+def _mcp_tool_summary(name, tool, server_summary):
+    """Return a safe global inventory row for one MCP tool."""
+    server_summary = server_summary if isinstance(server_summary, dict) else {}
+    if isinstance(tool, str):
+        tool = {"name": tool}
+    elif not isinstance(tool, dict):
+        tool = {}
+    tool_name = str(tool.get("name") or name or "")
+    description = tool.get("description") or ""
+    if not isinstance(description, str):
+        description = str(description)
+    description = _mcp_safe_display_text(description, limit=360)
+    return {
+        "name": tool_name,
+        "server": str(server_summary.get("name") or ""),
+        "description": description,
+        "active": bool(server_summary.get("active")),
+        "enabled": bool(server_summary.get("enabled")),
+        "status": server_summary.get("status") or "unknown",
+        "schema_summary": _mcp_schema_summary(_mcp_tool_schema_from_payload(tool)),
+    }
+
+
+def _mcp_tools_from_runtime_status(runtime_by_name, server_summaries):
+    """Read detailed MCP tool payloads from runtime status when available."""
+    tools = []
+    if not isinstance(runtime_by_name, dict):
+        return tools
+    for server_name, runtime in runtime_by_name.items():
+        if not isinstance(runtime, dict):
+            continue
+        raw_tools = runtime.get("tools")
+        if not isinstance(raw_tools, list):
+            raw_tools = runtime.get("tool_schemas")
+        if not isinstance(raw_tools, list):
+            continue
+        server_summary = server_summaries.get(str(server_name), {"name": str(server_name)})
+        for index, tool in enumerate(raw_tools):
+            fallback_name = f"{server_name}:{index}"
+            summary = _mcp_tool_summary(fallback_name, tool, server_summary)
+            if summary["name"]:
+                tools.append(summary)
+    return tools
+
+
+def _mcp_tools_from_registry(server_summaries):
+    """Read already-registered MCP tool schemas without probing MCP servers."""
+    try:
+        from tools.registry import registry
+    except Exception:
+        return []
+    tools = []
+    try:
+        names = registry.get_all_tool_names()
+    except Exception:
+        return []
+    for tool_name in names:
+        try:
+            toolset = registry.get_toolset_for_tool(tool_name)
+        except Exception:
+            continue
+        if not isinstance(toolset, str) or not toolset.startswith("mcp-"):
+            continue
+        server_name = toolset[len("mcp-"):]
+        schema = registry.get_schema(tool_name) or {}
+        server_summary = server_summaries.get(server_name, {
+            "name": server_name,
+            "enabled": True,
+            "active": False,
+            "status": "configured",
+        })
+        tools.append(_mcp_tool_summary(tool_name, schema, server_summary))
+    return tools
+
+
+def _handle_mcp_tools_list(handler):
+    """List known MCP tools from already-available runtime inventory only."""
     cfg = get_config()
     servers = cfg.get("mcp_servers", {})
     if not isinstance(servers, dict):
         servers = {}
-    result = [_server_summary(name, scfg) for name, scfg in servers.items()]
-    return j(handler, {"servers": result})
+    runtime = _mcp_runtime_status_by_name()
+    server_summaries = {
+        str(name): _server_summary(str(name), scfg, runtime.get(str(name)))
+        for name, scfg in servers.items()
+    }
+    tools = _mcp_tools_from_runtime_status(runtime, server_summaries)
+    source = "mcp_runtime_status"
+    if not tools:
+        tools = _mcp_tools_from_registry(server_summaries)
+        source = "tool_registry" if tools else "none"
+    tools.sort(key=lambda row: (row.get("server", ""), row.get("name", "")))
+    unavailable_servers = [
+        summary["name"] for summary in server_summaries.values()
+        if summary.get("enabled") and not summary.get("active")
+    ]
+    return j(handler, {
+        "tools": tools,
+        "total": len(tools),
+        "source": source,
+        "inventory_scope": "already_known_runtime_only",
+        "unavailable_servers": unavailable_servers,
+    })
+
+
+def _handle_mcp_servers_list(handler):
+    """List configured MCP servers with safe, read-only runtime visibility."""
+    cfg = get_config()
+    servers = cfg.get("mcp_servers", {})
+    if not isinstance(servers, dict):
+        servers = {}
+    runtime = _mcp_runtime_status_by_name()
+    result = [
+        _server_summary(name, scfg, runtime.get(str(name)))
+        for name, scfg in servers.items()
+    ]
+    return j(handler, {
+        "servers": result,
+        "toggle_supported": False,
+        "reload_required": True,
+    })
 
 
 def _handle_mcp_server_delete(handler, name):
