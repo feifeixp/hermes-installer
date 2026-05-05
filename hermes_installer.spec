@@ -37,12 +37,16 @@ HIDDEN_IMPORTS = [
     "PIL", "PIL.Image", "PIL.ImageDraw",
     # config
     "yaml", "dotenv", "pydantic", "pydantic_core",
-    # webview — platform-specific backends
-    "webview",
 ]
 
 if IS_MAC:
-    HIDDEN_IMPORTS += ["webview.platforms.cocoa"]
+    HIDDEN_IMPORTS += [
+        # macOS native window via PyObjC (WKWebView)
+        "AppKit",
+        "Foundation",
+        "WebKit",
+        "Quartz",
+    ]
 if IS_WIN:
     HIDDEN_IMPORTS += [
         "webview.platforms.edgechromium",

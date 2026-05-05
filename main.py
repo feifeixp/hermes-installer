@@ -4,19 +4,16 @@ Hermes Agent Installer — cross-platform entry point.
 - Windows: system browser + uvicorn on main thread
 """
 # ── CHILD PROCESS GUARD ────────────────────────────────────────────────────
-# This must be the VERY FIRST executable code.
-# When any library (uvicorn, aiohttp, anyio …) spawns a subprocess on
-# Windows, that subprocess re-runs this exe from scratch.
-# Setting HERMES_MAIN before anything else, and exiting immediately when
-# it's already set, guarantees child processes never run the GUI/server.
+# Prevents subprocesses on Windows from re-launching the frozen exe.
+# macOS subprocesses use fork() and are not affected.
 import os
 import sys
 
-if os.environ.get("_HERMES_MAIN") == "1":
-    # We are a child process — do nothing and exit cleanly.
+if sys.platform == "win32" and os.environ.get("_HERMES_MAIN") == "1":
     sys.exit(0)
 
-os.environ["_HERMES_MAIN"] = "1"   # mark: subprocesses must exit
+if sys.platform == "win32":
+    os.environ["_HERMES_MAIN"] = "1"
 
 # ── Now safe to import everything ─────────────────────────────────────────
 import multiprocessing
@@ -44,14 +41,18 @@ log.info("=== Hermes Installer starting === pid=%s py=%s platform=%s frozen=%s",
 
 def _alert(title: str, msg: str):
     log.error("ALERT %s | %s", title, msg)
-    try:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk(); root.withdraw()
-        messagebox.showerror(title, msg)
-        root.destroy()
-    except Exception:
-        print(f"[ERROR] {title}: {msg}", file=sys.stderr)
+    # Write to a temp file so we can debug, and show via osascript on macOS
+    print(f"[ERROR] {title}: {msg}", file=sys.stderr)
+    if sys.platform == "darwin":
+        try:
+            import subprocess
+            subprocess.Popen(
+                ["osascript", "-e",
+                 f'display dialog "{msg}" with title "{title}" buttons {{"OK"}} default button "OK" with icon stop'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
 
 # ── Bundle path ────────────────────────────────────────────────────────────
@@ -108,21 +109,72 @@ def _wait_for_server(port: int, timeout: float = 20.0) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# macOS — pywebview cocoa
+# macOS — native WKWebView window via PyObjC
 # ══════════════════════════════════════════════════════════════════════════
 def _run_macos(title: str, url: str):
+    """Open URL in a native WKWebView window via PyObjC.
+    Falls back to system browser if PyObjC is unavailable."""
     try:
-        import webview
-        log.info("pywebview %s gui=cocoa", getattr(webview, "__version__", "?"))
-        webview.create_window(
-            title, url,
-            width=1080, height=760,
-            resizable=True, min_size=(860, 620),
-            background_color="#0f0f1a",
+        import AppKit
+        import WebKit
+        import Foundation
+        import objc
+    except ImportError as e:
+        log.exception("PyObjC not available: %s", e)
+        import webbrowser
+        webbrowser.open(url)
+        _alert("Hermes Installer", f"原生窗口不可用（{e}），已在浏览器中打开。\n{url}")
+        return
+
+    try:
+        app = AppKit.NSApplication.sharedApplication()
+        app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
+
+        # Window size: 1080x760, min 860x620, centered on screen
+        screen_rect = AppKit.NSScreen.mainScreen().frame()
+        win_w, win_h = 1080, 760
+        x = int((screen_rect.size.width - win_w) / 2)
+        y = int((screen_rect.size.height - win_h) / 2)
+
+        style = (
+            AppKit.NSWindowStyleMaskTitled
+            | AppKit.NSWindowStyleMaskClosable
+            | AppKit.NSWindowStyleMaskMiniaturizable
+            | AppKit.NSWindowStyleMaskResizable
         )
-        webview.start(gui="cocoa", debug=False)
+
+        rect = Foundation.NSMakeRect(x, y, win_w, win_h)
+        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            rect,
+            style,
+            AppKit.NSBackingStoreBuffered,
+            False,
+        )
+        window.setTitle_(title)
+        min_size = Foundation.NSMakeSize(860, 620)
+        window.setMinSize_(min_size)
+
+        config = WebKit.WKWebViewConfiguration.alloc().init()
+        prefs = config.preferences()
+        prefs.setValue_forKey_(True, "developerExtrasEnabled")
+
+        webview = WebKit.WKWebView.alloc().initWithFrame_configuration_(
+            Foundation.NSMakeRect(0, 0, win_w, win_h),
+            config,
+        )
+        request = Foundation.NSURLRequest.requestWithURL_(
+            Foundation.NSURL.URLWithString_(url)
+        )
+        webview.loadRequest_(request)
+
+        window.setContentView_(webview)
+        window.makeKeyAndOrderFront_(None)
+        app.activateIgnoringOtherApps_(True)
+
+        log.info("Native WKWebView window opened: %s", url)
+        AppKit.NSApplication.sharedApplication().run()
     except Exception as exc:
-        log.exception("pywebview failed: %s", exc)
+        log.exception("Native window failed: %s", exc)
         import webbrowser
         webbrowser.open(url)
         _alert("Hermes Installer", f"原生窗口不可用，已在浏览器中打开。\n{url}\n\n错误：{exc}")
