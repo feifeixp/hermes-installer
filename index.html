@@ -1000,11 +1000,6 @@ async function runChecks() {
       },
     ];
     canProceed = true;
-
-    // If already installed, skip step 2 automatically
-    if (hermesOk) {
-      setTimeout(() => goToStep(3), 800);
-    }
   }
 
   list.innerHTML = items.map(item => `
@@ -1209,10 +1204,25 @@ function launchConfetti() {
 }
 
 /* ══════════════════════════════════════════════════════
-   Init
+   Init — 已安装则直接跳对话，否则走安装流程
 ══════════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
-  goToStep(1);
+  // 先快速检测是否已安装
+  fetch('/api/check')
+    .then(r => r.json())
+    .then(data => {
+      if (data.hermes_installed) {
+        // 已安装 → 直接进对话
+        window.location.href = '/chat';
+        return;
+      }
+      // 未安装 → 正常走安装向导
+      goToStep(1);
+    })
+    .catch(() => {
+      // 检测失败也走安装向导
+      goToStep(1);
+    });
 });
 </script>
 </body>
