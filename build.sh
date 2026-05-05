@@ -51,9 +51,7 @@ PYTHON="$BUILD_VENV/bin/python"
 echo "→ 安装打包依赖..."
 $PYTHON -m pip install --quiet \
     pywebview \
-    pyinstaller \
-    pyobjc-framework-Cocoa \
-    pyobjc-framework-WebKit
+    pyinstaller
 
 # ── 3. Bundle hermes-agent source (optional — falls back to git-clone at runtime) ──
 echo "→ 打包 hermes-agent 源码（需要联网，失败时安装器会自动 git clone）..."

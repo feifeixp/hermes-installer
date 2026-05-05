@@ -1,7 +1,7 @@
 """
 Hermes Installer — cross-platform entry point.
-- macOS  : native WKWebView window via PyObjC
-- Windows: pywebview edgechromium (Edge WebView2)
+- macOS  : pywebview cocoa (WKWebView native window)
+- Windows: pywebview edgechromium (Edge WebView2 native window)
 - Always launches the Hermes WebUI (bootstrap.py handles first-time setup)
 """
 # ── CHILD PROCESS GUARD ────────────────────────────────────────────────────
@@ -22,7 +22,6 @@ multiprocessing.freeze_support()
 
 import shutil
 import subprocess
-import threading
 import time
 import socket
 import logging
@@ -77,12 +76,6 @@ def _port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _wait_for_server(port: int, timeout: float = 90.0) -> bool:
     """Wait until a TCP connection to 127.0.0.1:<port> succeeds.
     Large timeout because bootstrap.py may install hermes-agent first."""
@@ -97,97 +90,42 @@ def _wait_for_server(port: int, timeout: float = 90.0) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# macOS — native WKWebView window via PyObjC
+# Native window — pywebview (macOS cocoa + Windows edgechromium)
 # ══════════════════════════════════════════════════════════════════════════
-def _run_macos(title: str, url: str):
-    """Open URL in a native WKWebView window via PyObjC.
-    Falls back to system browser if PyObjC is unavailable."""
-    try:
-        import AppKit
-        import WebKit
-        import Foundation
-    except ImportError as e:
-        log.exception("PyObjC not available: %s", e)
-        import webbrowser
-        webbrowser.open(url)
-        _alert("Hermes Installer", f"原生窗口不可用（{e}），已在浏览器中打开。\n{url}")
-        return
-
-    try:
-        app = AppKit.NSApplication.sharedApplication()
-        app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
-
-        screen_rect = AppKit.NSScreen.mainScreen().frame()
-        win_w, win_h = 1080, 760
-        x = int((screen_rect.size.width - win_w) / 2)
-        y = int((screen_rect.size.height - win_h) / 2)
-
-        style = (
-            AppKit.NSWindowStyleMaskTitled
-            | AppKit.NSWindowStyleMaskClosable
-            | AppKit.NSWindowStyleMaskMiniaturizable
-            | AppKit.NSWindowStyleMaskResizable
-        )
-
-        rect = Foundation.NSMakeRect(x, y, win_w, win_h)
-        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            rect, style, AppKit.NSBackingStoreBuffered, False,
-        )
-        window.setTitle_(title)
-        window.setMinSize_(Foundation.NSMakeSize(860, 620))
-
-        config = WebKit.WKWebViewConfiguration.alloc().init()
-        prefs = config.preferences()
-        prefs.setValue_forKey_(True, "developerExtrasEnabled")
-
-        webview = WebKit.WKWebView.alloc().initWithFrame_configuration_(
-            Foundation.NSMakeRect(0, 0, win_w, win_h), config,
-        )
-        request = Foundation.NSURLRequest.requestWithURL_(
-            Foundation.NSURL.URLWithString_(url)
-        )
-        webview.loadRequest_(request)
-
-        window.setContentView_(webview)
-        window.makeKeyAndOrderFront_(None)
-        app.activateIgnoringOtherApps_(True)
-
-        log.info("Native WKWebView window opened: %s", url)
-        AppKit.NSApplication.sharedApplication().run()
-    except Exception as exc:
-        log.exception("Native window failed: %s", exc)
-        import webbrowser
-        webbrowser.open(url)
-        _alert("Hermes Installer", f"原生窗口不可用，已在浏览器中打开。\n{url}\n\n错误：{exc}")
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# Windows — pywebview edgechromium (native window)
-# ══════════════════════════════════════════════════════════════════════════
-def _run_windows(title: str, url: str):
+def _open_native_window(title: str, url: str):
+    """Open URL in a native window using pywebview.
+    macOS  → WKWebView via cocoa backend
+    Windows → Edge WebView2 via edgechromium backend
+    Falls back to system browser if pywebview is unavailable."""
     try:
         import webview
-        log.info("pywebview %s gui=edgechromium", getattr(webview, "__version__", "?"))
+    except ImportError:
+        log.warning("pywebview not installed — falling back to browser")
+        import webbrowser
+        webbrowser.open(url)
+        _alert("Hermes Installer",
+               "pywebview 未安装，已在浏览器中打开。\n"
+               "如需独立窗口，请运行: pip install pywebview")
+        return
+
+    gui = "cocoa" if sys.platform == "darwin" else "edgechromium"
+    log.info("pywebview %s gui=%s", getattr(webview, "__version__", "?"), gui)
+
+    try:
         webview.create_window(
             title, url,
             width=1080, height=760,
             resizable=True, min_size=(860, 620),
             background_color="#0f0f1a",
         )
-        webview.start(gui="edgechromium", debug=False)
-        log.info("webview closed")
+        webview.start(gui=gui, debug=False)
+        log.info("native window closed")
     except Exception as exc:
-        log.exception("pywebview failed: %s", exc)
-        try:
-            import webbrowser
-            webbrowser.open(url)
-            _alert("Hermes Installer",
-                   f"原生窗口不可用（{exc}），\n已在浏览器中打开：{url}\n\n"
-                   f"关闭浏览器标签后请手动关闭控制台窗口退出。")
-        except Exception as exc2:
-            _alert("Hermes Installer — 错误",
-                   f"WebView 和浏览器均无法打开。\n{exc}\n{exc2}\n"
-                   f"请手动访问：{url}")
+        log.exception("pywebview %s failed: %s", gui, exc)
+        import webbrowser
+        webbrowser.open(url)
+        _alert("Hermes Installer",
+               f"原生窗口启动失败（{exc}），\n已在浏览器中打开：{url}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -318,10 +256,7 @@ def main():
 
     log.info("Opening WebUI: %s (server ready=%s)", url, ready)
 
-    if sys.platform == "darwin":
-        _run_macos(title, url)
-    else:
-        _run_windows(title, url)
+    _open_native_window(title, url)
 
 
 if __name__ == "__main__":

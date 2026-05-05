@@ -14,21 +14,13 @@ IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 
 # ── Hidden imports ─────────────────────────────────────────────────────────
-# main.py only needs pywebview (Windows) or PyObjC (macOS) + stdlib
+# pywebview handles its own PyInstaller hook (includes cocoa/WKWebView on macOS,
+# edgechromium/WebView2 on Windows).  Only platform-specific extras here.
+
 HIDDEN_IMPORTS = []
 
-if IS_MAC:
-    HIDDEN_IMPORTS += [
-        # macOS native window via PyObjC (WKWebView)
-        "AppKit",
-        "Foundation",
-        "WebKit",
-        "Quartz",
-        "objc",
-    ]
 if IS_WIN:
     HIDDEN_IMPORTS += [
-        "webview",
         "webview.platforms.edgechromium",
         "webview.platforms.winforms",
         "clr",          # pythonnet (Windows WebView2 bridge)
