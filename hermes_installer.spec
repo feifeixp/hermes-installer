@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for Hermes Agent Installer.
+PyInstaller spec for Hermes Installer.
 Produces:
   macOS   → dist/Hermes Installer.app  (+ .dmg via build.sh)
   Windows → dist/Hermes Installer.exe  (single file, via build.bat)
@@ -10,34 +10,12 @@ import sys
 from pathlib import Path
 
 block_cipher = None
-IS_MAC     = sys.platform == "darwin"
-IS_WIN     = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
+IS_WIN = sys.platform == "win32"
 
 # ── Hidden imports ─────────────────────────────────────────────────────────
-HIDDEN_IMPORTS = [
-    # uvicorn
-    "uvicorn", "uvicorn.main", "uvicorn.config", "uvicorn.logging",
-    "uvicorn.loops", "uvicorn.loops.auto", "uvicorn.loops.asyncio",
-    "uvicorn.protocols", "uvicorn.protocols.http", "uvicorn.protocols.http.auto",
-    "uvicorn.protocols.http.h11_impl", "uvicorn.protocols.http.httptools_impl",
-    "uvicorn.protocols.websockets", "uvicorn.protocols.websockets.auto",
-    "uvicorn.protocols.websockets.wsproto_impl",
-    "uvicorn.lifespan", "uvicorn.lifespan.off", "uvicorn.lifespan.on",
-    # fastapi / starlette
-    "fastapi", "fastapi.responses", "fastapi.staticfiles",
-    "fastapi.middleware", "fastapi.middleware.cors",
-    "starlette", "starlette.responses", "starlette.routing", "starlette.middleware",
-    # async
-    "anyio", "anyio._backends._asyncio",
-    # http
-    "aiohttp", "aiohttp.connector", "aiohttp.client",
-    "h11", "httptools",
-    # QR / image
-    "qrcode", "qrcode.image.pil",
-    "PIL", "PIL.Image", "PIL.ImageDraw",
-    # config
-    "yaml", "dotenv", "pydantic", "pydantic_core",
-]
+# main.py only needs pywebview (Windows) or PyObjC (macOS) + stdlib
+HIDDEN_IMPORTS = []
 
 if IS_MAC:
     HIDDEN_IMPORTS += [
@@ -46,21 +24,20 @@ if IS_MAC:
         "Foundation",
         "WebKit",
         "Quartz",
+        "objc",
     ]
 if IS_WIN:
     HIDDEN_IMPORTS += [
+        "webview",
         "webview.platforms.edgechromium",
         "webview.platforms.winforms",
         "clr",          # pythonnet (Windows WebView2 bridge)
-        "asyncio",
-        "asyncio.windows_events",
-        "asyncio.windows_utils",
     ]
 
 # ── Analysis ───────────────────────────────────────────────────────────────
 
-# Build selective webui file list — exclude docs, tests, Docker, and heavy
-# markdown docs that are never read at runtime.  Reduces .app size by ~5 MB.
+# Build selective webui file list — exclude tests, docs, Docker, and heavy
+# markdown docs that are never read at runtime.
 _webui_root = Path("webui")
 _webui_datas: list[tuple[str, str]] = []
 for _f in _webui_root.rglob("*"):
@@ -77,27 +54,23 @@ for _f in _webui_root.rglob("*"):
             "SPRINTS.md", "TESTING.md",
             "Dockerfile", "docker-compose.yml", "docker-compose.two-container.yml",
             "docker-compose.three-container.yml", "docker_init.bash",
-            "bootstrap.py", ".dockerignore",
+            ".dockerignore",
         ):
             continue
-        # Keep: api/*.py, static/*, server.py, requirements.txt, etc.
+        # Keep: bootstrap.py, server.py, api/*.py, static/*, requirements.txt, etc.
         _dest = str(_f.parent)
         _webui_datas.append((str(_f), _dest))
 
 a = Analysis(
-    ["main.py", "app.py"],      # explicitly analyse app.py so it's bundled
+    ["main.py"],                    # only main.py is the entry point now
     pathex=["."],
     binaries=[],
     datas=(
-        [
-            ("index.html", "."),   # installer wizard UI
-            ("app.py",     "."),   # fallback: include as raw file too
-        ]
-        + _webui_datas
+        _webui_datas
         # Bundle zip is optional: present → offline install; absent → git clone at runtime
         + ([("hermes_agent_bundle.zip", ".")] if Path("hermes_agent_bundle.zip").exists() else [])
     ),
-    hiddenimports=HIDDEN_IMPORTS + ["app"],
+    hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -117,7 +90,7 @@ if IS_WIN:
     exe = EXE(
         pyz,
         a.scripts,
-        a.binaries,     # embed everything into one file on Windows
+        a.binaries,
         a.zipfiles,
         a.datas,
         exclude_binaries=False,
@@ -177,7 +150,7 @@ if IS_MAC:
         version="1.0.0",
         info_plist={
             "CFBundleName": "Hermes Installer",
-            "CFBundleDisplayName": "Hermes Agent 安装向导",
+            "CFBundleDisplayName": "Hermes",
             "CFBundleVersion": "1.0.0",
             "CFBundleShortVersionString": "1.0.0",
             "NSPrincipalClass": "NSApplication",
@@ -188,7 +161,7 @@ if IS_MAC:
             "NSDocumentsFolderUsageDescription": "Hermes Installer may access documents.",
             "NSDownloadsFolderUsageDescription": "Hermes Installer saves downloaded files.",
             "NSNetworkVolumesUsageDescription": "Hermes Installer connects to AI APIs.",
-            # Hardened Runtime exceptions (required for pywebview + uvicorn)
+            # Hardened Runtime exceptions (required for PyObjC WebView)
             "com.apple.security.cs.allow-unsigned-executable-memory": True,
             "com.apple.security.cs.disable-library-validation": True,
         },

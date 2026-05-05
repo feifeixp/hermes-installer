@@ -16,7 +16,7 @@ DMG_NAME="Hermes-Installer-macOS.dmg"
 VOLUME_NAME="Hermes Installer"
 
 echo ""
-echo "⚡ Hermes Agent Installer — macOS 打包脚本"
+echo "⚡ Hermes Installer — macOS 打包脚本"
 echo "────────────────────────────────────────────"
 
 # ── 1. Find Python 3.10+ ──────────────────────────────────────────────────
@@ -52,14 +52,8 @@ echo "→ 安装打包依赖..."
 $PYTHON -m pip install --quiet \
     pywebview \
     pyinstaller \
-    fastapi \
-    "uvicorn[standard]" \
-    aiohttp \
-    qrcode \
-    pillow \
-    pydantic \
-    pyyaml \
-    python-dotenv
+    pyobjc-framework-Cocoa \
+    pyobjc-framework-WebKit
 
 # ── 3. Bundle hermes-agent source (optional — falls back to git-clone at runtime) ──
 echo "→ 打包 hermes-agent 源码（需要联网，失败时安装器会自动 git clone）..."

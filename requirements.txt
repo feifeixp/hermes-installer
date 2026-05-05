@@ -1,10 +1,2 @@
-fastapi>=0.100
-uvicorn[standard]>=0.23
-aiohttp>=3.9
-qrcode>=8.0
-pillow>=10.0
-pydantic>=2.0
-pyyaml>=6.0
-python-dotenv>=1.0
 pywebview>=4.0
 pyinstaller>=6.0

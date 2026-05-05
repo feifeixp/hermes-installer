@@ -13,7 +13,7 @@ set ZIP_NAME=Hermes-Installer-Windows.zip
 set EXE_PATH=%DIST_DIR%\%APP_NAME%.exe
 
 echo.
-echo  ⚡ Hermes Agent Installer — Windows 打包脚本
+echo  ⚡ Hermes Installer — Windows 打包脚本
 echo  ──────────────────────────────────────────────
 
 REM ── 1. Check Python ───────────────────────────────────────────────────────
@@ -36,15 +36,7 @@ echo  → 安装打包依赖（首次约 1-2 分钟）...
 :install_attempt
 python -m pip install --quiet ^
     "pywebview>=4.0" ^
-    "pyinstaller>=6.0" ^
-    "fastapi>=0.100" ^
-    "uvicorn[standard]>=0.23" ^
-    "aiohttp>=3.9" ^
-    "qrcode>=8.0" ^
-    "pillow>=10.0" ^
-    "pydantic>=2.0" ^
-    "pyyaml>=6.0" ^
-    "python-dotenv>=1.0"
+    "pyinstaller>=6.0"
 
 if errorlevel 1 (
     echo  ⚠ 首次安装失败，正在重试（可能因文件锁）...
@@ -53,15 +45,7 @@ if errorlevel 1 (
     ping -n 3 127.0.0.1 >nul
     python -m pip install --quiet --no-cache-dir ^
         "pywebview>=4.0" ^
-        "pyinstaller>=6.0" ^
-        "fastapi>=0.100" ^
-        "uvicorn[standard]>=0.23" ^
-        "aiohttp>=3.9" ^
-        "qrcode>=8.0" ^
-        "pillow>=10.0" ^
-        "pydantic>=2.0" ^
-        "pyyaml>=6.0" ^
-        "python-dotenv>=1.0"
+        "pyinstaller>=6.0"
     if errorlevel 1 (
         echo  ❌ 依赖安装失败，请以管理员身份运行或手动安装依赖
         pause

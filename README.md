@@ -1,123 +1,215 @@
 # ⚡ Hermes Installer
 
-> [Hermes Agent](https://github.com/NousResearch/hermes-agent) 桌面客户端 — 一键安装 + 原生 AI 对话界面
+> Hermes Agent 一键部署 · 桌面安装器 + 现代化 WebUI
 
-[![License](https://img.shields.io/badge/license-MIT-purple)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](#)
-[![Release](https://img.shields.io/github/v/release/feifeixp/hermes-installer?color=%237c3aed)](https://github.com/feifeixp/hermes-installer/releases)
+![License](https://img.shields.io/badge/license-MIT-purple) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 
 ---
 
-## 📦 下载使用
+## 功能特性
 
-> **推荐方式：直接下载打包好的桌面应用，双击即用。**
+### 桌面安装器（`main.py`）
 
-| 平台 | 下载 | 说明 |
-|------|------|------|
-| **macOS** | [⬇ Hermes-Installer-macOS.dmg](https://github.com/feifeixp/hermes-installer/releases/latest) | 双击 .dmg → 拖入 Applications → 右键打开 |
-| **Windows** | 即将支持 | 正在适配 GitHub Actions Windows 构建 |
+- **自动环境配置**：检测 Python / Git / uv / WSL2，缺少的工具一键安装
+- **Hermes Agent 一键安装**：自动克隆 + 创建 venv + 安装依赖（支持国内镜像）
+- **pywebview 原生窗口**：macOS WKWebView / Windows Edge WebView2
+- 启动后自动打开 Hermes WebUI 对话界面
 
-### 首次使用
+### AI 对话界面（WebUI）
 
-1. 下载 `.dmg` 并打开，把 `Hermes Installer` 拖到 `Applications`
-2. **首次打开**：右键 App → 打开（绕过 Gatekeeper）
-3. App 自动检测环境 → 点击安装 → 配置 API Key → 完成
-4. 下次打开直接进入 AI 对话界面，无需重复配置
+- 所有消息经 Hermes Agent Gateway（port 8642）处理，具备工具调用、记忆、多轮会话能力
+- **首次运行向导**：12+ 提供商（OpenRouter / Anthropic / OpenAI / DeepSeek / Ollama ...），API Key 配置，模型选择
+- 流式响应，Markdown 渲染 + 代码高亮
+- 对话历史持久化，多会话管理
+- 设置面板：模型配置 / 多 Profile / 工具集 / 高级参数
+- Gateway 状态实时显示
 
-> ⚠️ 请勿直接 `python main.py` 运行——已打包为原生桌面应用，通过 release 页面下载。
+### 桌面应用打包
 
----
-
-## ✨ 特性
-
-- **智能引导**：打开即检测 Hermes 是否已安装，已装直接进对话，未装走 3 步安装向导
-- **一键安装**：自动克隆 Hermes Agent、创建 venv、安装依赖（支持国内镜像加速）
-- **原生桌面**：macOS WKWebView 原生窗口，非浏览器套壳
-- **AI 对话**：流式响应、Markdown 渲染、代码高亮、多轮会话、Token 用量
-- **中文优先**：完整简体中文界面（上游 webui 870 键中文本地化）
+- **macOS**：`.app` + `.dmg`（pywebview + WKWebView 原生窗口）
+- **Windows**：`.exe` + `.zip`（pywebview + Edge WebView2 原生窗口）
 
 ---
 
-## 🛠 开发者（从源码构建）
+## 架构
 
-需要 Python 3.10+ 和 pip。
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      main.py (桌面壳)                         │
+│                    pywebview / 浏览器 fallback                 │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │               webui/bootstrap.py                       │  │
+│  │                                                       │  │
+│  │  · 环境检测 & 自动安装 Hermes Agent                     │  │
+│  │  · Python venv 创建 & 依赖安装                         │  │
+│  │  · 启动 server.py（动态端口）                           │  │
+│  │  · 首次运行 onboarding 向导                            │  │
+│  └────────────────────┬─────────────────────────────────┘  │
+│                       │                                     │
+│  ┌────────────────────▼─────────────────────────────────┐  │
+│  │              webui/server.py                           │  │
+│  │              ThreadingHTTPServer                       │  │
+│  │                                                       │  │
+│  │  · AI 对话界面 (chat)                                   │  │
+│  │  · 会话管理 / Workspace / Terminal                     │  │
+│  │  · 设置 / Provider 配置 / Profile                      │  │
+│  └────────────────────┬─────────────────────────────────┘  │
+│                       │                                     │
+└───────────────────────┼─────────────────────────────────────┘
+                        │
+                        ▼
+          ┌─────────────────────────────────┐
+          │  Hermes Agent Gateway (port 8642)│
+          │     OpenAI-compatible API        │
+          │  /v1/chat/completions  /health   │
+          └──────────────┬──────────────────┘
+                         │
+                         ▼
+           ┌───────────────────────────────┐
+           │  LLM API (OpenRouter / Anthropic│
+           │  / OpenAI / DeepSeek / ...)    │
+           └───────────────────────────────┘
+```
+
+---
+
+## 项目结构
+
+```
+hermes-installer/
+├── main.py                 # pywebview 桌面壳入口（启动 WebUI）
+├── webui/                  # AI 对话界面（独立 Web 应用）
+│   ├── bootstrap.py        #   启动引导（自动安装 + 环境准备）
+│   ├── server.py           #   ThreadingHTTPServer 入口
+│   ├── start.sh            #   手动启动脚本
+│   └── api/                #   API 路由、配置、会话、Gateway 通信
+├── app.py                  # [deprecated] FastAPI 后端（保留用于微信登录等端点）
+├── index.html              # [deprecated] 旧安装向导前端
+├── bundle_source.py        # 离线源码打包工具
+├── hermes_installer.spec   # PyInstaller 打包配置
+├── fix_annotations.py      # Python 兼容性修复
+├── build.sh                # macOS 打包脚本
+├── build.bat               # Windows 打包脚本
+└── requirements.txt        # Python 依赖
+```
+
+---
+
+## 快速开始
+
+### 方式一：开发模式（直接运行）
 
 ```bash
-git clone https://github.com/feifeixp/hermes-installer.git
-cd hermes-installer
+# 1. 安装依赖（需要 Python 3.10+）
+pip install pywebview
 
-# macOS
+# 2. 启动（自动打开 WebUI）
+python main.py
+```
+
+安装器会自动检测并安装 Hermes Agent（如果未安装），然后打开 WebUI 对话界面。
+
+### 方式二：手动启动 WebUI
+
+```bash
+# 直接启动 WebUI（需要 Hermes Agent 已安装）
+cd webui && bash start.sh
+# → http://127.0.0.1:8787
+```
+
+### 方式三：打包为桌面应用
+
+**macOS：**
+```bash
 bash build.sh
-# → dist/Hermes-Installer-macOS.dmg
+# 产物：dist/Hermes Installer.app  +  dist/Hermes-Installer-macOS.dmg
+```
 
-# Windows
+**Windows（在 Windows 机器上运行）：**
+```bat
 build.bat
-# → dist\Hermes-Installer-Windows.zip
+REM 产物：dist\Hermes Installer\Hermes Installer.exe  +  dist\Hermes-Installer-Windows.zip
 ```
-
-### 上游同步
-
-`webui/` 通过 `git subtree` 从 [nesquena/hermes-webui](https://github.com/nesquena/hermes-webui) 引入，每日自动检查更新：
-
-```bash
-# 手动触发同步
-bash sync-webui.sh
-```
-
-GitHub Actions 每天自动检查上游并创建 PR —— 审核合并即可。
 
 ---
 
-## 🗺 路线图
+## 前置要求
 
-- [x] macOS 桌面应用 + 自动构建发布
+| 软件 | 版本 | 说明 |
+|------|------|------|
+| Python | 3.10+ | 运行环境 |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 任意 | 安装器可自动安装 |
+| LLM API Key | — | OpenRouter / Anthropic / OpenAI / DeepSeek 等至少一个 |
+
+Hermes Agent Gateway（port 8642）需要在 `~/.hermes/config.yaml` 中启用：
+
+```yaml
+platforms:
+  api_server:
+    enabled: true
+    extra:
+      host: 127.0.0.1
+      port: 8642
+```
+
+---
+
+## 支持的 LLM 提供商
+
+| 提供商 | API 模式 | 说明 |
+|--------|----------|------|
+| **OpenRouter** | OpenAI Chat | 多模型路由，推荐入门 |
+| **Anthropic** | Anthropic Messages | Claude 系列 |
+| **OpenAI** | OpenAI Chat | GPT 系列 |
+| **DeepSeek** | OpenAI Chat | DeepSeek V4 等 |
+| **Google Gemini** | OpenAI Chat | Gemini 2.5/3.1 系列 |
+| **Ollama** | OpenAI Chat | 本地自托管 |
+| **LM Studio** | OpenAI Chat | 本地自托管 |
+| **Z.AI / GLM** | OpenAI Chat | 智谱 GLM 系列 |
+| **xAI (Grok)** | OpenAI Chat | Grok 系列 |
+| **Mistral** | OpenAI Chat | Mistral Large 等 |
+| **NVIDIA NIM** | OpenAI Chat | NVIDIA 推理服务 |
+| 自定义 | OpenAI Chat | 兼容 OpenAI API 格式 |
+
+> **WebUI 首次运行引导**支持以上所有提供商的一键配置。
+
+---
+
+## 路线图
+
+### 🚧 已完成
+
+- [x] 跨平台桌面安装器（macOS + Windows）
 - [x] Hermes Agent 一键安装 + 国内镜像加速
-- [x] 完整中文界面
-- [x] WebUI 上游自动同步
-- [ ] **Windows 桌面应用 + CI 自动发布**
+- [x] pywebview 原生桌面应用
+- [x] WebUI 现代对话界面
+- [x] 首次运行 onboarding 向导（12 提供商）
+
+### 📋 计划中
+
 - [ ] **Hermes 技能商店** — 浏览、安装、分享 Hermes Agent 技能
 - [ ] **neowow.studio 集成** — 打通 AIGC 创作者生态
-- [ ] 应用内自动更新
+- [ ] Windows 打包 CI/CD（GitHub Actions）
+- [ ] 应用自动更新
+- [ ] 多语言支持（i18n）
+- [ ] 离线安装包（内置 Python + Hermes Agent）
 
 ---
 
-## 🖥 macOS 用户说明
-
-- 首次运行：右键 → 打开（绕过 Gatekeeper 未签名提示）
-- 或终端执行：`xattr -cr "/Applications/Hermes Installer.app"`
-
----
-
-## 🪟 Windows 用户说明
+## Windows 用户说明
 
 - Windows 11 内置 Edge WebView2，无需额外安装
-- Windows 10 用户如遇问题，安装 [Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+- Windows 10 用户如遇问题，请安装 [Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
 - 首次运行 SmartScreen 提示时，点「更多信息」→「仍要运行」
 
 ---
 
-## 📐 架构
+## macOS 用户说明
 
-```
-┌──────────────────────────────────────────┐
-│         Hermes Installer.app              │
-│         pywebview 原生窗口                 │
-├──────────────────────────────────────────┤
-│  app.py (FastAPI :7891)                   │
-│  · 安装向导 API   · 环境检测               │
-│  · API Key 管理   · Gateway 代理          │
-├──────────────────────────────────────────┤
-│  webui/server.py (动态端口)               │
-│  · AI 对话界面    · 设置面板              │
-│  · 会话管理       · 文件浏览              │
-└──────────────┬───────────────────────────┘
-               │
-               ▼
-     Hermes Agent Gateway (:8642)
-               │
-               ▼
-     LLM API (MiniMax / Anthropic / ...)
-```
+- 首次运行：右键 → 打开（绕过 Gatekeeper 未签名提示）
+- 或在终端执行：`xattr -cr "/Applications/Hermes Installer.app"`
 
 ---
 

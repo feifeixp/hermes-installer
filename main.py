@@ -1,7 +1,8 @@
 """
-Hermes Agent Installer — cross-platform entry point.
-- macOS  : pywebview cocoa (WKWebView native window)
-- Windows: system browser + uvicorn on main thread
+Hermes Installer — cross-platform entry point.
+- macOS  : native WKWebView window via PyObjC
+- Windows: pywebview edgechromium (Edge WebView2)
+- Always launches the Hermes WebUI (bootstrap.py handles first-time setup)
 """
 # ── CHILD PROCESS GUARD ────────────────────────────────────────────────────
 # Prevents subprocesses on Windows from re-launching the frozen exe.
@@ -19,6 +20,8 @@ if sys.platform == "win32":
 import multiprocessing
 multiprocessing.freeze_support()
 
+import shutil
+import subprocess
 import threading
 import time
 import socket
@@ -41,11 +44,9 @@ log.info("=== Hermes Installer starting === pid=%s py=%s platform=%s frozen=%s",
 
 def _alert(title: str, msg: str):
     log.error("ALERT %s | %s", title, msg)
-    # Write to a temp file so we can debug, and show via osascript on macOS
     print(f"[ERROR] {title}: {msg}", file=sys.stderr)
     if sys.platform == "darwin":
         try:
-            import subprocess
             subprocess.Popen(
                 ["osascript", "-e",
                  f'display dialog "{msg}" with title "{title}" buttons {{"OK"}} default button "OK" with icon stop'],
@@ -67,23 +68,8 @@ if str(BASE_DIR) not in sys.path:
 os.environ["HERMES_INSTALLER_BASE_DIR"] = str(BASE_DIR)
 log.info("BASE_DIR=%s", BASE_DIR)
 
-# ── Windows event-loop policy ──────────────────────────────────────────────
-# Python 3.8+ defaults to ProactorEventLoop on Windows, which supports both
-# uvicorn (h11/asyncio mode) AND asyncio.create_subprocess_exec().
-# DO NOT switch to WindowsSelectorEventLoopPolicy — SelectorEventLoop does
-# NOT support subprocess creation and will raise NotImplementedError.
-
-# ── Import FastAPI app ─────────────────────────────────────────────────────
-try:
-    import uvicorn
-    from app import app as fastapi_app
-    log.info("app imported OK")
-except Exception as _e:
-    _alert("Hermes Installer — 启动失败",
-           f"无法加载应用：{_e}\nBASE_DIR={BASE_DIR}\n日志：{_LOG_PATH}")
-    sys.exit(1)
-
-PORT = 7891
+WEBUI_DIR = BASE_DIR / "webui"
+BOOTSTRAP_PY = WEBUI_DIR / "bootstrap.py"
 
 
 def _port_in_use(port: int) -> bool:
@@ -97,14 +83,16 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_for_server(port: int, timeout: float = 20.0) -> bool:
+def _wait_for_server(port: int, timeout: float = 90.0) -> bool:
+    """Wait until a TCP connection to 127.0.0.1:<port> succeeds.
+    Large timeout because bootstrap.py may install hermes-agent first."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", port), 0.3):
                 return True
         except OSError:
-            time.sleep(0.15)
+            time.sleep(0.3)
     return False
 
 
@@ -118,7 +106,6 @@ def _run_macos(title: str, url: str):
         import AppKit
         import WebKit
         import Foundation
-        import objc
     except ImportError as e:
         log.exception("PyObjC not available: %s", e)
         import webbrowser
@@ -130,7 +117,6 @@ def _run_macos(title: str, url: str):
         app = AppKit.NSApplication.sharedApplication()
         app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
 
-        # Window size: 1080x760, min 860x620, centered on screen
         screen_rect = AppKit.NSScreen.mainScreen().frame()
         win_w, win_h = 1080, 760
         x = int((screen_rect.size.width - win_w) / 2)
@@ -145,22 +131,17 @@ def _run_macos(title: str, url: str):
 
         rect = Foundation.NSMakeRect(x, y, win_w, win_h)
         window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            rect,
-            style,
-            AppKit.NSBackingStoreBuffered,
-            False,
+            rect, style, AppKit.NSBackingStoreBuffered, False,
         )
         window.setTitle_(title)
-        min_size = Foundation.NSMakeSize(860, 620)
-        window.setMinSize_(min_size)
+        window.setMinSize_(Foundation.NSMakeSize(860, 620))
 
         config = WebKit.WKWebViewConfiguration.alloc().init()
         prefs = config.preferences()
         prefs.setValue_forKey_(True, "developerExtrasEnabled")
 
         webview = WebKit.WKWebView.alloc().initWithFrame_configuration_(
-            Foundation.NSMakeRect(0, 0, win_w, win_h),
-            config,
+            Foundation.NSMakeRect(0, 0, win_w, win_h), config,
         )
         request = Foundation.NSURLRequest.requestWithURL_(
             Foundation.NSURL.URLWithString_(url)
@@ -182,8 +163,6 @@ def _run_macos(title: str, url: str):
 
 # ══════════════════════════════════════════════════════════════════════════
 # Windows — pywebview edgechromium (native window)
-# Edge WebView2 spawns native msedgewebview2.exe processes — those are
-# NOT Python processes and are NOT affected by our _HERMES_MAIN guard.
 # ══════════════════════════════════════════════════════════════════════════
 def _run_windows(title: str, url: str):
     try:
@@ -199,7 +178,6 @@ def _run_windows(title: str, url: str):
         log.info("webview closed")
     except Exception as exc:
         log.exception("pywebview failed: %s", exc)
-        # Fallback: open system browser
         try:
             import webbrowser
             webbrowser.open(url)
@@ -213,107 +191,132 @@ def _run_windows(title: str, url: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Entry point
+# Python discovery — find a usable interpreter for bootstrap.py
 # ══════════════════════════════════════════════════════════════════════════
 
-def _find_agent_python() -> str | None:
-    """Find a usable Python interpreter from the hermes-agent venv.
-    Returns the path (str) if found, None otherwise."""
+def _find_bootstrap_python() -> str:
+    """Find a Python interpreter that can run bootstrap.py.
+    Priority: hermes-agent venv → system python3 → sys.executable"""
     if sys.platform == "win32":
-        candidates = [
+        venv_candidates = [
             Path.home() / ".hermes" / "hermes-agent" / "venv" / "Scripts" / "python.exe",
             Path.home() / ".hermes" / "hermes-agent" / ".venv" / "Scripts" / "python.exe",
         ]
     else:
-        candidates = [
+        venv_candidates = [
             Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "python",
             Path.home() / ".hermes" / "hermes-agent" / ".venv" / "bin" / "python",
         ]
-    for p in candidates:
+
+    # Prefer hermes-agent venv Python (has all dependencies)
+    for p in venv_candidates:
         if p.exists():
+            log.info("Using hermes-agent venv Python: %s", p)
             return str(p)
 
-    # When frozen, sys.executable is the app binary — useless as a Python.
-    # Try common system Python names as a last resort.
-    if getattr(sys, "frozen", False):
-        for name in ("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"):
-            import shutil
-            found = shutil.which(name)
-            if found:
-                log.info("_find_agent_python: fallback system Python → %s", found)
-                return found
-    return None
+    # When frozen, sys.executable is the app binary — useless as Python
+    if not getattr(sys, "frozen", False):
+        log.info("Using sys.executable: %s", sys.executable)
+        return sys.executable
+
+    # Fallback: find system Python
+    for name in ("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"):
+        found = shutil.which(name)
+        if found:
+            log.info("Using system Python: %s", found)
+            return found
+
+    # Last resort
+    log.warning("No Python found; bootstrap.py will handle its own discovery")
+    return "python3"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Entry point
+# ══════════════════════════════════════════════════════════════════════════
+
+WEBUI_DEFAULT_PORT = 8787
+WEBUI_STARTUP_TIMEOUT = 300  # 5 minutes (bootstrap may install hermes-agent)
 
 
 def main():
-    global PORT
+    port = WEBUI_DEFAULT_PORT
+    host = "127.0.0.1"
 
-    # If another instance already owns the port, just open its browser
-    if _port_in_use(PORT):
-        log.info("Port %d already in use — another instance running", PORT)
+    # If another instance already owns the port, just open it in browser
+    if _port_in_use(port):
+        log.info("Port %d already in use — another WebUI instance running", port)
         try:
             import webbrowser
-            webbrowser.open(f"http://127.0.0.1:{PORT}")
+            webbrowser.open(f"http://{host}:{port}")
         except Exception:
             pass
         return
 
-    # ── Step 1: start app.py (FastAPI installer API) on port 7891 ────────
-    t = threading.Thread(
-        target=lambda: uvicorn.run(
-            fastapi_app, host="127.0.0.1", port=PORT,
-            log_level="warning", reload=False,
-            loop="asyncio", http="h11"),
-        daemon=True)
-    t.start()
+    # ── Launch bootstrap.py ──────────────────────────────────────────────
+    # bootstrap.py handles everything:
+    #   1. Detect hermes-agent installation
+    #   2. Install hermes-agent if missing (git clone + venv + pip install)
+    #   3. Create WebUI venv + install deps if needed
+    #   4. Start server.py on the target port
+    #   5. Health-check, then exit (server.py keeps running detached)
+    #
+    # We run bootstrap.py in a daemon thread so the main thread can show a
+    # loading state in the window while bootstrap does its work.
 
-    log.info("waiting for server on port %d …", PORT)
-    if not _wait_for_server(PORT, timeout=20.0):
-        _alert("Hermes Installer", f"服务器启动超时。\n日志：{_LOG_PATH}")
+    python_exe = _find_bootstrap_python()
+
+    if not BOOTSTRAP_PY.exists():
+        _alert("Hermes Installer",
+               f"找不到 WebUI 启动脚本。\n路径：{BOOTSTRAP_PY}\n"
+               f"请确认 webui/ 目录与 main.py 在同一文件夹下。")
         sys.exit(1)
-    log.info("server ready")
 
-    # ── Step 2: is setup already done? ──────────────────────────────────
-    setup_complete_file = Path.home() / ".hermes" / ".setup_complete"
-    webui_started = False
-    webui_port = 0
-    url = f"http://127.0.0.1:{PORT}"
-    title = "Hermes Agent 安装向导"
+    env = os.environ.copy()
+    env["HERMES_WEBUI_PORT"] = str(port)
+    env["HERMES_WEBUI_HOST"] = host
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONUTF8"] = "1"
 
-    if setup_complete_file.exists():
-        agent_py = _find_agent_python()
-        if agent_py:
-            webui_port = _find_free_port()
-            os.environ["HERMES_WEBUI_PORT"] = str(webui_port)
-            os.environ["HERMES_WEBUI_HOST"] = "127.0.0.1"
+    log.info("Launching bootstrap.py: %s %s", python_exe, BOOTSTRAP_PY)
 
-            webui_dir = BASE_DIR / "webui"
-            import subprocess as _sp
-            env = os.environ.copy()
-            env["HERMES_WEBUI_PORT"] = str(webui_port)
-            env["HERMES_WEBUI_HOST"] = "127.0.0.1"
+    # Launch as detached child — bootstrap.py spawns server.py and exits,
+    # server.py continues running
+    try:
+        proc = subprocess.Popen(
+            [python_exe, str(BOOTSTRAP_PY), str(port), "--host", host],
+            cwd=str(WEBUI_DIR),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=(sys.platform != "win32"),
+        )
+    except FileNotFoundError:
+        _alert("Hermes Installer",
+               f"找不到 Python 解释器。\n尝试的路径：{python_exe}\n"
+               f"请安装 Python 3.10+ 后重试。")
+        sys.exit(1)
+    except Exception as exc:
+        _alert("Hermes Installer", f"无法启动 WebUI：{exc}")
+        sys.exit(1)
 
-            log.info("Starting WebUI: %s %s", agent_py, webui_dir / "server.py")
-            try:
-                _sp.Popen(
-                    [agent_py, str(webui_dir / "server.py")],
-                    env=env, cwd=str(webui_dir),
-                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                )
-                webui_started = True
-            except Exception as e:
-                log.exception("WebUI Popen failed: %s", e)
-        else:
-            log.warning("setup complete but hermes-agent venv not found — "
-                        "showing installer, /chat will fall back")
+    log.info("bootstrap.py PID=%s — waiting for WebUI on port %d (timeout=%ds)",
+             proc.pid, port, WEBUI_STARTUP_TIMEOUT)
 
-        if webui_started:
-            log.info("waiting for WebUI server on port %d …", webui_port)
-            if _wait_for_server(webui_port, timeout=20.0):
-                url = f"http://127.0.0.1:{webui_port}/"
-                title = "Hermes"
-            else:
-                log.warning("WebUI server didn't start in time — falling back to installer")
+    # Wait for the WebUI server to be ready
+    # bootstrap.py installs hermes-agent + deps first, so this can take a while
+    ready = _wait_for_server(port, timeout=WEBUI_STARTUP_TIMEOUT)
+    if not ready:
+        # Server might still be starting — give it another 30s and try anyway
+        log.warning("Port %d not ready after %ds, trying anyway in 30s",
+                    port, WEBUI_STARTUP_TIMEOUT)
+        time.sleep(30)
+        ready = _wait_for_server(port, timeout=10)
+
+    url = f"http://{host}:{port}/"
+    title = "Hermes"
+
+    log.info("Opening WebUI: %s (server ready=%s)", url, ready)
 
     if sys.platform == "darwin":
         _run_macos(title, url)
