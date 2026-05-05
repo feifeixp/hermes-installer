@@ -1336,7 +1336,9 @@ async def api_hermes_start():
 @app.get("/chat")
 async def serve_chat():
     from fastapi.responses import RedirectResponse
-    webui_port = os.environ.get("HERMES_WEBUI_PORT", "8787")
+    webui_port = os.environ.get("HERMES_WEBUI_PORT")
+    if not webui_port:
+        return RedirectResponse(url="/", status_code=302)
     return RedirectResponse(url=f"http://127.0.0.1:{webui_port}/", status_code=302)
 
 

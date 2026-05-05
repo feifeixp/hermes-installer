@@ -163,6 +163,36 @@ def _run_windows(title: str, url: str):
 # ══════════════════════════════════════════════════════════════════════════
 # Entry point
 # ══════════════════════════════════════════════════════════════════════════
+
+def _find_agent_python() -> str | None:
+    """Find a usable Python interpreter from the hermes-agent venv.
+    Returns the path (str) if found, None otherwise."""
+    if sys.platform == "win32":
+        candidates = [
+            Path.home() / ".hermes" / "hermes-agent" / "venv" / "Scripts" / "python.exe",
+            Path.home() / ".hermes" / "hermes-agent" / ".venv" / "Scripts" / "python.exe",
+        ]
+    else:
+        candidates = [
+            Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "python",
+            Path.home() / ".hermes" / "hermes-agent" / ".venv" / "bin" / "python",
+        ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+
+    # When frozen, sys.executable is the app binary — useless as a Python.
+    # Try common system Python names as a last resort.
+    if getattr(sys, "frozen", False):
+        for name in ("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"):
+            import shutil
+            found = shutil.which(name)
+            if found:
+                log.info("_find_agent_python: fallback system Python → %s", found)
+                return found
+    return None
+
+
 def main():
     global PORT
 
@@ -176,7 +206,7 @@ def main():
             pass
         return
 
-    # Start uvicorn in a background daemon thread (both platforms)
+    # ── Step 1: start app.py (FastAPI installer API) on port 7891 ────────
     t = threading.Thread(
         target=lambda: uvicorn.run(
             fastapi_app, host="127.0.0.1", port=PORT,
@@ -185,60 +215,53 @@ def main():
         daemon=True)
     t.start()
 
-    # Start WebUI in a background daemon thread
-    webui_port = _find_free_port()
-    os.environ["HERMES_WEBUI_PORT"] = str(webui_port)
-    os.environ["HERMES_WEBUI_HOST"] = "127.0.0.1"
-
-    def run_webui():
-        import subprocess
-        webui_dir = BASE_DIR / "webui"
-        
-        # Determine the correct python executable path based on OS
-        if sys.platform == "win32":
-            agent_py = Path.home() / ".hermes" / "hermes-agent" / "venv" / "Scripts" / "python.exe"
-            if not agent_py.exists():
-                agent_py = Path.home() / ".hermes" / "hermes-agent" / ".venv" / "Scripts" / "python.exe"
-            if not agent_py.exists():
-                agent_py = "python"
-        else:
-            agent_py = Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "python"
-            if not agent_py.exists():
-                agent_py = Path.home() / ".hermes" / "hermes-agent" / ".venv" / "bin" / "python"
-            if not agent_py.exists():
-                agent_py = "python3"
-            
-        env = os.environ.copy()
-        env["HERMES_WEBUI_PORT"] = str(webui_port)
-        env["HERMES_WEBUI_HOST"] = "127.0.0.1"
-        try:
-            log.info("Starting WebUI via subprocess: %s", agent_py)
-            # Use Popen instead of run so we don't block the daemon thread unnecessarily, 
-            # though subprocess.run in a daemon thread is also fine. Keeping run to match previous behavior but capturing output.
-            subprocess.run([str(agent_py), str(webui_dir / "server.py")], env=env, cwd=str(webui_dir))
-        except Exception as e:
-            log.exception("WebUI failed to start: %s", e)
-
-    t2 = threading.Thread(target=run_webui, daemon=True)
-    t2.start()
-
     log.info("waiting for server on port %d …", PORT)
     if not _wait_for_server(PORT, timeout=20.0):
         _alert("Hermes Installer", f"服务器启动超时。\n日志：{_LOG_PATH}")
         sys.exit(1)
     log.info("server ready")
 
+    # ── Step 2: is setup already done? ──────────────────────────────────
+    setup_complete_file = Path.home() / ".hermes" / ".setup_complete"
+    webui_started = False
+    webui_port = 0
     url = f"http://127.0.0.1:{PORT}"
     title = "Hermes Agent 安装向导"
-    
-    setup_complete_file = Path.home() / ".hermes" / ".setup_complete"
+
     if setup_complete_file.exists():
-        # Setup is done, bypass installer and show WebUI directly
-        log.info("waiting for WebUI server on port %d …", webui_port)
-        if not _wait_for_server(webui_port, timeout=20.0):
-            log.warning("WebUI server didn't start in time, opening anyway...")
-        url = f"http://127.0.0.1:{webui_port}/"
-        title = "Hermes"
+        agent_py = _find_agent_python()
+        if agent_py:
+            webui_port = _find_free_port()
+            os.environ["HERMES_WEBUI_PORT"] = str(webui_port)
+            os.environ["HERMES_WEBUI_HOST"] = "127.0.0.1"
+
+            webui_dir = BASE_DIR / "webui"
+            import subprocess as _sp
+            env = os.environ.copy()
+            env["HERMES_WEBUI_PORT"] = str(webui_port)
+            env["HERMES_WEBUI_HOST"] = "127.0.0.1"
+
+            log.info("Starting WebUI: %s %s", agent_py, webui_dir / "server.py")
+            try:
+                _sp.Popen(
+                    [agent_py, str(webui_dir / "server.py")],
+                    env=env, cwd=str(webui_dir),
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                )
+                webui_started = True
+            except Exception as e:
+                log.exception("WebUI Popen failed: %s", e)
+        else:
+            log.warning("setup complete but hermes-agent venv not found — "
+                        "showing installer, /chat will fall back")
+
+        if webui_started:
+            log.info("waiting for WebUI server on port %d …", webui_port)
+            if _wait_for_server(webui_port, timeout=20.0):
+                url = f"http://127.0.0.1:{webui_port}/"
+                title = "Hermes"
+            else:
+                log.warning("WebUI server didn't start in time — falling back to installer")
 
     if sys.platform == "darwin":
         _run_macos(title, url)

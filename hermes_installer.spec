@@ -54,6 +54,32 @@ if IS_WIN:
     ]
 
 # ── Analysis ───────────────────────────────────────────────────────────────
+
+# Build selective webui file list — exclude docs, tests, Docker, and heavy
+# markdown docs that are never read at runtime.  Reduces .app size by ~5 MB.
+_webui_root = Path("webui")
+_webui_datas: list[tuple[str, str]] = []
+for _f in _webui_root.rglob("*"):
+    if _f.is_file():
+        _parts = _f.parts
+        # Skip non-runtime directories anywhere in path
+        if any(p in ("tests", "docs", ".github", "__pycache__") for p in _parts):
+            continue
+        # Skip heavy markdown docs and Docker files
+        _name = _f.name
+        if _name in (
+            "ARCHITECTURE.md", "BUGS.md", "CHANGELOG.md", "CONTRIBUTING.md",
+            "CONTRIBUTORS.md", "DESIGN.md", "HERMES.md", "ROADMAP.md",
+            "SPRINTS.md", "TESTING.md",
+            "Dockerfile", "docker-compose.yml", "docker-compose.two-container.yml",
+            "docker-compose.three-container.yml", "docker_init.bash",
+            "bootstrap.py", ".dockerignore",
+        ):
+            continue
+        # Keep: api/*.py, static/*, server.py, requirements.txt, etc.
+        _dest = str(_f.parent)
+        _webui_datas.append((str(_f), _dest))
+
 a = Analysis(
     ["main.py", "app.py"],      # explicitly analyse app.py so it's bundled
     pathex=["."],
@@ -62,8 +88,8 @@ a = Analysis(
         [
             ("index.html", "."),   # installer wizard UI
             ("app.py",     "."),   # fallback: include as raw file too
-            ("webui",      "webui"), # The integrated Hermes WebUI
         ]
+        + _webui_datas
         # Bundle zip is optional: present → offline install; absent → git clone at runtime
         + ([("hermes_agent_bundle.zip", ".")] if Path("hermes_agent_bundle.zip").exists() else [])
     ),
