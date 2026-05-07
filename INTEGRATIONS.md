@@ -16,7 +16,7 @@ This document is the recovery playbook.
 
 | Category | Files | Behaviour during subtree pull |
 |---|---|---|
-| **Self-contained add-ons** | `webui/api/neowow.py`<br>`webui/static/neowow.js` | ✅ **Always safe.** These files don't exist upstream, so subtree merge has nothing to merge. They survive every sync untouched. |
+| **Self-contained add-ons** | `webui/api/neowow.py`<br>`webui/api/skills.py`<br>`webui/static/neowow.js` | ✅ **Always safe.** These files don't exist upstream, so subtree merge has nothing to merge. They survive every sync untouched. |
 | **Patched upstream files** | `webui/api/routes.py`<br>`webui/static/index.html` | ⚠️ **3-way merged.** Our edits are isolated to clearly-marked blocks (see below) — most upstream changes won't conflict. When they do, follow the recovery flow. |
 
 ---

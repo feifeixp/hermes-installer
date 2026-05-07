@@ -74,6 +74,8 @@
     // renders together with the token state — keeps panel-load to one
     // /api/neowow/* round-trip pair instead of a network waterfall.
     void loadCloudStatus();
+    // Skills card too — disk-only read, free.
+    void loadSkillsStatus();
   }
 
   // ── Cloud config — read-only status card ─────────────────────────────
@@ -318,6 +320,174 @@
     } catch (e) {
       box.style.display = 'block';
       box.innerHTML = `<div style="color:#ef4444;font-size:12px">加载失败：${escapeHtml(e.message)}</div>`;
+      btn.textContent = wasLabel;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  // ─── Skills sync ────────────────────────────────────────────────────────
+  //
+  // Pulls the user's market subscriptions from the dashboard into
+  // ~/.hermes/skills/_neowow/. Three buttons:
+  //   • neowowSkillsSync — POST /api/neowow/skills/sync, shows
+  //     {added, updated, removed, unchanged} summary
+  //   • neowowSkillsCloudList — GET /api/neowow/skills/cloud-list,
+  //     read-only preview of cloud subscriptions
+  //   • neowowSkillsLocalList — GET /api/neowow/skills/local-status,
+  //     shows what's currently on disk under _neowow/
+  //
+  // Also called on panel-open by loadNeowowStatus() to render the
+  // status card without a network round-trip.
+
+  async function loadSkillsStatus() {
+    const el = $('neowowSkillsStatus');
+    if (!el) return;
+    try {
+      const r = await fetch('/api/neowow/skills/local-status');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      const items = d.localSkills || [];
+      if (!items.length) {
+        el.innerHTML = '<span style="color:var(--muted)">本地还没同步过任何技能。点下面的「同步订阅的技能」按钮拉取。</span>';
+        return;
+      }
+      // Newest synced first; show top 3 with timestamp.
+      const sorted = items.slice().sort((a, b) => (b.syncedAt || '').localeCompare(a.syncedAt || ''));
+      const top = sorted.slice(0, 3).map(s => {
+        const at = s.syncedAt ? formatRelative(s.syncedAt) : '';
+        return `<div>• <strong>${escapeHtml(s.name)}</strong> <span style="color:var(--muted);font-size:11px">v${s.version || 0} ${at ? '· '+at : ''}</span></div>`;
+      }).join('');
+      const more = items.length > 3 ? `<div style="color:var(--muted);font-size:11px;margin-top:2px">…还有 ${items.length - 3} 个</div>` : '';
+      el.innerHTML = `
+        <div style="color:var(--text)">已同步 <strong>${items.length}</strong> 个技能 · <code style="font-size:11px;color:var(--muted)">${escapeHtml(d.rootPath || '~/.hermes/skills/_neowow')}</code></div>
+        <div style="margin-top:4px">${top}${more}</div>
+      `;
+    } catch (e) {
+      el.textContent = `加载失败：${e.message}`;
+      el.style.color = '#ef4444';
+    }
+  }
+
+  window.neowowSkillsSync = async function () {
+    const btn = $('neowowSkillsSyncBtn');
+    const out = $('neowowSkillsResult');
+    if (!btn || !out) return;
+    const wasLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '同步中…';
+    out.innerHTML = '';
+    try {
+      const r = await fetch('/api/neowow/skills/sync', { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      const a = (d.added    || []).length;
+      const u = (d.updated  || []).length;
+      const re = (d.removed || []).length;
+      const un = d.unchanged || 0;
+      // Build a clean summary — list names of added/updated/removed if
+      // small enough, else just count.
+      const parts = [];
+      parts.push(`<div style="color:var(--accent)">✓ 同步完成 · 新增 ${a} · 更新 ${u} · 删除 ${re} · 不变 ${un}</div>`);
+      if (a) parts.push(`<div style="color:var(--muted);margin-top:4px">新增: ${(d.added||[]).map(x => '<strong>'+escapeHtml(x.name)+'</strong>').join('、')}</div>`);
+      if (u) parts.push(`<div style="color:var(--muted);margin-top:4px">更新: ${(d.updated||[]).map(x => '<strong>'+escapeHtml(x.name)+'</strong> v'+x.fromVersion+' → v'+x.toVersion).join('、')}</div>`);
+      if (re) parts.push(`<div style="color:var(--muted);margin-top:4px">删除: ${(d.removed||[]).map(x => escapeHtml(x.name)).join('、')}</div>`);
+      out.innerHTML = parts.join('');
+      // Refresh the status card to show the new state.
+      void loadSkillsStatus();
+    } catch (e) {
+      out.innerHTML = `<span style="color:#ef4444">❌ 同步失败：${escapeHtml(e.message)}</span>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = wasLabel;
+    }
+  };
+
+  window.neowowSkillsCloudList = async function () {
+    const btn = $('neowowSkillsCloudBtn');
+    const box = $('neowowSkillsListBox');
+    if (!btn || !box) return;
+    if (box.style.display === 'block' && box.dataset.mode === 'cloud') {
+      box.style.display = 'none';
+      btn.textContent = '☁ 查看云端订阅';
+      return;
+    }
+    const wasLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '加载中…';
+    try {
+      const r = await fetch('/api/neowow/skills/cloud-list');
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      const items = d.skills || [];
+      if (!items.length) {
+        box.innerHTML = '<div style="color:var(--muted)">你还没订阅任何技能。<a href="https://app.neowow.studio/market?tab=skill" target="_blank" rel="noreferrer" style="color:var(--accent)">前往技能市场 →</a></div>';
+      } else {
+        box.innerHTML =
+          '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">这是你在 dashboard 上订阅的技能列表（云端 SSOT）。本地还没拉的会通过「🔄 同步」补齐。</div>' +
+          items.map(s => `
+            <div style="padding:6px 8px;margin-bottom:4px;background:var(--bg);border:1px solid var(--border2);border-radius:6px">
+              <div><strong>${escapeHtml(s.name || s.id)}</strong> <span style="color:var(--muted);font-size:11px">v${s.version || 1}</span></div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">
+                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(s.id)}</span>
+                ${s.displayName ? '· 作者 '+escapeHtml(s.displayName) : ''}
+              </div>
+              ${s.description ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">${escapeHtml(s.description)}</div>` : ''}
+            </div>
+          `).join('');
+      }
+      box.dataset.mode = 'cloud';
+      box.style.display = 'block';
+      btn.textContent = '☁ 收起';
+    } catch (e) {
+      box.style.display = 'block';
+      box.innerHTML = `<div style="color:#ef4444">加载失败：${escapeHtml(e.message)}</div>`;
+      btn.textContent = wasLabel;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  window.neowowSkillsLocalList = async function () {
+    const btn = $('neowowSkillsLocalBtn');
+    const box = $('neowowSkillsListBox');
+    if (!btn || !box) return;
+    if (box.style.display === 'block' && box.dataset.mode === 'local') {
+      box.style.display = 'none';
+      btn.textContent = '📂 查看本地';
+      return;
+    }
+    const wasLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '加载中…';
+    try {
+      const r = await fetch('/api/neowow/skills/local-status');
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      const items = d.localSkills || [];
+      if (!items.length) {
+        box.innerHTML = `<div style="color:var(--muted)">本地 <code>${escapeHtml(d.rootPath || '~/.hermes/skills/_neowow')}</code> 是空的。</div>`;
+      } else {
+        box.innerHTML =
+          `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">本地路径: <code>${escapeHtml(d.rootPath || '')}</code> — Hermes-agent 启动时自动加载。</div>` +
+          items.map(s => `
+            <div style="padding:6px 8px;margin-bottom:4px;background:var(--bg);border:1px solid var(--border2);border-radius:6px">
+              <div><strong>${escapeHtml(s.name || s.id)}</strong>${s.stale ? ' <span style="color:#e8a030;font-size:11px">⚠ 无元数据</span>' : ''}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">
+                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(s.id)}</span>
+                · v${s.version || 0}
+                ${s.syncedAt ? '· '+formatRelative(s.syncedAt) : ''}
+              </div>
+              ${s.description ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">${escapeHtml(s.description)}</div>` : ''}
+            </div>
+          `).join('');
+      }
+      box.dataset.mode = 'local';
+      box.style.display = 'block';
+      btn.textContent = '📂 收起';
+    } catch (e) {
+      box.style.display = 'block';
+      box.innerHTML = `<div style="color:#ef4444">加载失败：${escapeHtml(e.message)}</div>`;
       btn.textContent = wasLabel;
     } finally {
       btn.disabled = false;

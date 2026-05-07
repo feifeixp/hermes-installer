@@ -52,6 +52,32 @@
         except Exception as e:
             logger.exception("neowow cloud-active failed")
             return bad(handler, str(e), status=500)
+
+    # Local-only inspect of ~/.hermes/skills/_neowow/ — disk read,
+    # never network.  Used by the panel to render "you have N synced
+    # skills" without forcing a round-trip on every open.
+    if parsed.path == "/api/neowow/skills/local-status":
+        from api.skills import get_local_status
+        try:
+            return j(handler, get_local_status())
+        except Exception as e:
+            logger.exception("neowow skills/local-status failed")
+            return bad(handler, str(e), status=500)
+
+    # Cloud preview — proxies the dashboard's /api/me/skills with the
+    # saved deploy-token. Returns metadata only (content stripped) for
+    # the "list of cloud subscriptions" UI.
+    if parsed.path == "/api/neowow/skills/cloud-list":
+        from api.skills import list_cloud_skills
+        try:
+            return j(handler, {"skills": list_cloud_skills()})
+        except ValueError as e:
+            return bad(handler, str(e))                    # missing token
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)        # upstream
+        except Exception as e:
+            logger.exception("neowow skills/cloud-list failed")
+            return bad(handler, str(e), status=500)
     # ════════════════════════════════════════════════════════════════════
     # END: Neowow integration — GET routes
 
@@ -111,6 +137,23 @@
             return bad(handler, str(e), status=502)
         except Exception as e:
             logger.exception("neowow cloud-apply failed")
+            return bad(handler, str(e), status=500)
+
+    # Sync subscribed skills from the dashboard into
+    # ~/.hermes/skills/_neowow/. Idempotent (re-running after no
+    # cloud changes is a no-op + bookkeeping refresh). Returns a
+    # summary {added: [...], updated: [...], removed: [...], unchanged: int}
+    # the UI uses to render the result.
+    if parsed.path == "/api/neowow/skills/sync":
+        from api.skills import sync_subscribed_skills
+        try:
+            return j(handler, sync_subscribed_skills())
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow skills/sync failed")
             return bad(handler, str(e), status=500)
     # ════════════════════════════════════════════════════════════════════
     # END: Neowow integration — POST routes

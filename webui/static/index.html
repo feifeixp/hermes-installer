@@ -1005,6 +1005,33 @@
               <!-- Lazily populated by neowowCloudList() — read-only -->
               <div id="neowowCloudListBox" style="display:none;margin-top:10px;padding:10px;background:var(--code-bg);border:1px solid var(--border2);border-radius:6px"></div>
             </div>
+
+            <!-- ── Skills sync ─────────────────────────────────── -->
+            <!-- Web at /market/skill is the SSOT for what the user is -->
+            <!-- subscribed to; this panel pulls those subscriptions -->
+            <!-- into ~/.hermes/skills/_neowow/ so Hermes-agent loads -->
+            <!-- them automatically. Phase 1: pull only. Publish from -->
+            <!-- local → market is a follow-up. -->
+            <div class="settings-field" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+              <label>技能同步（Skill 订阅）</label>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.6">
+                在 <a href="https://app.neowow.studio/market?tab=skill" target="_blank" rel="noreferrer" style="color:var(--accent)">app.neowow.studio/market?tab=skill</a> 订阅技能后，点同步把它们拉到本地。
+                写入 <code>~/.hermes/skills/_neowow/&lt;id&gt;/SKILL.md</code>，Hermes-agent 启动时会自动加载。
+              </div>
+
+              <div id="neowowSkillsStatus" style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:8px">
+                加载中…
+              </div>
+
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn-tiny" id="neowowSkillsSyncBtn" onclick="neowowSkillsSync()">🔄 同步订阅的技能</button>
+                <button class="btn-tiny" id="neowowSkillsCloudBtn" onclick="neowowSkillsCloudList()">☁ 查看云端订阅</button>
+                <button class="btn-tiny" id="neowowSkillsLocalBtn" onclick="neowowSkillsLocalList()">📂 查看本地</button>
+              </div>
+
+              <div id="neowowSkillsResult" style="font-size:12px;margin-top:10px;line-height:1.6"></div>
+              <div id="neowowSkillsListBox" style="display:none;margin-top:10px;padding:10px;background:var(--code-bg);border:1px solid var(--border2);border-radius:6px;font-size:12px"></div>
+            </div>
           </div>
           <!-- ════════════════════════════════════════════════════════════════
                END: Neowow integration — settings pane
