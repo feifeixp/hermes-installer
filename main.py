@@ -20,7 +20,9 @@ if sys.platform == "win32":
 import multiprocessing
 multiprocessing.freeze_support()
 
+import atexit
 import shutil
+import signal
 import subprocess
 import time
 import socket
@@ -53,6 +55,53 @@ def _alert(title: str, msg: str):
             )
         except Exception:
             pass
+
+
+def _confirm(title: str, msg: str, ok_label: str = "打开新窗口", cancel_label: str = "取消") -> bool:
+    """Show a Yes/No dialog. Returns True if user picks *ok_label*.
+
+    Falls back to True on platforms without a GUI dialog (no good way to ask).
+    """
+    log.info("PROMPT %s | %s", title, msg)
+    if sys.platform == "darwin":
+        # AppleScript string literals don't interpret \n — replace with `& return &`.
+        def _esc(s: str) -> str:
+            return s.replace('\\', '\\\\').replace('"', '\\"')
+        if "\n" in msg:
+            parts = [f'"{_esc(p)}"' for p in msg.split("\n")]
+            msg_expr = " & return & ".join(parts)
+        else:
+            msg_expr = f'"{_esc(msg)}"'
+        script = (
+            f'display dialog {msg_expr} with title "{_esc(title)}" '
+            f'buttons {{"{cancel_label}", "{ok_label}"}} '
+            f'default button "{ok_label}" cancel button "{cancel_label}" '
+            f'with icon caution'
+        )
+        try:
+            res = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=120,
+            )
+        except Exception as exc:
+            log.debug("confirm dialog failed: %s", exc)
+            return False
+        # Default button → returncode 0, stdout has "button returned:<label>"
+        # Cancel button  → returncode 1
+        if res.returncode != 0:
+            return False
+        return ok_label in (res.stdout or "")
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            MB_YESNO = 0x4
+            MB_ICONQUESTION = 0x20
+            IDYES = 6
+            return ctypes.windll.user32.MessageBoxW(0, msg, title, MB_YESNO | MB_ICONQUESTION) == IDYES
+        except Exception as exc:
+            log.debug("confirm dialog failed: %s", exc)
+            return False
+    return True
 
 
 # ── Bundle path ────────────────────────────────────────────────────────────
@@ -89,14 +138,103 @@ def _wait_for_server(port: int, timeout: float = 90.0) -> bool:
     return False
 
 
+def _pids_on_port(port: int) -> list[int]:
+    """Return PIDs listening on 127.0.0.1:<port>. Cross-platform best-effort."""
+    pids: list[int] = []
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout or ""
+            needle = f":{port}"
+            for line in out.splitlines():
+                parts = line.split()
+                # Format: Proto  Local  Foreign  State  PID
+                if len(parts) >= 5 and parts[0].upper() == "TCP" and needle in parts[1] \
+                        and parts[3].upper() == "LISTENING":
+                    try:
+                        pids.append(int(parts[4]))
+                    except ValueError:
+                        pass
+        else:
+            out = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout or ""
+            for tok in out.split():
+                try:
+                    pids.append(int(tok))
+                except ValueError:
+                    pass
+    except Exception as exc:
+        log.debug("port lookup failed: %s", exc)
+    return list(dict.fromkeys(pids))  # dedupe, preserve order
+
+
+def _kill_pid(pid: int) -> None:
+    """Send SIGTERM, then SIGKILL after 2s if still alive."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True, timeout=5,
+        )
+        return
+    try:
+        os.kill(pid, 15)  # SIGTERM
+    except ProcessLookupError:
+        return
+    except Exception as exc:
+        log.debug("SIGTERM pid=%s failed: %s", pid, exc)
+    # Wait up to 2s for graceful exit
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)  # probe
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(pid, 9)  # SIGKILL
+    except ProcessLookupError:
+        pass
+    except Exception as exc:
+        log.debug("SIGKILL pid=%s failed: %s", pid, exc)
+
+
+def _free_port(port: int) -> bool:
+    """Best-effort: kill anything holding *port*, return True if port freed."""
+    pids = _pids_on_port(port)
+    if not pids:
+        # Either nothing's there, or lsof/netstat couldn't see it.
+        return not _port_in_use(port)
+    log.info("Port %d held by PIDs %s — terminating", port, pids)
+    for pid in pids:
+        _kill_pid(pid)
+    # Wait up to 5s for the socket to actually release
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if not _port_in_use(port):
+            log.info("Port %d freed", port)
+            return True
+        time.sleep(0.2)
+    log.warning("Port %d still in use after kill", port)
+    return False
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Native window — pywebview (macOS cocoa + Windows edgechromium)
 # ══════════════════════════════════════════════════════════════════════════
-def _open_native_window(title: str, url: str):
+def _open_native_window(title: str, url: str, on_close=None):
     """Open URL in a native window using pywebview.
     macOS  → WKWebView via cocoa backend
     Windows → Edge WebView2 via edgechromium backend
-    Falls back to system browser if pywebview is unavailable."""
+
+    *on_close* is invoked synchronously when the window is closing or has
+    closed.  This is the only reliable cleanup hook on macOS — the cocoa
+    backend's ``NSApp.terminate`` exits the process without returning from
+    ``webview.start()``, so ``finally`` / ``atexit`` may never run.
+    """
     try:
         import webview
     except ImportError:
@@ -112,20 +250,34 @@ def _open_native_window(title: str, url: str):
     log.info("pywebview %s gui=%s", getattr(webview, "__version__", "?"), gui)
 
     try:
-        webview.create_window(
+        window = webview.create_window(
             title, url,
             width=1080, height=760,
             resizable=True, min_size=(860, 620),
             background_color="#0f0f1a",
         )
+        if on_close is not None:
+            def _on_closing():
+                try:
+                    on_close()
+                except Exception as exc:
+                    log.debug("on_close callback failed: %s", exc)
+            try:
+                window.events.closing += _on_closing
+                window.events.closed += _on_closing
+            except Exception as exc:
+                log.debug("could not attach window close handler: %s", exc)
         webview.start(gui=gui, debug=False)
         log.info("native window closed")
     except Exception as exc:
         log.exception("pywebview %s failed: %s", gui, exc)
-        import webbrowser
-        webbrowser.open(url)
-        _alert("Hermes Installer",
-               f"原生窗口启动失败（{exc}），\n已在浏览器中打开：{url}")
+        if on_close is not None:
+            try:
+                on_close()
+            except Exception:
+                pass
+        _alert("Hermes Installer", f"原生窗口启动失败：{exc}")
+        sys.exit(1)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -181,15 +333,24 @@ def main():
     port = WEBUI_DEFAULT_PORT
     host = "127.0.0.1"
 
-    # If another instance already owns the port, just open it in browser
+    # If another instance already owns the port, ask the user whether to
+    # terminate it and launch a fresh native window. (No browser fallback —
+    # the previous window is just hidden behind other apps; we always
+    # restart in a native window when the user confirms.)
     if _port_in_use(port):
-        log.info("Port %d already in use — another WebUI instance running", port)
-        try:
-            import webbrowser
-            webbrowser.open(f"http://{host}:{port}")
-        except Exception:
-            pass
-        return
+        log.info("Port %d already in use — prompting user", port)
+        if not _confirm(
+            "Hermes Installer",
+            f"端口 {port} 已被另一个 Hermes 实例占用（窗口可能被遮挡）。\n"
+            f"关闭旧实例并打开新的 Hermes 窗口？",
+        ):
+            log.info("User declined — leaving existing instance running")
+            sys.exit(0)
+        log.info("User confirmed — terminating previous WebUI")
+        if not _free_port(port):
+            _alert("Hermes Installer",
+                   f"端口 {port} 无法释放。\n请手动停止占用进程后重试。")
+            sys.exit(1)
 
     # ── Launch bootstrap.py ──────────────────────────────────────────────
     # bootstrap.py handles everything:
@@ -251,12 +412,49 @@ def main():
         time.sleep(30)
         ready = _wait_for_server(port, timeout=10)
 
+    # ── Capture server.py PIDs so we can clean them up on exit ──────────────
+    # bootstrap.py spawns server.py detached and then exits. Without explicit
+    # cleanup, server.py would survive window close and accumulate as orphans
+    # on every launch — eventually holding the port and forcing the user
+    # through the conflict dialog every time.
+    server_pids = _pids_on_port(port) if ready else []
+    log.info("WebUI server PIDs to terminate on exit: %s", server_pids)
+
+    _cleanup_done = {"flag": False}
+
+    def _cleanup_servers(*_args):
+        if _cleanup_done["flag"]:
+            return
+        _cleanup_done["flag"] = True
+        if not server_pids:
+            return
+        log.info("Terminating WebUI server PIDs: %s", server_pids)
+        for pid in server_pids:
+            try:
+                _kill_pid(pid)
+            except Exception as exc:
+                log.debug("cleanup kill %s failed: %s", pid, exc)
+
+    atexit.register(_cleanup_servers)
+    # Cmd+Q / SIGTERM (e.g. Force Quit's polite first phase) / Ctrl+C
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(_sig, lambda *_: (_cleanup_servers(), sys.exit(0)))
+        except (ValueError, OSError) as exc:
+            log.debug("signal %s install failed: %s", _sig, exc)
+
     url = f"http://{host}:{port}/"
     title = "Hermes"
 
     log.info("Opening WebUI: %s (server ready=%s)", url, ready)
 
-    _open_native_window(title, url)
+    try:
+        _open_native_window(title, url, on_close=_cleanup_servers)
+    finally:
+        # Defense-in-depth: also clean up if we somehow get here. On macOS
+        # this rarely runs because cocoa terminates the process directly;
+        # the on_close callback registered above is the primary path.
+        _cleanup_servers()
 
 
 if __name__ == "__main__":
