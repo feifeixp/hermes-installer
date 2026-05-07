@@ -2038,6 +2038,45 @@ def handle_get(handler, parsed) -> bool:
             logger.exception("neowow status failed")
             return bad(handler, str(e), status=500)
 
+    # Lightweight cloud-config status for the settings panel — reads
+    # only what's already on disk, so it's free to call on every panel
+    # open.
+    if parsed.path == "/api/neowow/cloud-status":
+        from api.neowow import get_cloud_status
+        try:
+            return j(handler, get_cloud_status())
+        except Exception as e:
+            logger.exception("neowow cloud-status failed")
+            return bad(handler, str(e), status=500)
+
+    # Full cloud-config list (proxies through the saved deploy-token).
+    # Used by the panel's "查看所有云端配置" expansion.
+    if parsed.path == "/api/neowow/cloud-configs":
+        from api.neowow import list_cloud_configs
+        try:
+            return j(handler, {"configs": list_cloud_configs()})
+        except ValueError as e:
+            return bad(handler, str(e))                    # missing token → 400
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)        # upstream → 502
+        except Exception as e:
+            logger.exception("neowow cloud-configs failed")
+            return bad(handler, str(e), status=500)
+
+    # Active cloud config (full ConfigBlob). Read-only fetch — useful
+    # when the user wants to peek before applying.
+    if parsed.path == "/api/neowow/cloud-active":
+        from api.neowow import get_active_cloud_config
+        try:
+            return j(handler, {"active": get_active_cloud_config()})
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow cloud-active failed")
+            return bad(handler, str(e), status=500)
+
     if parsed.path == "/api/workspaces/suggest":
         qs = parse_qs(parsed.query)
         prefix = qs.get("prefix", [""])[0]
@@ -3544,6 +3583,22 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e), status=502)
         except Exception as e:
             logger.exception("neowow deploy failed")
+            return bad(handler, str(e), status=500)
+
+    if parsed.path == "/api/neowow/cloud-apply":
+        # No body — pulls the active cloud config and writes it into
+        # ~/.hermes/config.yaml. Idempotent: re-running with the same
+        # cloud state produces the same bytes. Safe to call from a
+        # button click and (eventually) from app boot.
+        try:
+            from api.neowow import apply_active_cloud_config
+            return j(handler, apply_active_cloud_config())
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow cloud-apply failed")
             return bad(handler, str(e), status=500)
 
     return False  # 404

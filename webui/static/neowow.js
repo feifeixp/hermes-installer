@@ -69,6 +69,42 @@
     if (wsInput && !wsInput.value) {
       wsInput.value = currentWorkspace() || '';
     }
+
+    // Cloud-config card piggybacks on the same panel-open event so it
+    // renders together with the token state — keeps panel-load to one
+    // /api/neowow/* round-trip pair instead of a network waterfall.
+    void loadCloudStatus();
+  }
+
+  // ── Cloud config — read-only status card ─────────────────────────────
+  async function loadCloudStatus() {
+    const el = $('neowowCloudStatus');
+    if (!el) return;
+    try {
+      const r = await fetch('/api/neowow/cloud-status');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      const last = d.lastSync || {};
+      const cached = d.cached || null;
+
+      if (!last.slug && !cached) {
+        el.innerHTML = '<span style="color:var(--muted)">还没同步过云端配置。点下面的「同步」按钮拉取激活的配置。</span>';
+        return;
+      }
+
+      const name = last.name || cached?.name || '?';
+      const slug = last.slug || cached?.slug || '';
+      const model = last.modelName || cached?.config?.model?.name || '?';
+      const at   = last.syncedAt || cached?.synced_at || '';
+      const atStr = at ? `· 上次同步 ${formatRelative(at)}` : '';
+      el.innerHTML = `
+        <div style="color:var(--text)">已同步：<strong>${escapeHtml(name)}</strong> <span style="color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px">/${escapeHtml(slug)}</span></div>
+        <div style="color:var(--muted);margin-top:2px">🤖 ${escapeHtml(model)} ${atStr}</div>
+      `;
+    } catch (e) {
+      el.textContent = `加载失败：${e.message}`;
+      el.style.color = '#ef4444';
+    }
   }
 
   function currentWorkspace() {
@@ -194,6 +230,114 @@
     return String(s || '').replace(/[&<>"']/g, c => ({
       '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
     }[c]));
+  }
+
+  // ── Cloud config — sync button ───────────────────────────────────────
+  // Pulls the active cloud config and writes ~/.hermes/config.yaml.
+  // Shows a clear "applied / skipped" report so users can see exactly
+  // what changed locally vs. what's still in the cloud blob for visibility
+  // only (tools / mcp / skills aren't auto-applied yet — by design).
+  window.neowowCloudSync = async function () {
+    const btn  = $('neowowCloudSyncBtn');
+    const out  = $('neowowCloudResult');
+    if (!btn || !out) return;
+    const wasLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '同步中…';
+    out.innerHTML = '';
+    try {
+      const r = await fetch('/api/neowow/cloud-apply', { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+
+      if (d.applied === false && d.reason === 'no_active') {
+        out.innerHTML = `<span style="color:#e8a030">⚠️ ${escapeHtml(d.message || '云端没有激活的配置')}</span>` +
+          (d.url ? ` <a href="${escapeHtml(d.url)}" target="_blank" rel="noreferrer" style="color:var(--accent)">前往设置 →</a>` : '');
+        return;
+      }
+
+      const applied = (d.appliedFields || []).map(s => `<code>${escapeHtml(s)}</code>`).join('、') || '（无）';
+      const skipped = (d.skippedFields || []).length
+        ? `<div style="color:var(--muted);margin-top:4px">未写入：${d.skippedFields.map(s => escapeHtml(s)).join('；')}</div>` : '';
+      out.innerHTML = `
+        <div style="color:var(--accent)">✓ 已同步「${escapeHtml(d.name)}」 — 模型 <code>${escapeHtml(d.modelName || '?')}</code></div>
+        <div style="color:var(--muted);margin-top:4px">已写入 <code>~/.hermes/config.yaml</code> 的字段：${applied}</div>
+        ${skipped}
+      `;
+      // Refresh the status card so the timestamp updates.
+      void loadCloudStatus();
+    } catch (e) {
+      out.innerHTML = `<span style="color:#ef4444">❌ 同步失败：${escapeHtml(e.message)}</span>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = wasLabel;
+    }
+  };
+
+  // ── Cloud config — read-only list expansion ──────────────────────────
+  // First click pulls + renders the list. Second click hides it.
+  // Switching active is intentionally NOT exposed here: the dashboard's
+  // PATCH /active endpoint is JWT-only, so users do that via web UI.
+  window.neowowCloudList = async function () {
+    const btn = $('neowowCloudListBtn');
+    const box = $('neowowCloudListBox');
+    if (!btn || !box) return;
+    if (box.style.display === 'block') {
+      box.style.display = 'none';
+      btn.textContent = '📋 查看所有云端配置';
+      return;
+    }
+    const wasLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '加载中…';
+    try {
+      const r = await fetch('/api/neowow/cloud-configs');
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      const items = d.configs || [];
+      if (!items.length) {
+        box.innerHTML = '<div style="color:var(--muted);font-size:12px">云端还没有任何配置。<a href="https://app.neowow.studio/account/hermes-configs" target="_blank" rel="noreferrer" style="color:var(--accent)">前往创建 →</a></div>';
+      } else {
+        box.innerHTML =
+          '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">点 dashboard 上的 ⭐ 把某个设为「激活中」，然后回到这里点上方的「同步」按钮。</div>' +
+          items.map(c => `
+            <div style="padding:8px 10px;margin-bottom:6px;background:var(--bg);border:1px solid var(--border2);border-radius:6px">
+              <div style="font-weight:600;font-size:13px;color:var(--text)">${escapeHtml(c.name || c.slug)}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">
+                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">/${escapeHtml(c.slug)}</span>
+                · 🤖 ${escapeHtml(c.modelName || '默认')}
+                · ⚡ ${c.skillCount || 0}
+                ${c.updatedAt ? `· 🕒 ${escapeHtml(formatRelative(c.updatedAt))}` : ''}
+              </div>
+              ${c.description ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5">${escapeHtml(c.description)}</div>` : ''}
+            </div>
+          `).join('');
+      }
+      box.style.display = 'block';
+      btn.textContent = '📋 收起列表';
+    } catch (e) {
+      box.style.display = 'block';
+      box.innerHTML = `<div style="color:#ef4444;font-size:12px">加载失败：${escapeHtml(e.message)}</div>`;
+      btn.textContent = wasLabel;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  // ── Helpers ──────────────────────────────────────────────────────────
+  function formatRelative(isoStr) {
+    const t = Date.parse(isoStr);
+    if (isNaN(t)) return isoStr;
+    const sec = Math.round((Date.now() - t) / 1000);
+    if (sec < 0) return '刚刚';
+    if (sec < 60) return sec + ' 秒前';
+    const min = Math.round(sec / 60);
+    if (min < 60) return min + ' 分钟前';
+    const hr = Math.round(min / 60);
+    if (hr < 24)  return hr + ' 小时前';
+    const day = Math.round(hr / 24);
+    if (day < 30) return day + ' 天前';
+    return new Date(t).toLocaleDateString();
   }
 
   // Light-weight: Enter key on the token field saves immediately.

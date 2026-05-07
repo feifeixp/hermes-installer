@@ -967,6 +967,34 @@
               <label>最近一次部署</label>
               <div id="neowowLastDeployInfo" style="font-size:12px;color:var(--muted);line-height:1.6"></div>
             </div>
+
+            <!-- ── Cloud config sync ────────────────────────────── -->
+            <!-- Web at /account/hermes-configs is the SSOT writer; this -->
+            <!-- panel is the read-and-apply consumer. We don't expose -->
+            <!-- "switch active config" here because the dashboard PATCH -->
+            <!-- requires JWT (not deploy-token); send users to the web -->
+            <!-- UI for that. -->
+            <div class="settings-field" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+              <label>云端配置（model + 系统提示词）</label>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.6">
+                在 <a href="https://app.neowow.studio/account/hermes-configs" target="_blank" rel="noreferrer" style="color:var(--accent)">app.neowow.studio/account/hermes-configs</a> 选好预设后，点这里同步到本地。
+                自动写入 <code>~/.hermes/config.yaml</code> 的 <code>model.default</code> 和 <code>agent.system_prompt</code>。
+              </div>
+
+              <div id="neowowCloudStatus" style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:8px">
+                加载中…
+              </div>
+
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn-tiny" id="neowowCloudSyncBtn" onclick="neowowCloudSync()">🔄 同步激活的云端配置</button>
+                <button class="btn-tiny" id="neowowCloudListBtn" onclick="neowowCloudList()">📋 查看所有云端配置</button>
+              </div>
+
+              <div id="neowowCloudResult" style="font-size:12px;margin-top:10px;line-height:1.6"></div>
+
+              <!-- Lazily populated by neowowCloudList() — read-only -->
+              <div id="neowowCloudListBox" style="display:none;margin-top:10px;padding:10px;background:var(--code-bg);border:1px solid var(--border2);border-radius:6px"></div>
+            </div>
           </div>
           <div class="settings-pane" id="settingsPaneSystem">
             <div class="settings-section-head">
