@@ -2029,7 +2029,14 @@ def handle_get(handler, parsed) -> bool:
             handler, {"workspaces": load_workspaces(), "last": get_last_workspace()}
         )
 
-    # ── Neowow Studio integration ─────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
+    # BEGIN: Neowow integration — GET routes  (custom; not from upstream)
+    # If a subtree-pull conflict ever clobbers this block, copy it back
+    # from the patch snapshot.  See INTEGRATIONS.md (repo root) for the
+    # full recovery playbook.  Last verified working with upstream 9986d2f.
+    # Companion files: webui/api/neowow.py, webui/static/neowow.js,
+    #                  webui/static/index.html (the settings pane).
+    # ════════════════════════════════════════════════════════════════════
     if parsed.path == "/api/neowow/status":
         from api.neowow import get_status
         try:
@@ -2076,6 +2083,9 @@ def handle_get(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("neowow cloud-active failed")
             return bad(handler, str(e), status=500)
+    # ════════════════════════════════════════════════════════════════════
+    # END: Neowow integration — GET routes
+    # ════════════════════════════════════════════════════════════════════
 
     if parsed.path == "/api/workspaces/suggest":
         qs = parse_qs(parsed.query)
@@ -3547,7 +3557,11 @@ def handle_post(handler, parsed) -> bool:
             logger.exception("rollback/restore failed")
             return bad(handler, str(e), status=500)
 
-    # ── Neowow Studio integration (token CRUD + deploy) ───────────────────
+    # ════════════════════════════════════════════════════════════════════
+    # BEGIN: Neowow integration — POST routes  (custom; not from upstream)
+    # See INTEGRATIONS.md for the conflict-recovery playbook.
+    # Last verified working with upstream 9986d2f.
+    # ════════════════════════════════════════════════════════════════════
     if parsed.path == "/api/neowow/token":
         # Save: body { token: "nws_dt_..." }
         # Clear: body { clear: true }
@@ -3600,6 +3614,9 @@ def handle_post(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("neowow cloud-apply failed")
             return bad(handler, str(e), status=500)
+    # ════════════════════════════════════════════════════════════════════
+    # END: Neowow integration — POST routes
+    # ════════════════════════════════════════════════════════════════════
 
     return False  # 404
 

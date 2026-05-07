@@ -215,10 +215,12 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
           <span data-i18n="providers_tab_title">Providers</span>
         </button>
+        <!-- BEGIN: Neowow integration — side-menu entry  (custom; not from upstream) -->
         <button type="button" class="side-menu-item" data-settings-section="neowow" onclick="switchSettingsSection('neowow')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,2 22,8.5 22,15.5 12,22 2,15.5 2,8.5"/><line x1="12" y1="22" x2="12" y2="12"/><polyline points="2,8.5 12,12 22,8.5"/></svg>
           <span>Neowow Studio</span>
         </button>
+        <!-- END: Neowow integration — side-menu entry -->
         <button type="button" class="side-menu-item" data-settings-section="system" onclick="switchSettingsSection('system')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/></svg>
           <span>System</span>
@@ -917,6 +919,14 @@
               No configurable providers found.
             </div>
           </div>
+          <!-- ════════════════════════════════════════════════════════════════
+               BEGIN: Neowow integration — settings pane  (custom; not from upstream)
+               If a subtree-pull conflict ever clobbers this block, copy it back
+               from the patch snapshot. See INTEGRATIONS.md (repo root) for the
+               full recovery playbook. Last verified working with upstream 9986d2f.
+               Companion: webui/api/neowow.py, webui/static/neowow.js,
+                          webui/api/routes.py (Neowow integration markers).
+               ════════════════════════════════════════════════════════════════ -->
           <div class="settings-pane" id="settingsPaneNeowow">
             <div class="settings-section-head">
               <div>
@@ -996,6 +1006,9 @@
               <div id="neowowCloudListBox" style="display:none;margin-top:10px;padding:10px;background:var(--code-bg);border:1px solid var(--border2);border-radius:6px"></div>
             </div>
           </div>
+          <!-- ════════════════════════════════════════════════════════════════
+               END: Neowow integration — settings pane
+               ════════════════════════════════════════════════════════════════ -->
           <div class="settings-pane" id="settingsPaneSystem">
             <div class="settings-section-head">
               <div>

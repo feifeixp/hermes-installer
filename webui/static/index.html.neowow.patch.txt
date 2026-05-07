@@ -1,0 +1,98 @@
+# ─── Block #1 ─────────────────────────────────────────────────────────────
+        <!-- BEGIN: Neowow integration — side-menu entry  (custom; not from upstream) -->
+        <button type="button" class="side-menu-item" data-settings-section="neowow" onclick="switchSettingsSection('neowow')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,2 22,8.5 22,15.5 12,22 2,15.5 2,8.5"/><line x1="12" y1="22" x2="12" y2="12"/><polyline points="2,8.5 12,12 22,8.5"/></svg>
+          <span>Neowow Studio</span>
+        </button>
+        <!-- END: Neowow integration — side-menu entry -->
+
+# ─── Block #2 ─────────────────────────────────────────────────────────────
+               BEGIN: Neowow integration — settings pane  (custom; not from upstream)
+               If a subtree-pull conflict ever clobbers this block, copy it back
+               from the patch snapshot. See INTEGRATIONS.md (repo root) for the
+               full recovery playbook. Last verified working with upstream 9986d2f.
+               Companion: webui/api/neowow.py, webui/static/neowow.js,
+                          webui/api/routes.py (Neowow integration markers).
+               ════════════════════════════════════════════════════════════════ -->
+          <div class="settings-pane" id="settingsPaneNeowow">
+            <div class="settings-section-head">
+              <div>
+                <div class="settings-section-title">Neowow Studio</div>
+                <div class="settings-section-meta">把当前 workspace 一键发布到 <a href="https://app.neowow.studio" target="_blank" rel="noreferrer" style="color:var(--accent)">app.neowow.studio</a> · 公开 URL：<code>https://&lt;name&gt;.neowow.studio</code></div>
+              </div>
+            </div>
+
+            <!-- Token field -->
+            <div class="settings-field">
+              <label for="neowowTokenInput">部署 Token</label>
+              <div style="display:flex;gap:8px;align-items:stretch">
+                <input type="password" id="neowowTokenInput" placeholder="nws_dt_xxxxxxxxxxxx"
+                  autocomplete="off" spellcheck="false"
+                  style="flex:1;padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px">
+                <button class="btn-tiny" id="neowowSaveTokenBtn" onclick="neowowSaveToken()">保存</button>
+                <button class="btn-tiny" id="neowowClearTokenBtn" onclick="neowowClearToken()" style="display:none">清除</button>
+              </div>
+              <div id="neowowTokenStatus" style="font-size:11px;color:var(--muted);margin-top:6px">
+                还没保存 token。<a href="https://app.neowow.studio/account/deploy-tokens" target="_blank" rel="noreferrer" style="color:var(--accent)">前往 app.neowow.studio 生成 →</a>
+              </div>
+            </div>
+
+            <!-- Deploy form -->
+            <div class="settings-field">
+              <label>发布到 neowow</label>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <input type="text" id="neowowDeployName" placeholder="应用名（小写字母、数字、连字符；例如 my-app）"
+                  pattern="[a-z0-9][a-z0-9-]*" maxlength="63" autocomplete="off"
+                  style="padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px">
+                <input type="text" id="neowowDeployWorkspace" placeholder="workspace 路径（默认当前会话的 workspace）"
+                  autocomplete="off"
+                  style="padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px">
+                <button class="btn" id="neowowDeployBtn" onclick="neowowDeploy()" style="align-self:flex-start;padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500">
+                  🚀 部署到 neowow
+                </button>
+              </div>
+              <div id="neowowDeployStatus" style="font-size:12px;margin-top:8px;line-height:1.5"></div>
+              <div style="font-size:11px;color:var(--muted);margin-top:6px">
+                Hermes 会把 workspace 里所有文本文件（最多 200 个 / 5 MB / 单文件 ≤ 1 MB）打包发到 neowow。<br>
+                跳过 <code>node_modules</code> / <code>.git</code> / <code>dist</code> / 各种点目录、二进制资源。<br>
+                需要根目录有 <code>index.html</code>。
+              </div>
+            </div>
+
+            <!-- Last deploy summary (hidden until populated) -->
+            <div class="settings-field" id="neowowLastDeployBlock" style="display:none">
+              <label>最近一次部署</label>
+              <div id="neowowLastDeployInfo" style="font-size:12px;color:var(--muted);line-height:1.6"></div>
+            </div>
+
+            <!-- ── Cloud config sync ────────────────────────────── -->
+            <!-- Web at /account/hermes-configs is the SSOT writer; this -->
+            <!-- panel is the read-and-apply consumer. We don't expose -->
+            <!-- "switch active config" here because the dashboard PATCH -->
+            <!-- requires JWT (not deploy-token); send users to the web -->
+            <!-- UI for that. -->
+            <div class="settings-field" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+              <label>云端配置（model + 系统提示词）</label>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.6">
+                在 <a href="https://app.neowow.studio/account/hermes-configs" target="_blank" rel="noreferrer" style="color:var(--accent)">app.neowow.studio/account/hermes-configs</a> 选好预设后，点这里同步到本地。
+                自动写入 <code>~/.hermes/config.yaml</code> 的 <code>model.default</code> 和 <code>agent.system_prompt</code>。
+              </div>
+
+              <div id="neowowCloudStatus" style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:8px">
+                加载中…
+              </div>
+
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn-tiny" id="neowowCloudSyncBtn" onclick="neowowCloudSync()">🔄 同步激活的云端配置</button>
+                <button class="btn-tiny" id="neowowCloudListBtn" onclick="neowowCloudList()">📋 查看所有云端配置</button>
+              </div>
+
+              <div id="neowowCloudResult" style="font-size:12px;margin-top:10px;line-height:1.6"></div>
+
+              <!-- Lazily populated by neowowCloudList() — read-only -->
+              <div id="neowowCloudListBox" style="display:none;margin-top:10px;padding:10px;background:var(--code-bg);border:1px solid var(--border2);border-radius:6px"></div>
+            </div>
+          </div>
+          <!-- ════════════════════════════════════════════════════════════════
+               END: Neowow integration — settings pane
+
