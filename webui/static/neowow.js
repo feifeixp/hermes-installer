@@ -31,8 +31,9 @@
   async function refreshRailAvatar() {
     const disc    = $('neowowAvatarDisc');
     const initial = $('neowowAvatarInitial');
+    const svg     = $('neowowAvatarSvg');
     const btn     = $('neowowAvatarRail');
-    if (!disc || !initial || !btn) return;
+    if (!disc || !initial || !svg || !btn) return;
 
     let status = null;
     try {
@@ -41,19 +42,19 @@
     } catch (_) { /* offline — keep current state */ }
 
     if (!status || !status.hasJwt) {
-      disc.style.background = 'rgba(255,255,255,0.08)';
-      disc.style.border     = '1px dashed rgba(255,255,255,0.30)';
-      disc.style.color      = 'rgba(255,255,255,0.60)';
-      initial.textContent   = '?';
-      btn.title             = '点击登录 Neodomain';
-      disc.dataset.hasJwt   = '';
-      disc.dataset.nickname = '';
+      // Logged-out: show person SVG (inherits stroke=currentColor from
+      // rail-btn so it matches every other rail icon's theme color),
+      // hide the colored disc.
+      svg.style.display    = '';
+      disc.style.display   = 'none';
+      btn.title            = '点击登录 Neodomain';
+      btn.dataset.hasJwt   = '';
+      btn.dataset.nickname = '';
       return;
     }
 
-    // Logged in — pull nickname from /api/neowow/whoami so we can
-    // render the user's first character. Best-effort: '?' if fetch
-    // fails.
+    // Logged-in: pull nickname for the disc letter.  Best-effort: '✓'
+    // if /api/neowow/whoami isn't available (offline / token issue).
     let nickname = '';
     try {
       const r = await fetch('/api/neowow/whoami');
@@ -64,25 +65,30 @@
     } catch (_) { /* keep nickname empty */ }
 
     const ch = (nickname && nickname[0]) || '✓';
-    disc.style.background = 'linear-gradient(135deg, #5e60ce, #7950f2)';
-    disc.style.border     = 'none';
-    disc.style.color      = '#fff';
-    initial.textContent   = ch.toUpperCase();
-    btn.title             = nickname ? `已登录 · ${nickname}（点击查看积分）` : '已登录（点击查看积分）';
-    disc.dataset.hasJwt   = '1';
-    disc.dataset.nickname = nickname || '';
+    svg.style.display    = 'none';
+    disc.style.display   = 'inline-flex';
+    initial.textContent  = ch.toUpperCase();
+    btn.title            = nickname ? `已登录 · ${nickname}（点击查看积分）` : '已登录（点击查看积分）';
+    btn.dataset.hasJwt   = '1';
+    btn.dataset.nickname = nickname || '';
   }
 
   window.neowowAvatarClick = async function (event) {
     if (event && event.preventDefault) event.preventDefault();
-    const disc    = $('neowowAvatarDisc');
+    if (event && event.stopPropagation) event.stopPropagation();
     const popover = $('neowowAuthPopover');
     const body    = $('neowowAuthPopBody');
     const btn     = $('neowowAvatarRail');
-    if (!disc || !popover || !body || !btn) return;
+    if (!popover || !body || !btn) return;
+
+    // Logged-in state is stamped on the BUTTON's dataset by
+    // refreshRailAvatar (the disc is display:none when logged out, so
+    // its dataset isn't reliable).  Read from the button instead.
+    const hasJwt = btn.dataset.hasJwt === '1';
+    const nickname = btn.dataset.nickname || '';
 
     // Logged out → straight into OAuth.  No popover.
-    if (!disc.dataset.hasJwt) {
+    if (!hasJwt) {
       // Use the existing OAuth start (defined further down). Fall back
       // to a direct window.open if for some reason the function isn't
       // ready yet (script-load race).
@@ -124,7 +130,7 @@
         `;
         return;
       }
-      renderPopoverBody(body, d, disc.dataset.nickname || '');
+      renderPopoverBody(body, d, nickname);
     } catch (e) {
       body.innerHTML = `<div style="color:#ef4444">加载失败：${escapeHtml(e.message || 'unknown')}</div>`;
     }

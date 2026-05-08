@@ -5,8 +5,20 @@
     <!-- settings.  Logged-out: gray circle with "?". Logged-in: initial -->
     <!-- character on a colored disc.  Click handler in neowow.js.        -->
     <button class="rail-btn neowow-avatar-rail" id="neowowAvatarRail" type="button" onclick="neowowAvatarClick(event)" title="点击登录 Neodomain" aria-label="Neowow account">
-      <span class="neowow-avatar-disc" id="neowowAvatarDisc" style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,0.08);border:1px dashed rgba(255,255,255,0.30);color:rgba(255,255,255,0.60);font-weight:700;font-size:13px;line-height:1;transition:all 0.18s">
-        <span class="neowow-avatar-initial" id="neowowAvatarInitial">?</span>
+      <!-- Two-mode visual driven by JS:
+           • Logged-out  → #neowowAvatarSvg shows the person icon
+                            (inherits stroke=currentColor from rail-btn)
+           • Logged-in   → #neowowAvatarDisc shows a colored disc with
+                            the user's first character
+           Inline styles use CSS vars so the colors adapt to the active
+           theme (light / dark) — the previous version hard-coded
+           white-on-dark and was invisible on the cream light theme. -->
+      <svg id="neowowAvatarSvg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+        <circle cx="12" cy="7" r="4"/>
+      </svg>
+      <span class="neowow-avatar-disc" id="neowowAvatarDisc" style="display:none;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent,#5e60ce);color:#fff;font-weight:700;font-size:12px;line-height:1">
+        <span id="neowowAvatarInitial">?</span>
       </span>
     </button>
     <!-- END: Neowow integration — auth avatar rail button -->
