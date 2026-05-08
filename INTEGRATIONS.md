@@ -148,6 +148,42 @@ on `feat/neowow-cloud-config`).
 
 ---
 
+## Known historical traps (and how we sidestepped them)
+
+These are upstream changes that broke the integration.  Each one is
+documented so a future maintainer recognizes the symptom faster than
+we did.
+
+### Trap A — `switchSettingsSection` allow-list (caught: 2026-05)
+
+**Symptom**: clicking "Neowow Studio" in settings highlighted the
+sidebar item but the right pane silently kept showing Conversation.
+
+**Root cause**: at some point upstream `webui/static/panels.js` rewrote
+`switchSettingsSection(name)` to use a closed allow-list
+
+```js
+const section = (name === 'appearance' || name === 'preferences' ||
+                 name === 'providers'  || name === 'system')
+                  ? name : 'conversation';
+```
+
+so `switchSettingsSection('neowow')` falls through to `'conversation'`.
+The pre-existing override pattern (delegate to `_orig(name)`) inherited
+the bug verbatim.
+
+**Fix**: in `webui/static/neowow.js`, the override now short-circuits
+`'neowow'` BEFORE delegating to `_orig`, doing the sidebar / pane
+toggling itself by id list.  No upstream patch — keeps the trap
+isolated to our self-contained file.
+
+**Lesson**: function-level overrides that delegate to `_orig` only stay
+correct if upstream's function semantics don't change.  Treat any
+upstream JS function we hook as a fragile contract; intercept inputs
+we care about ourselves.
+
+---
+
 ## Future direction (Phase 2)
 
 The patch-and-pray approach gets fragile as we add more integrations.

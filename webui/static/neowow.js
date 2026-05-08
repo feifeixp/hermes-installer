@@ -14,12 +14,53 @@
 
   const $ = (id) => document.getElementById(id);
 
-  // Hook the existing switchSettingsSection to load on demand.
+  // Hook the existing switchSettingsSection.  IMPORTANT: upstream's
+  // implementation in webui/static/panels.js uses a closed allow-list:
+  //
+  //   const section = (name==='appearance'||name==='preferences'||
+  //                    name==='providers'||name==='system') ? name
+  //                                                         : 'conversation';
+  //
+  // so calling _orig('neowow') falls through to 'conversation' and our
+  // pane never activates.  This is the canonical "subtree pulled in a
+  // breaking upstream change" case our INTEGRATIONS.md playbook warned
+  // about — fix it locally instead of patching panels.js (which would
+  // re-break on every nightly subtree sync).
+  //
+  // The override below short-circuits 'neowow' before _orig sees it,
+  // does the same sidebar-active + pane-active toggling upstream does
+  // for whitelisted sections, then triggers our loader.  Any other
+  // name still goes through _orig untouched.
   if (typeof window.switchSettingsSection === 'function') {
     const _orig = window.switchSettingsSection;
     window.switchSettingsSection = function (name) {
+      if (name === 'neowow') {
+        // Sidebar — mark Neowow item active, others inactive.
+        document.querySelectorAll('#settingsMenu .side-menu-item').forEach((it) => {
+          it.classList.toggle('active', it.dataset && it.dataset.settingsSection === 'neowow');
+        });
+        // Panes — show Neowow, hide the others.  We list every known
+        // pane id explicitly so we don't accidentally activate a future
+        // upstream pane we don't know about.
+        var paneIds = [
+          'settingsPaneConversation',
+          'settingsPaneAppearance',
+          'settingsPanePreferences',
+          'settingsPaneProviders',
+          'settingsPaneNeowow',
+          'settingsPaneSystem',
+        ];
+        paneIds.forEach(function (id) {
+          var pane = document.getElementById(id);
+          if (pane) pane.classList.toggle('active', id === 'settingsPaneNeowow');
+        });
+        // Mobile dropdown sync — keep it in sync if it's there.
+        var dd = document.getElementById('settingsSectionDropdown');
+        if (dd && dd.value !== 'neowow') dd.value = 'neowow';
+        loadNeowowStatus();
+        return;
+      }
       _orig(name);
-      if (name === 'neowow') loadNeowowStatus();
     };
   }
 
