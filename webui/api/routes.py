@@ -3677,6 +3677,23 @@ def handle_post(handler, parsed) -> bool:
             logger.exception("neowow jwt save failed")
             return bad(handler, str(e), status=500)
 
+    # OAuth browser launcher — pywebview blocks window.open() inside
+    # the embedded WebUI, so the JS handler calls this endpoint
+    # instead. We use Python's `webbrowser` module to spawn the OS
+    # default browser at the dashboard's /api/oauth/start URL.
+    if parsed.path == "/api/neowow/oauth/launch":
+        try:
+            from api.neowow import launch_oauth
+            return_url = (body or {}).get("returnUrl", "")
+            return j(handler, launch_oauth(return_url))
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=500)
+        except Exception as e:
+            logger.exception("neowow oauth launch failed")
+            return bad(handler, str(e), status=500)
+
     if parsed.path == "/api/neowow/deploy":
         # body { workerName: string, workspace: string }
         # Bundles the workspace and pushes to https://app.neowow.studio.

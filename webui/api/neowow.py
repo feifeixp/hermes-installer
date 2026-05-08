@@ -338,6 +338,75 @@ def get_jwt() -> str:
     return (state.get("jwt") or "").strip()
 
 
+# ── OAuth launch ─────────────────────────────────────────────────────────────
+#
+# Why we need a Python-side launcher: Hermes WebUI loads inside a
+# pywebview window (see main.py).  pywebview silently blocks
+# `window.open(url, '_blank')` — the user clicks the rail avatar and
+# nothing visible happens.
+#
+# The fix is to call out to Python's `webbrowser` module, which always
+# opens the OS's default browser regardless of what window the WebUI
+# is running inside.  Same module the installer's first-run uses
+# (`app.py:1533: webbrowser.open("http://localhost:7891")`), so we
+# know it works on every supported platform.
+#
+# The return URL has to be on this Hermes server (localhost:<port>) so
+# the OAuth callback can POST the JWT back to /api/neowow/jwt without
+# CORS gymnastics.  We accept it from the caller (JS knows its own
+# origin) and validate that it points at us before forwarding.
+
+import re
+
+_OAUTH_AUTHORIZE_URL = "https://app.neowow.studio/api/oauth/start"
+
+# Allow callbacks ONLY back to localhost / 127.0.0.1 — defends against
+# a buggy / malicious browser-tab calling this endpoint to redirect
+# the user's OAuth landing somewhere we don't control.
+_LOCAL_RETURN_RE = re.compile(
+    r"^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?/api/neowow/oauth-callback$"
+)
+
+
+def launch_oauth(return_url: str) -> dict:
+    """Open the system default browser at the dashboard's OAuth start
+    URL with the given local-callback as the return target.
+
+    Validates that return_url points back at this Hermes server before
+    forwarding.  Returns {ok, url} so the UI can fall back to "click
+    here manually" if webbrowser.open() fails (rare, but possible on
+    headless / restricted environments).
+    """
+    return_url = (return_url or "").strip()
+    if not _LOCAL_RETURN_RE.match(return_url):
+        raise ValueError(
+            "Invalid return URL — must point back at this Hermes "
+            "server's /api/neowow/oauth-callback"
+        )
+
+    # URL-encode the return URL so spaces / special chars in the port
+    # don't trip up the dashboard's parser.
+    from urllib.parse import quote
+    auth_url = f"{_OAUTH_AUTHORIZE_URL}?return={quote(return_url, safe='')}"
+
+    import webbrowser
+    try:
+        # `new=2` asks the browser for a new tab (rather than a new
+        # window).  Most browsers honor this; the rest fall back to
+        # whatever they prefer, which is fine.
+        opened = webbrowser.open(auth_url, new=2)
+    except Exception as e:
+        raise RuntimeError(f"Failed to launch browser: {e}")
+
+    return {
+        "ok":      bool(opened),
+        "url":     auth_url,
+        # When opened is False (rare — e.g. on a headless box without
+        # a registered browser), the UI should surface `url` so the
+        # user can copy-paste it themselves.
+    }
+
+
 def _mask_token(t: str) -> str:
     # Show prefix + last 4. Sanity: tokens are 32+ chars, so this won't
     # accidentally reveal everything for a short string.

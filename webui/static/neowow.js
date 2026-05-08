@@ -581,20 +581,135 @@
   }
 
   // ── OAuth start (button click) ───────────────────────────────────────
-  // Build the dashboard URL with our localhost callback as return.
-  // The dashboard's existing /api/oauth/start route handles state +
-  // platform redirect + callback — same as Web does today.  After the
-  // user completes login, dashboard's /api/oauth/callback redirects
-  // them to <return>#neo_session=<base64>; the callback HTML at
-  // /api/neowow/oauth-callback persists the JWT + tells the user to
-  // close that tab.
-  window.neowowStartOAuth = function () {
+  //
+  // Hermes WebUI runs inside a pywebview window — `window.open()` is
+  // silently blocked there.  Call out to the Python backend, which
+  // uses webbrowser.open() to spawn the OS's default browser (same
+  // module the installer's first-run flow uses, so it's known good
+  // on every supported platform).
+  //
+  // After the launcher opens the browser, we start POLLING for the
+  // JWT.  When the user finishes OAuth on the platform, the dashboard
+  // callback redirects them to localhost:<port>/api/neowow/oauth-
+  // callback, which writes the JWT via POST /api/neowow/jwt.  Once
+  // /api/neowow/status returns `hasJwt: true`, we stop polling and
+  // refresh the avatar.  Total round-trip is a few seconds.
+  window.neowowStartOAuth = async function () {
     const ret = window.location.origin + '/api/neowow/oauth-callback';
-    const url = 'https://app.neowow.studio/api/oauth/start?return=' + encodeURIComponent(ret);
-    // Open in a new tab so the user's Hermes session is preserved if
-    // the OAuth flow gets interrupted.
-    window.open(url, '_blank');
+    try {
+      const r = await fetch('/api/neowow/oauth/launch', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ returnUrl: ret }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+
+      // Browser launched (or attempted) — show "等待登录中" + start
+      // polling.  The avatar disc UI doesn't change yet; the inline
+      // popover / account block does.
+      showOAuthWaiting(d.url);
+      startOAuthPolling();
+    } catch (e) {
+      // Fallback: surface the URL so the user can copy-paste into
+      // their browser manually.  This usually means webbrowser.open()
+      // returned False (no registered browser) or the launcher route
+      // 500'd somehow.
+      showOAuthFallback(ret, (e && e.message) || String(e));
+    }
   };
+
+  // Poll /api/neowow/status until JWT shows up (or we hit the cap).
+  let _oauthPollHandle = null;
+  function startOAuthPolling() {
+    stopOAuthPolling();
+    const start = Date.now();
+    const MAX_MS = 5 * 60 * 1000;  // 5 minutes — OAuth flows that take
+                                   // longer than this are dead anyway
+    _oauthPollHandle = setInterval(async () => {
+      if (Date.now() - start > MAX_MS) {
+        stopOAuthPolling();
+        return;
+      }
+      try {
+        const r = await fetch('/api/neowow/status');
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d.hasJwt) {
+          stopOAuthPolling();
+          // Fire the same event the inline JWT-save uses — every
+          // listener (rail avatar, account block, settings panes)
+          // refreshes itself.
+          try { window.dispatchEvent(new Event('neoSessionUpdated')); } catch (_) {}
+        }
+      } catch (_) { /* transient — keep polling */ }
+    }, 2000);
+  }
+  function stopOAuthPolling() {
+    if (_oauthPollHandle != null) {
+      clearInterval(_oauthPollHandle);
+      _oauthPollHandle = null;
+    }
+  }
+
+  // Show "waiting for OAuth" inline in the account block + popover so
+  // the user has feedback that something's happening.  Fires for
+  // ~5 minutes; cleared on success.
+  function showOAuthWaiting(authUrl) {
+    const waiting = `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(94,96,206,0.10);border:1px solid rgba(94,96,206,0.35);border-radius:8px;font-size:12px;color:var(--accent,#5e60ce)">
+        <div style="width:16px;height:16px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0"></div>
+        <div style="flex:1;line-height:1.5">
+          <div style="font-weight:600">浏览器已打开，等待 OAuth 完成…</div>
+          <div style="color:var(--muted);font-size:11px;margin-top:2px">没自动打开？<a href="${escapeHtml(authUrl)}" target="_blank" rel="noreferrer" style="color:var(--accent)">点这里手动打开 →</a></div>
+        </div>
+      </div>
+    `;
+    const accountBlock = $('neowowAccountBlock');
+    if (accountBlock) accountBlock.innerHTML = waiting;
+    const popoverBody = $('neowowAuthPopBody');
+    if (popoverBody) popoverBody.innerHTML = waiting;
+    // Inject the spinner @keyframes once.
+    ensureSpinKeyframes();
+  }
+
+  function showOAuthFallback(returnUrl, errMsg) {
+    const authUrl = 'https://app.neowow.studio/api/oauth/start?return=' + encodeURIComponent(returnUrl);
+    const html = `
+      <div style="padding:10px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:8px;font-size:12px;line-height:1.6">
+        <div style="font-weight:600;color:#e8a030">⚠️ 无法自动打开浏览器：${escapeHtml(errMsg)}</div>
+        <div style="margin-top:6px;color:var(--muted)">在浏览器里手动打开下方链接完成登录：</div>
+        <a href="${escapeHtml(authUrl)}" target="_blank" rel="noreferrer" style="display:block;margin-top:6px;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--accent);word-break:break-all">${escapeHtml(authUrl)}</a>
+        <button class="btn-tiny" onclick="window.neowowStartOAuth()" style="margin-top:8px">重试</button>
+      </div>
+    `;
+    const accountBlock = $('neowowAccountBlock');
+    if (accountBlock) accountBlock.innerHTML = html;
+    const popoverBody = $('neowowAuthPopBody');
+    if (popoverBody) popoverBody.innerHTML = html;
+    // Even in fallback, start polling — user might paste the URL
+    // and complete OAuth, in which case we'd still detect it.
+    startOAuthPolling();
+  }
+
+  // Inject `@keyframes spin` ONCE so the showOAuthWaiting spinner has
+  // an animation.  Idempotent — every subsequent call is a no-op.
+  function ensureSpinKeyframes() {
+    if (document.getElementById('neowowSpinKf')) return;
+    const style = document.createElement('style');
+    style.id = 'neowowSpinKf';
+    style.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(style);
+  }
+
+  // When the user comes back to the Hermes window from the browser
+  // tab, refresh state immediately — don't wait for the next poll
+  // tick.  This makes the OAuth completion feel instant (< 100 ms
+  // instead of up to 2 s).
+  window.addEventListener('focus', () => {
+    void refreshRailAvatar();
+    void refreshAccountBlock();
+  });
 
   window.neowowClearJwt = async function () {
     if (!confirm('确认退出 Neodomain？\n积分余额信息会消失，但保存的 deploy token 不受影响。')) return;
