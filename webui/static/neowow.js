@@ -37,7 +37,7 @@
 
     let status = null;
     try {
-      const r = await fetch('/api/neowow/status');
+      const r = await fetch('/api/neowow/status', { cache: 'no-store' });
       if (r.ok) status = await r.json();
     } catch (_) { /* offline — keep current state */ }
 
@@ -57,7 +57,7 @@
     // if /api/neowow/whoami isn't available (offline / token issue).
     let nickname = '';
     try {
-      const r = await fetch('/api/neowow/whoami');
+      const r = await fetch('/api/neowow/whoami', { cache: 'no-store' });
       if (r.ok) {
         const j = await r.json();
         nickname = (j && (j.nickname || j.contact || j.email)) || '';
@@ -116,7 +116,7 @@
     popover.style.display = 'block';
 
     try {
-      const r = await fetch('/api/neowow/points');
+      const r = await fetch('/api/neowow/points', { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) {
         // Most likely cause: JWT expired (Neodomain ~30-day TTL) or the
@@ -222,7 +222,7 @@
 
     let status = null;
     try {
-      const r = await fetch('/api/neowow/status');
+      const r = await fetch('/api/neowow/status', { cache: 'no-store' });
       if (r.ok) status = await r.json();
     } catch (_) { /* offline */ }
 
@@ -248,7 +248,7 @@
     let points = null;
     let nickname = '';
     try {
-      const r = await fetch('/api/neowow/points');
+      const r = await fetch('/api/neowow/points', { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
       points = d;
@@ -263,7 +263,7 @@
       return;
     }
     try {
-      const r = await fetch('/api/neowow/whoami');
+      const r = await fetch('/api/neowow/whoami', { cache: 'no-store' });
       if (r.ok) {
         const j = await r.json();
         nickname = (j && (j.nickname || j.contact || j.email)) || '';
@@ -364,7 +364,7 @@
     if (!statusEl) return;
 
     try {
-      const r = await fetch('/api/neowow/status');
+      const r = await fetch('/api/neowow/status', { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       if (d.hasToken) {
@@ -426,7 +426,7 @@
     const avatarEl = $('neowowIdentityAvatar');
     if (!card || !nameEl || !metaEl) return;
     try {
-      const r = await fetch('/api/neowow/whoami');
+      const r = await fetch('/api/neowow/whoami', { cache: 'no-store' });
       if (!r.ok) {
         // 401 (no token) is expected on first load — silently hide.
         // Other errors: also hide; the rest of the panel still works.
@@ -488,7 +488,7 @@
     let status = statusFromCaller;
     if (!status) {
       try {
-        const r = await fetch('/api/neowow/status');
+        const r = await fetch('/api/neowow/status', { cache: 'no-store' });
         if (!r.ok) throw new Error('status http ' + r.status);
         status = await r.json();
       } catch (e) {
@@ -515,7 +515,7 @@
     // State 3: have JWT — fetch balance + membership and render.
     block.innerHTML = `<span style="color:var(--muted)">加载积分余额…</span>`;
     try {
-      const r = await fetch('/api/neowow/points');
+      const r = await fetch('/api/neowow/points', { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) {
         // 502 + "JWT 已过期" type message — show with re-login prompt
@@ -597,7 +597,7 @@
   window.neowowStartOAuth = async function () {
     const ret = window.location.origin + '/api/neowow/oauth-callback';
     try {
-      const r = await fetch('/api/neowow/oauth/launch', {
+      const r = await fetch('/api/neowow/oauth/launch', { cache: 'no-store',
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ returnUrl: ret }),
@@ -620,11 +620,13 @@
   };
 
   // Poll /api/neowow/status until JWT shows up (or we hit the cap).
+  // Tight cadence (1 s) so a fast user typing in the browser sees the
+  // avatar update within ~1 s of finishing.
   let _oauthPollHandle = null;
   function startOAuthPolling() {
     stopOAuthPolling();
     const start = Date.now();
-    const MAX_MS = 5 * 60 * 1000;  // 5 minutes — OAuth flows that take
+    const MAX_MS = 5 * 60 * 1000;  // 5 min — OAuth flows that take
                                    // longer than this are dead anyway
     _oauthPollHandle = setInterval(async () => {
       if (Date.now() - start > MAX_MS) {
@@ -632,18 +634,20 @@
         return;
       }
       try {
-        const r = await fetch('/api/neowow/status');
+        const r = await fetch('/api/neowow/status', { cache: 'no-store' });
         if (!r.ok) return;
         const d = await r.json();
+        try { console.log('[neowow] poll status:', d); } catch (_) {}
         if (d.hasJwt) {
           stopOAuthPolling();
+          try { console.log('[neowow] poll detected JWT — refreshing'); } catch (_) {}
           // Fire the same event the inline JWT-save uses — every
           // listener (rail avatar, account block, settings panes)
           // refreshes itself.
           try { window.dispatchEvent(new Event('neoSessionUpdated')); } catch (_) {}
         }
-      } catch (_) { /* transient — keep polling */ }
-    }, 2000);
+      } catch (e) { try { console.warn('[neowow] poll failed:', e); } catch (_) {} }
+    }, 1000);
   }
   function stopOAuthPolling() {
     if (_oauthPollHandle != null) {
@@ -706,15 +710,47 @@
   // tab, refresh state immediately — don't wait for the next poll
   // tick.  This makes the OAuth completion feel instant (< 100 ms
   // instead of up to 2 s).
-  window.addEventListener('focus', () => {
+  //
+  // Pywebview's webview surface doesn't always fire `focus` reliably
+  // (the embedded webkit/edge may have its own event quirks), so we
+  // listen on three orthogonal triggers — at least one fires every
+  // time the user comes back from another window.
+  function refreshAll(reason) {
+    // Aid debugging from DevTools console — comment in/out as needed.
+    try { console.log('[neowow] refresh:', reason); } catch (_) {}
     void refreshRailAvatar();
     void refreshAccountBlock();
+  }
+  window.addEventListener('focus',          () => refreshAll('focus'));
+  window.addEventListener('pageshow',       () => refreshAll('pageshow'));
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshAll('visibility');
   });
+
+  // Defense-in-depth: low-frequency background poll. Catches the case
+  // where ALL the focus/visibility events somehow miss (rare, but
+  // pywebview embedded-webview implementations vary). Cheap — single
+  // status fetch every 10 s, only triggers a re-render when state
+  // changed.
+  let _lastKnownHasJwt = null;
+  setInterval(async () => {
+    try {
+      const r = await fetch('/api/neowow/status', { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      const has = !!d.hasJwt;
+      if (_lastKnownHasJwt !== null && _lastKnownHasJwt !== has) {
+        try { console.log('[neowow] background poll detected JWT change:', _lastKnownHasJwt, '→', has); } catch (_) {}
+        refreshAll('background-poll');
+      }
+      _lastKnownHasJwt = has;
+    } catch (_) { /* offline — try again next tick */ }
+  }, 10_000);
 
   window.neowowClearJwt = async function () {
     if (!confirm('确认退出 Neodomain？\n积分余额信息会消失，但保存的 deploy token 不受影响。')) return;
     try {
-      const r = await fetch('/api/neowow/jwt', {
+      const r = await fetch('/api/neowow/jwt', { cache: 'no-store',
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ clear: true }),
@@ -738,7 +774,7 @@
     const el = $('neowowCloudStatus');
     if (!el) return;
     try {
-      const r = await fetch('/api/neowow/cloud-status');
+      const r = await fetch('/api/neowow/cloud-status', { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       const last = d.lastSync || {};
@@ -790,7 +826,7 @@
       return;
     }
     try {
-      const r = await fetch('/api/neowow/token', {
+      const r = await fetch('/api/neowow/token', { cache: 'no-store',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
@@ -807,7 +843,7 @@
   window.neowowClearToken = async function () {
     if (!confirm('清除已保存的部署 token？\n你之前用此 token 部署的应用不受影响。')) return;
     try {
-      const r = await fetch('/api/neowow/token', {
+      const r = await fetch('/api/neowow/token', { cache: 'no-store',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clear: true }),
@@ -851,7 +887,7 @@
     showStatus(statusEl, '正在打包 workspace 并推送到 neowow.studio…', 'progress');
 
     try {
-      const r = await fetch('/api/neowow/deploy', {
+      const r = await fetch('/api/neowow/deploy', { cache: 'no-store',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workerName, workspace }),
@@ -903,7 +939,7 @@
     btn.textContent = '同步中…';
     out.innerHTML = '';
     try {
-      const r = await fetch('/api/neowow/cloud-apply', { method: 'POST' });
+      const r = await fetch('/api/neowow/cloud-apply', { cache: 'no-store', method: 'POST' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
 
@@ -948,7 +984,7 @@
     btn.disabled = true;
     btn.textContent = '加载中…';
     try {
-      const r = await fetch('/api/neowow/cloud-configs');
+      const r = await fetch('/api/neowow/cloud-configs', { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       const items = d.configs || [];
@@ -999,7 +1035,7 @@
     const el = $('neowowSkillsStatus');
     if (!el) return;
     try {
-      const r = await fetch('/api/neowow/skills/local-status');
+      const r = await fetch('/api/neowow/skills/local-status', { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       const items = d.localSkills || [];
@@ -1033,7 +1069,7 @@
     btn.textContent = '同步中…';
     out.innerHTML = '';
     try {
-      const r = await fetch('/api/neowow/skills/sync', { method: 'POST' });
+      const r = await fetch('/api/neowow/skills/sync', { cache: 'no-store', method: 'POST' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       const a = (d.added    || []).length;
@@ -1071,7 +1107,7 @@
     btn.disabled = true;
     btn.textContent = '加载中…';
     try {
-      const r = await fetch('/api/neowow/skills/cloud-list');
+      const r = await fetch('/api/neowow/skills/cloud-list', { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       const items = d.skills || [];
@@ -1116,7 +1152,7 @@
     btn.disabled = true;
     btn.textContent = '加载中…';
     try {
-      const r = await fetch('/api/neowow/skills/local-status');
+      const r = await fetch('/api/neowow/skills/local-status', { cache: 'no-store' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       const items = d.localSkills || [];
