@@ -90,8 +90,28 @@
     <button class="rail-btn nav-tab" data-panel="todos" onclick="switchPanel('todos')" title="Current task list" data-i18n-title="tab_todos" aria-label="Todos"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg></button>
     <button class="rail-btn nav-tab" data-panel="insights" onclick="switchPanel('insights')" title="Insights" data-i18n-title="tab_insights" aria-label="Insights"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg></button>
     <div class="rail-spacer"></div>
+    <!-- BEGIN: Neowow integration — auth avatar rail button (custom; not from upstream) -->
+    <!-- One-click Neodomain login.  Sits above the gear icon in the rail -->
+    <!-- so users see "logged in as <X> · 💎 balance" without diving into  -->
+    <!-- settings.  Logged-out: gray circle with "?". Logged-in: initial -->
+    <!-- character on a colored disc.  Click handler in neowow.js.        -->
+    <button class="rail-btn neowow-avatar-rail" id="neowowAvatarRail" type="button" onclick="neowowAvatarClick(event)" title="点击登录 Neodomain" aria-label="Neowow account">
+      <span class="neowow-avatar-disc" id="neowowAvatarDisc" style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,0.08);border:1px dashed rgba(255,255,255,0.30);color:rgba(255,255,255,0.60);font-weight:700;font-size:13px;line-height:1;transition:all 0.18s">
+        <span class="neowow-avatar-initial" id="neowowAvatarInitial">?</span>
+      </span>
+    </button>
+    <!-- END: Neowow integration — auth avatar rail button -->
     <button class="rail-btn nav-tab" data-panel="settings" onclick="switchPanel('settings')" title="Settings" data-i18n-title="tab_settings" aria-label="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </nav>
+
+  <!-- BEGIN: Neowow integration — auth popover (custom; not from upstream) -->
+  <!-- Anchored next to the avatar rail button. Hidden by default; -->
+  <!-- shown by neowowAvatarClick() when the user already has a JWT. -->
+  <!-- Logged-out clicks bypass this and start OAuth directly. -->
+  <div id="neowowAuthPopover" style="display:none;position:fixed;z-index:1500;min-width:280px;max-width:320px;padding:14px;background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.10);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,0.55);font-size:13px;line-height:1.5">
+    <div id="neowowAuthPopBody" style="display:flex;flex-direction:column;gap:10px"></div>
+  </div>
+  <!-- END: Neowow integration — auth popover -->
   <aside class="sidebar">
 
     <div class="sidebar-nav">
@@ -931,41 +951,56 @@
             <div class="settings-section-head">
               <div>
                 <div class="settings-section-title">Neowow Studio</div>
-                <div class="settings-section-meta">把当前 workspace 一键发布到 <a href="https://app.neowow.studio" target="_blank" rel="noreferrer" style="color:var(--accent)">app.neowow.studio</a> · 公开 URL：<code>https://&lt;name&gt;.neowow.studio</code></div>
+                <div class="settings-section-meta">登录 Neodomain 后即可发布应用 / 同步技能 / 使用云端配置 · 一键登录在左侧栏头像图标</div>
               </div>
             </div>
 
-            <!-- Identity card — populated by loadNeowowStatus when a -->
-            <!-- token is saved. Hidden by default to avoid a layout -->
-            <!-- shift on logged-out state. -->
-            <div id="neowowIdentityCard" style="display:none;margin-top:12px;padding:12px 14px;background:rgba(94,96,206,0.06);border:1px solid rgba(94,96,206,0.20);border-radius:10px">
-              <div style="display:flex;align-items:center;gap:12px">
-                <div id="neowowIdentityAvatar" style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#5e60ce,#7950f2);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0;overflow:hidden">?</div>
-                <div style="flex:1;min-width:0">
-                  <div id="neowowIdentityName" style="font-weight:600;color:var(--text);font-size:14px;line-height:1.3"></div>
-                  <div id="neowowIdentityMeta" style="color:var(--muted);font-size:11px;margin-top:2px;line-height:1.4"></div>
-                </div>
-                <a href="https://app.neowow.studio/account" target="_blank" rel="noreferrer" class="btn-tiny" style="text-decoration:none;flex-shrink:0">账户中心 →</a>
-              </div>
-              <!-- Neodomain JWT block — only shown when an identity is -->
-              <!-- known. Two states: logged out (button to start OAuth) -->
-              <!-- and logged in (balance + membership + logout). -->
-              <div id="neowowJwtBlock" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);font-size:12px"></div>
-            </div>
-
-            <!-- Token field -->
+            <!-- ── Account section — primary entry point ───────────── -->
+            <!-- Replaces the old "paste token first" flow.  When -->
+            <!-- logged out we show one big OAuth button.  When logged -->
+            <!-- in we mirror the avatar's popover content for context. -->
+            <!-- Shorter, friendlier than before. -->
             <div class="settings-field">
-              <label for="neowowTokenInput">部署 Token</label>
-              <div style="display:flex;gap:8px;align-items:stretch">
-                <input type="password" id="neowowTokenInput" placeholder="nws_dt_xxxxxxxxxxxx"
-                  autocomplete="off" spellcheck="false"
-                  style="flex:1;padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px">
-                <button class="btn-tiny" id="neowowSaveTokenBtn" onclick="neowowSaveToken()">保存</button>
-                <button class="btn-tiny" id="neowowClearTokenBtn" onclick="neowowClearToken()" style="display:none">清除</button>
+              <label>账号</label>
+              <div id="neowowAccountBlock" style="padding:14px;background:rgba(94,96,206,0.06);border:1px solid rgba(94,96,206,0.20);border-radius:10px;font-size:13px;line-height:1.6">
+                <span style="color:var(--muted)">加载中…</span>
               </div>
-              <div id="neowowTokenStatus" style="font-size:11px;color:var(--muted);margin-top:6px">
-                还没保存 token。<a href="https://app.neowow.studio/account/deploy-tokens" target="_blank" rel="noreferrer" style="color:var(--accent)">前往 app.neowow.studio 生成 →</a>
+            </div>
+
+            <!-- ── Advanced: Deploy Token (CI / scripts) ────────────── -->
+            <!-- Most users don't need this — JWT login already gives -->
+            <!-- access to deploy / market / hermes-config endpoints. -->
+            <!-- Surface it as collapsed advanced for CI/CD scenarios. -->
+            <details class="settings-field" style="background:transparent;border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:0">
+              <summary style="cursor:pointer;padding:10px 14px;color:var(--muted);font-size:12px;user-select:none">
+                ⚙️ 高级 — 部署 Token（CI 脚本用，普通使用不需要）
+              </summary>
+              <div style="padding:6px 14px 14px">
+                <div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.6">
+                  登录后所有功能都用 JWT 鉴权。Deploy token 主要给 CI / 自动化脚本用 —
+                  例如 <code>git push</code> 触发的部署管道。
+                  在 <a href="https://app.neowow.studio/account/deploy-tokens" target="_blank" rel="noreferrer" style="color:var(--accent)">app.neowow.studio/account/deploy-tokens</a> 生成。
+                </div>
+                <div style="display:flex;gap:8px;align-items:stretch">
+                  <input type="password" id="neowowTokenInput" placeholder="nws_dt_xxxxxxxxxxxx"
+                    autocomplete="off" spellcheck="false"
+                    style="flex:1;padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px">
+                  <button class="btn-tiny" id="neowowSaveTokenBtn" onclick="neowowSaveToken()">保存</button>
+                  <button class="btn-tiny" id="neowowClearTokenBtn" onclick="neowowClearToken()" style="display:none">清除</button>
+                </div>
+                <div id="neowowTokenStatus" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
               </div>
+            </details>
+
+            <!-- Identity card stays in the DOM but is hidden — older -->
+            <!-- code paths reference it.  After this redesign nothing -->
+            <!-- displays it; left for back-compat to keep the diff -->
+            <!-- small. Will be removed in a follow-up. -->
+            <div id="neowowIdentityCard" style="display:none">
+              <div id="neowowIdentityAvatar"></div>
+              <div id="neowowIdentityName"></div>
+              <div id="neowowIdentityMeta"></div>
+              <div id="neowowJwtBlock"></div>
             </div>
 
             <!-- Deploy form -->

@@ -14,6 +14,290 @@
 
   const $ = (id) => document.getElementById(id);
 
+  // ── Rail avatar — primary auth entry point ──────────────────────────────
+  //
+  // The avatar button next to the gear icon is now THE login surface.
+  // Three responsibilities:
+  //   1. Visual state — gray dashed circle when logged-out, solid colored
+  //      disc with the user's first character when logged-in.
+  //   2. Click — start OAuth (no JWT) or open the user popover (has JWT).
+  //   3. Popover — name, balance, per-type breakdown, recharge & logout.
+  //
+  // Refreshes on `neoSessionUpdated` (fired by /api/neowow/jwt POST + by
+  // logout) and on DOMContentLoaded.  Tolerates the API being briefly
+  // unavailable — the avatar just stays in its current state until the
+  // next refresh.
+
+  async function refreshRailAvatar() {
+    const disc    = $('neowowAvatarDisc');
+    const initial = $('neowowAvatarInitial');
+    const btn     = $('neowowAvatarRail');
+    if (!disc || !initial || !btn) return;
+
+    let status = null;
+    try {
+      const r = await fetch('/api/neowow/status');
+      if (r.ok) status = await r.json();
+    } catch (_) { /* offline — keep current state */ }
+
+    if (!status || !status.hasJwt) {
+      disc.style.background = 'rgba(255,255,255,0.08)';
+      disc.style.border     = '1px dashed rgba(255,255,255,0.30)';
+      disc.style.color      = 'rgba(255,255,255,0.60)';
+      initial.textContent   = '?';
+      btn.title             = '点击登录 Neodomain';
+      disc.dataset.hasJwt   = '';
+      disc.dataset.nickname = '';
+      return;
+    }
+
+    // Logged in — pull nickname from /api/neowow/whoami so we can
+    // render the user's first character. Best-effort: '?' if fetch
+    // fails.
+    let nickname = '';
+    try {
+      const r = await fetch('/api/neowow/whoami');
+      if (r.ok) {
+        const j = await r.json();
+        nickname = (j && (j.nickname || j.contact || j.email)) || '';
+      }
+    } catch (_) { /* keep nickname empty */ }
+
+    const ch = (nickname && nickname[0]) || '✓';
+    disc.style.background = 'linear-gradient(135deg, #5e60ce, #7950f2)';
+    disc.style.border     = 'none';
+    disc.style.color      = '#fff';
+    initial.textContent   = ch.toUpperCase();
+    btn.title             = nickname ? `已登录 · ${nickname}（点击查看积分）` : '已登录（点击查看积分）';
+    disc.dataset.hasJwt   = '1';
+    disc.dataset.nickname = nickname || '';
+  }
+
+  window.neowowAvatarClick = async function (event) {
+    if (event && event.preventDefault) event.preventDefault();
+    const disc    = $('neowowAvatarDisc');
+    const popover = $('neowowAuthPopover');
+    const body    = $('neowowAuthPopBody');
+    const btn     = $('neowowAvatarRail');
+    if (!disc || !popover || !body || !btn) return;
+
+    // Logged out → straight into OAuth.  No popover.
+    if (!disc.dataset.hasJwt) {
+      // Use the existing OAuth start (defined further down). Fall back
+      // to a direct window.open if for some reason the function isn't
+      // ready yet (script-load race).
+      if (typeof window.neowowStartOAuth === 'function') {
+        window.neowowStartOAuth();
+      } else {
+        const ret = window.location.origin + '/api/neowow/oauth-callback';
+        window.open('https://app.neowow.studio/api/oauth/start?return=' + encodeURIComponent(ret), '_blank');
+      }
+      return;
+    }
+
+    // Toggle on second click.
+    if (popover.style.display === 'block') {
+      popover.style.display = 'none';
+      return;
+    }
+
+    // Position the popover next to the rail button. Rail is on the
+    // LEFT edge of the viewport so we anchor to its right.
+    const rect = btn.getBoundingClientRect();
+    popover.style.left = (rect.right + 8) + 'px';
+    popover.style.top  = Math.max(8, rect.top - 8) + 'px';
+    body.innerHTML = '<div style="color:var(--muted)">加载积分余额…</div>';
+    popover.style.display = 'block';
+
+    try {
+      const r = await fetch('/api/neowow/points');
+      const d = await r.json();
+      if (!r.ok) {
+        // Most likely cause: JWT expired (Neodomain ~30-day TTL) or the
+        // user invalidated the session elsewhere. Offer re-login + logout.
+        body.innerHTML = `
+          <div style="color:#e8a030;line-height:1.6">⚠️ ${escapeHtml(d.error || ('HTTP '+r.status))}</div>
+          <div style="display:flex;gap:6px;margin-top:8px">
+            <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none;flex:1">🔑 重新登录</button>
+            <button class="btn-tiny" onclick="neowowClearJwt()" style="flex:1">退出</button>
+          </div>
+        `;
+        return;
+      }
+      renderPopoverBody(body, d, disc.dataset.nickname || '');
+    } catch (e) {
+      body.innerHTML = `<div style="color:#ef4444">加载失败：${escapeHtml(e.message || 'unknown')}</div>`;
+    }
+  };
+
+  function renderPopoverBody(el, points, nickname) {
+    const total = points.totalAvailablePoints || 0;
+    const m = points.membershipInfo || {};
+    const initial = (nickname && nickname[0] || '?').toUpperCase();
+    const memBadge = m.levelCode && m.levelCode !== 'FREE'
+      ? `<span style="display:inline-block;padding:1px 8px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;font-size:10px;font-weight:700;border-radius:6px;letter-spacing:0.3px;margin-left:6px">${escapeHtml(m.levelCode)}</span>`
+      : '';
+    const memLine = m.levelCode && m.levelCode !== 'FREE'
+      ? `<div style="color:var(--muted,#94a3b8);font-size:11px;margin-top:2px">${escapeHtml(m.levelName || m.levelCode)} 会员${m.membershipTypeDesc ? ' · '+escapeHtml(m.membershipTypeDesc) : ''}${m.expireTime ? ' · 到期 '+escapeHtml(String(m.expireTime).slice(0,10)) : ''}</div>`
+      : '';
+    const breakdown = (points.pointsDetails || [])
+      .filter(p => p.currentPoints > 0)
+      .map(p => `
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted,#94a3b8);padding:2px 0">
+          <span>${escapeHtml(p.pointsTypeName || ('类型 '+p.pointsType))}</span>
+          <span style="font-family:ui-monospace,Menlo,monospace">${p.currentPoints.toLocaleString()}</span>
+        </div>
+      `).join('');
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#5e60ce,#7950f2);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0">${escapeHtml(initial)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:14px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(nickname || '已登录')}${memBadge}</div>
+          ${memLine}
+        </div>
+      </div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;padding:8px 0">
+        <span style="font-size:11px;color:var(--muted,#94a3b8);text-transform:uppercase;letter-spacing:0.4px">总可用积分</span>
+        <span style="font-weight:700;font-size:20px;color:#c7d2fe;font-variant-numeric:tabular-nums">💎 ${total.toLocaleString()}</span>
+      </div>
+      ${breakdown ? '<div style="padding:6px 0;border-top:1px dashed rgba(255,255,255,0.06)">' + breakdown + '</div>' : ''}
+      <div style="display:flex;gap:6px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06)">
+        <a class="btn-tiny" href="https://app.neowow.studio/account" target="_blank" rel="noreferrer" style="text-decoration:none;flex:1;text-align:center;padding:6px 10px">💎 充值</a>
+        <button class="btn-tiny" onclick="neowowClearJwt()" style="flex:1;padding:6px 10px">退出</button>
+      </div>
+    `;
+  }
+
+  // Close popover on outside-click + ESC.
+  document.addEventListener('click', (e) => {
+    const popover = $('neowowAuthPopover');
+    const btn     = $('neowowAvatarRail');
+    if (!popover || popover.style.display !== 'block') return;
+    if (popover.contains(e.target) || (btn && btn.contains(e.target))) return;
+    popover.style.display = 'none';
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const popover = $('neowowAuthPopover');
+    if (popover && popover.style.display === 'block') popover.style.display = 'none';
+  });
+
+  // Refresh on session change + first paint.
+  document.addEventListener('DOMContentLoaded', () => {
+    void refreshRailAvatar();
+    void refreshAccountBlock();
+  });
+  window.addEventListener('neoSessionUpdated', () => {
+    void refreshRailAvatar();
+    void refreshAccountBlock();
+  });
+  // First-render fallback if DOMContentLoaded already fired before this
+  // script registered its listener (script lives inside an IIFE that
+  // runs on parse).
+  if (document.readyState !== 'loading') {
+    void refreshRailAvatar();
+    void refreshAccountBlock();
+  }
+
+  // ── Account block in Settings → Neowow Studio ─────────────────────────
+  //
+  // Replaces the old identity card + JWT block.  Three states:
+  //   1. Logged out — single big "🔑 登录 Neodomain" button.
+  //   2. Logged in — compact identity row + balance + recharge / logout.
+  //   3. JWT expired or backend issue — error + re-login button.
+  //
+  // Mirrors the popover contents to keep the surface consistent: the
+  // user can act either from the rail avatar or from this panel.
+
+  async function refreshAccountBlock() {
+    const el = $('neowowAccountBlock');
+    if (!el) return;
+
+    let status = null;
+    try {
+      const r = await fetch('/api/neowow/status');
+      if (r.ok) status = await r.json();
+    } catch (_) { /* offline */ }
+
+    if (!status || !status.hasJwt) {
+      // State 1: not logged in. Single prominent CTA.
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <div style="flex:1;min-width:200px">
+            <div style="font-weight:600;color:var(--text);font-size:14px;margin-bottom:4px">未登录 Neodomain</div>
+            <div style="color:var(--muted);font-size:12px;line-height:1.5">登录后即可：发布应用、同步技能、使用云端配置、查看积分余额。</div>
+          </div>
+          <button class="btn" onclick="neowowStartOAuth()" style="padding:10px 20px;background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;flex-shrink:0">
+            🔑 登录 Neodomain
+          </button>
+        </div>
+      `;
+      return;
+    }
+
+    // State 2 / 3: logged in — try to fetch points + identity. On
+    // failure (likely expired JWT), surface re-login option.
+    el.innerHTML = '<span style="color:var(--muted)">加载积分余额…</span>';
+    let points = null;
+    let nickname = '';
+    try {
+      const r = await fetch('/api/neowow/points');
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      points = d;
+    } catch (e) {
+      el.innerHTML = `
+        <div style="color:#e8a030;line-height:1.6;margin-bottom:8px">⚠️ ${escapeHtml((e && e.message) || 'unknown')}</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none">🔑 重新登录</button>
+          <button class="btn-tiny" onclick="neowowClearJwt()">退出</button>
+        </div>
+      `;
+      return;
+    }
+    try {
+      const r = await fetch('/api/neowow/whoami');
+      if (r.ok) {
+        const j = await r.json();
+        nickname = (j && (j.nickname || j.contact || j.email)) || '';
+      }
+    } catch (_) { /* keep '' */ }
+
+    const total = points.totalAvailablePoints || 0;
+    const m = points.membershipInfo || {};
+    const initial = (nickname[0] || '✓').toUpperCase();
+    const memBadge = m.levelCode && m.levelCode !== 'FREE'
+      ? `<span style="display:inline-block;padding:1px 8px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;font-size:10px;font-weight:700;border-radius:6px;letter-spacing:0.3px;margin-left:6px">${escapeHtml(m.levelCode)}</span>`
+      : '';
+    const memLine = m.levelCode && m.levelCode !== 'FREE'
+      ? `<div style="color:var(--muted);font-size:11px;margin-top:2px">${escapeHtml(m.levelName || m.levelCode)} 会员${m.membershipTypeDesc ? ' · ' + escapeHtml(m.membershipTypeDesc) : ''}${m.expireTime ? ' · 到期 ' + escapeHtml(String(m.expireTime).slice(0,10)) : ''}</div>`
+      : '';
+    const breakdown = (points.pointsDetails || [])
+      .filter(p => p.currentPoints > 0)
+      .map(p => `<span style="color:var(--muted)">${escapeHtml(p.pointsTypeName)} <strong style="color:var(--text);font-variant-numeric:tabular-nums">${p.currentPoints.toLocaleString()}</strong></span>`)
+      .join(' · ');
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#5e60ce,#7950f2);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:16px;flex-shrink:0">${escapeHtml(initial)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;color:var(--text);font-size:14px;line-height:1.3">${escapeHtml(nickname || '已登录')}${memBadge}</div>
+          ${memLine}
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.4px">总积分</div>
+          <div style="font-weight:700;font-size:18px;color:#c7d2fe;font-variant-numeric:tabular-nums">💎 ${total.toLocaleString()}</div>
+        </div>
+      </div>
+      ${breakdown ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(255,255,255,0.06);font-size:11px">${breakdown}</div>` : ''}
+      <div style="display:flex;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06)">
+        <a class="btn-tiny" href="https://app.neowow.studio/account" target="_blank" rel="noreferrer" style="text-decoration:none;flex:1;text-align:center">💎 充值 / 详情</a>
+        <button class="btn-tiny" onclick="neowowClearJwt()" style="flex:1">退出登录</button>
+      </div>
+    `;
+  }
+
   // Hook the existing switchSettingsSection.  IMPORTANT: upstream's
   // implementation in webui/static/panels.js uses a closed allow-list:
   //
@@ -117,17 +401,12 @@
     void loadCloudStatus();
     // Skills card too — disk-only read, free.
     void loadSkillsStatus();
-    // Identity chip — pulls /api/me/whoami so the user sees who they're
-    // logged in as. Skipped when no token is saved (the chip stays
-    // hidden and the user just sees the Token field).
-    if (d.hasToken) {
-      void loadIdentityChip();
-      // JWT block (Login Neodomain / balance) is part of the same card.
-      // Pass the status we already have so it doesn't re-fetch.
-      void loadJwtBlock(d);
-    } else {
-      hideIdentityChip();
-    }
+    // Identity chip + JWT block are now driven by the rail avatar +
+    // settings account block (refreshAccountBlock). The legacy
+    // identity card is hidden in the new HTML; we keep loadIdentityChip
+    // a no-op (it returns early when neowowIdentityCard has no
+    // visible parent siblings). Account-block refresh happens
+    // independently on neoSessionUpdated, so nothing to do here.
   }
 
   // ── Identity chip ────────────────────────────────────────────────────
@@ -323,6 +602,10 @@
         const j = await r.json().catch(() => ({}));
         throw new Error(j.error || ('HTTP '+r.status));
       }
+      // Close the popover + refresh visible state.
+      const popover = $('neowowAuthPopover');
+      if (popover) popover.style.display = 'none';
+      void refreshRailAvatar();
       void loadJwtBlock();
     } catch (e) {
       alert('退出失败：' + (e.message || e));
