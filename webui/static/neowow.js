@@ -76,6 +76,63 @@
     void loadCloudStatus();
     // Skills card too — disk-only read, free.
     void loadSkillsStatus();
+    // Identity chip — pulls /api/me/whoami so the user sees who they're
+    // logged in as. Skipped when no token is saved (the chip stays
+    // hidden and the user just sees the Token field).
+    if (d.hasToken) void loadIdentityChip();
+    else hideIdentityChip();
+  }
+
+  // ── Identity chip ────────────────────────────────────────────────────
+  // Renders <name> + small subtitle (account type / contact / userId).
+  // Populated by GET /api/neowow/whoami which proxies the dashboard's
+  // /api/me/whoami with the saved deploy-token.
+  async function loadIdentityChip() {
+    const card = $('neowowIdentityCard');
+    const nameEl = $('neowowIdentityName');
+    const metaEl = $('neowowIdentityMeta');
+    const avatarEl = $('neowowIdentityAvatar');
+    if (!card || !nameEl || !metaEl) return;
+    try {
+      const r = await fetch('/api/neowow/whoami');
+      if (!r.ok) {
+        // 401 (no token) is expected on first load — silently hide.
+        // Other errors: also hide; the rest of the panel still works.
+        hideIdentityChip();
+        return;
+      }
+      const d = await r.json();
+      const name = d.displayName || d.nickname || d.userId || '匿名';
+      nameEl.textContent = name;
+
+      // Avatar: use server-supplied image when present; otherwise
+      // first letter of name with the brand gradient background.
+      if (d.avatar) {
+        avatarEl.innerHTML = `<img src="${escapeHtml(d.avatar)}" alt="" style="width:100%;height:100%;object-fit:cover">`;
+      } else {
+        avatarEl.textContent = (name || '?').slice(0, 1).toUpperCase();
+      }
+
+      // Subtitle: account type · masked contact · last seen.  Filter out
+      // empty values so the row stays tight.
+      const parts = [];
+      if (d.userType) parts.push(d.userType === 'ENTERPRISE' ? '🏢 企业账户' : '👤 个人账户');
+      if (d.contact)  parts.push('📱 ' + escapeHtml(d.contact));
+      else if (d.email) parts.push('✉️ ' + escapeHtml(d.email));
+      // Keep userId compact — show last 8 chars only, full version is
+      // in the title attribute for hover-inspect.
+      if (d.userId)   parts.push('<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" title="user id: ' + escapeHtml(d.userId) + '">id …' + escapeHtml(d.userId.slice(-8)) + '</span>');
+      metaEl.innerHTML = parts.join(' · ');
+
+      card.style.display = 'block';
+    } catch {
+      hideIdentityChip();
+    }
+  }
+
+  function hideIdentityChip() {
+    const card = $('neowowIdentityCard');
+    if (card) card.style.display = 'none';
   }
 
   // ── Cloud config — read-only status card ─────────────────────────────

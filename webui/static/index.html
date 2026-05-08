@@ -935,6 +935,20 @@
               </div>
             </div>
 
+            <!-- Identity card — populated by loadNeowowStatus when a -->
+            <!-- token is saved. Hidden by default to avoid a layout -->
+            <!-- shift on logged-out state. -->
+            <div id="neowowIdentityCard" style="display:none;margin-top:12px;padding:12px 14px;background:rgba(94,96,206,0.06);border:1px solid rgba(94,96,206,0.20);border-radius:10px">
+              <div style="display:flex;align-items:center;gap:12px">
+                <div id="neowowIdentityAvatar" style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#5e60ce,#7950f2);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0;overflow:hidden">?</div>
+                <div style="flex:1;min-width:0">
+                  <div id="neowowIdentityName" style="font-weight:600;color:var(--text);font-size:14px;line-height:1.3"></div>
+                  <div id="neowowIdentityMeta" style="color:var(--muted);font-size:11px;margin-top:2px;line-height:1.4"></div>
+                </div>
+                <a href="https://app.neowow.studio/account" target="_blank" rel="noreferrer" class="btn-tiny" style="text-decoration:none;flex-shrink:0">账户中心 →</a>
+              </div>
+            </div>
+
             <!-- Token field -->
             <div class="settings-field">
               <label for="neowowTokenInput">部署 Token</label>

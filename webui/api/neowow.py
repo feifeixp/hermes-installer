@@ -73,6 +73,7 @@ _NEOWOW_DEPLOY_URL = f"{_NEOWOW_BASE}/api/deploy"
 # UI, then clicks "🔄 Sync" here so Hermes picks up the new active.
 _CLOUD_LIST_URL    = f"{_NEOWOW_BASE}/api/me/hermes-configs"
 _CLOUD_ACTIVE_URL  = f"{_NEOWOW_BASE}/api/me/hermes-configs/active"
+_WHOAMI_URL        = f"{_NEOWOW_BASE}/api/me/whoami"
 
 # Workspace walk caps. The dashboard's deploy pipeline tolerates ~5 MB
 # total but we don't want to silently hammer it with node_modules — be
@@ -523,6 +524,25 @@ def apply_active_cloud_config() -> dict:
         "appliedFields":  applied_fields,
         "skippedFields":  skipped_fields,
     }
+
+
+def get_whoami() -> dict:
+    """Identity-only proxy of dashboard's /api/me/whoami.
+
+    Returns who's logged in given the saved nws_dt_ deploy token —
+    used by the WebUI to render a "Logged in as <nickname>" chip
+    above the Token field so the user can see at a glance that the
+    token they pasted matches the account they intended.
+
+    Note: balance is intentionally NOT included.  Dashboard's whoami
+    surfaces a `_balanceUnavailable` field explaining why (deploy
+    tokens don't have credit-balance access via the standard
+    Neodomain endpoint; needs a JWT). The UI shows that hint.
+
+    Raises ValueError when no token is saved (caller should display
+    the "paste token first" message), RuntimeError on transport.
+    """
+    return _cloud_request(_WHOAMI_URL)
 
 
 def get_cloud_status() -> dict:

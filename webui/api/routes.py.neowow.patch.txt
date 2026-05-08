@@ -53,6 +53,22 @@
             logger.exception("neowow cloud-active failed")
             return bad(handler, str(e), status=500)
 
+    # Identity chip — proxies /api/me/whoami so the WebUI can render
+    # "Logged in as <nickname> · ENTERPRISE" without exposing the
+    # token to the browser. Cheap (one network call + one TableStore
+    # getRow on the dashboard side) so safe to refresh on panel-open.
+    if parsed.path == "/api/neowow/whoami":
+        from api.neowow import get_whoami
+        try:
+            return j(handler, get_whoami())
+        except ValueError as e:
+            return bad(handler, str(e))                    # missing token
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)        # upstream
+        except Exception as e:
+            logger.exception("neowow whoami failed")
+            return bad(handler, str(e), status=500)
+
     # Local-only inspect of ~/.hermes/skills/_neowow/ — disk read,
     # never network.  Used by the panel to render "you have N synced
     # skills" without forcing a round-trip on every open.
