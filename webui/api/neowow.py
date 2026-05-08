@@ -75,6 +75,125 @@ _CLOUD_LIST_URL    = f"{_NEOWOW_BASE}/api/me/hermes-configs"
 _CLOUD_ACTIVE_URL  = f"{_NEOWOW_BASE}/api/me/hermes-configs/active"
 _WHOAMI_URL        = f"{_NEOWOW_BASE}/api/me/whoami"
 
+
+# ── OAuth-callback bridge HTML ───────────────────────────────────────────────
+#
+# Served at /api/neowow/oauth-callback. The dashboard's /api/oauth/callback
+# appends `#neo_session=<base64-json>` to the return URL when redirecting
+# the user back. This page reads that fragment, extracts the JWT, POSTs
+# it to /api/neowow/jwt to persist on disk, and shows a success message
+# the user can close.
+#
+# Why a constant string rather than a separate static file: keeps the
+# page self-contained — no extra route to wire up for the asset, no
+# build step that could miss it, and zero chance of the file going
+# missing in a packaged install. ~2 KB.
+
+_OAUTH_CALLBACK_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neodomain 登录回调</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0f; color: #e2e8f0;
+           font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+           min-height: 100vh; display: flex; align-items: center; justify-content: center;
+           padding: 24px; }
+    .card { width: 100%; max-width: 480px; background: rgba(22,22,30,0.9);
+            border: 1px solid rgba(255,255,255,0.06); border-radius: 16px;
+            padding: 32px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+    .icon  { font-size: 48px; margin-bottom: 16px; }
+    h1     { font-size: 20px; font-weight: 600; margin-bottom: 8px; }
+    .desc  { font-size: 14px; color: rgba(255,255,255,0.6); line-height: 1.6; margin-bottom: 20px; }
+    .ok    { color: #51cf66; }
+    .err   { color: #ff6b6b; }
+    .spinner { width: 28px; height: 28px; margin: 0 auto 16px;
+               border: 3px solid rgba(255,255,255,0.15); border-top-color: #8b8df8;
+               border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .close-hint { margin-top: 20px; font-size: 12px; color: rgba(255,255,255,0.35); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div id="state-pending">
+      <div class="spinner"></div>
+      <h1>正在保存授权信息…</h1>
+      <p class="desc">从 app.neowow.studio 接收登录态中。</p>
+    </div>
+    <div id="state-ok" style="display:none">
+      <div class="icon ok">✅</div>
+      <h1 class="ok">Neodomain 授权成功</h1>
+      <p class="desc">JWT 已保存到 ~/.hermes/webui/neowow.json，可以关闭此页面回到 Hermes 控制台查看积分余额。</p>
+      <p class="close-hint">本页将在 3 秒后尝试自动关闭。</p>
+    </div>
+    <div id="state-err" style="display:none">
+      <div class="icon err">❌</div>
+      <h1 class="err">授权失败</h1>
+      <p class="desc" id="err-msg"></p>
+    </div>
+  </div>
+<script>
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function show(id) {
+    $('state-pending').style.display = 'none';
+    $('state-ok').style.display      = 'none';
+    $('state-err').style.display     = 'none';
+    $(id).style.display              = '';
+  }
+  function fail(msg) { $('err-msg').textContent = msg; show('state-err'); }
+
+  // Parse `#neo_session=<base64>`. Accept `#x=y&neo_session=z` too.
+  var hash = (window.location.hash || '').replace(/^#/, '');
+  var match = hash.match(/(?:^|&)neo_session=([^&]+)/);
+  if (!match) { fail('回调 URL 没有携带 neo_session 片段，可能登录流程被中断。'); return; }
+
+  // base64url → JSON.  The dashboard encodes the session blob as
+  // base64(JSON.stringify(...)) — invert that here.
+  function b64urlDecode(s) {
+    s = s.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    return decodeURIComponent(atob(s).split('').map(function (c) {
+      return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+    }).join(''));
+  }
+
+  var sess;
+  try { sess = JSON.parse(b64urlDecode(match[1])); }
+  catch (e) { fail('无法解析授权信息：' + e.message); return; }
+
+  var jwt = sess && sess.authorization;
+  if (!jwt) { fail('授权信息里没有找到 JWT (authorization 字段)。'); return; }
+
+  // Persist via Hermes' local server.  Same-origin (both on localhost)
+  // so no CORS concerns.
+  fetch('/api/neowow/jwt', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ jwt: jwt }),
+  }).then(function (r) {
+    if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ('HTTP ' + r.status)); });
+    return r.json();
+  }).then(function () {
+    // Strip the fragment so a refresh / bookmark doesn't replay the JWT.
+    try { history.replaceState({}, document.title, location.pathname); } catch (e) {}
+    show('state-ok');
+    // Best-effort auto-close. Browsers reject window.close() on tabs
+    // they didn't open programmatically — that's fine, the success
+    // message above tells the user to close manually.
+    setTimeout(function () { try { window.close(); } catch (e) {} }, 3000);
+  }).catch(function (e) {
+    fail('保存 JWT 失败：' + (e.message || e));
+  });
+})();
+</script>
+</body>
+</html>
+"""
+
 # Workspace walk caps. The dashboard's deploy pipeline tolerates ~5 MB
 # total but we don't want to silently hammer it with node_modules — be
 # conservative on the client side and require the user to scope the
@@ -134,15 +253,20 @@ def _write_state(state: dict) -> None:
 def get_status() -> dict:
     """Return whatever the UI needs to render the integration panel.
 
-    Never returns the full token. Masking shape is `nws_dt_…1234` so the
-    user can confirm "yes that's the token I pasted" without it being
-    copy-paste-able from screenshots.
+    Never returns the full token / JWT. Masking shapes:
+      • deploy token: `nws_dt_…1234`
+      • JWT:          `eyJ…1234` (just enough to confirm presence)
+    so the user can verify "yes that's the credential I saved" without
+    copy-pasting it back out of a screenshot.
     """
     state = _read_state()
     token = (state.get("token") or "").strip()
+    jwt   = (state.get("jwt") or "").strip()
     return {
         "hasToken":     bool(token),
         "maskedToken":  _mask_token(token) if token else "",
+        "hasJwt":       bool(jwt),
+        "maskedJwt":    _mask_jwt(jwt) if jwt else "",
         "lastDeploy":   state.get("lastDeploy"),
     }
 
@@ -170,12 +294,64 @@ def clear_token() -> dict:
     return get_status()
 
 
+# ── JWT (Neodomain user-auth token) — separate from the deploy token ─────────
+#
+# A nws_dt_ deploy token authenticates Hermes to /api/* endpoints on the
+# dashboard (deploy / market / hermes-configs). It does NOT carry credit-
+# spending authority — the dashboard intentionally does not let it call
+# /agent/* endpoints on Neodomain.
+#
+# The JWT IS that authority. Acquired via the OAuth flow (Login Neodomain
+# button → app.neowow.studio/api/oauth/start → callback writes it here),
+# we keep it alongside the deploy token in the same neowow.json so a
+# single `clear` action can wipe everything.
+
+def save_jwt(jwt: str) -> dict:
+    jwt = (jwt or "").strip()
+    if not jwt:
+        raise ValueError("jwt is required")
+    # Cheap shape check — JWTs have three base64url segments separated
+    # by dots. Reject obvious mistakes (someone pasting their deploy
+    # token here, or a stray newline).
+    if jwt.count(".") != 2 or jwt.startswith("nws_dt_"):
+        raise ValueError(
+            "That doesn't look like a Neodomain JWT (expected the "
+            "three-segment 'eyJ…' form, not nws_dt_… deploy token)."
+        )
+    state = _read_state()
+    state["jwt"] = jwt
+    _write_state(state)
+    return get_status()
+
+
+def clear_jwt() -> dict:
+    state = _read_state()
+    state.pop("jwt", None)
+    _write_state(state)
+    return get_status()
+
+
+def get_jwt() -> str:
+    """Return the saved JWT or '' when none. Internal helper for the
+    /agent/* proxy paths that need a real user token."""
+    state = _read_state()
+    return (state.get("jwt") or "").strip()
+
+
 def _mask_token(t: str) -> str:
     # Show prefix + last 4. Sanity: tokens are 32+ chars, so this won't
     # accidentally reveal everything for a short string.
     if len(t) < 12:
         return "nws_dt_***"
     return f"nws_dt_…{t[-4:]}"
+
+
+def _mask_jwt(t: str) -> str:
+    # JWTs are long; show first 6 + last 4 so users can spot it's a
+    # JWT without exposing the signature.
+    if len(t) < 16:
+        return "eyJ***"
+    return f"{t[:6]}…{t[-4:]}"
 
 
 # ── Workspace bundling ───────────────────────────────────────────────────────
@@ -543,6 +719,91 @@ def get_whoami() -> dict:
     the "paste token first" message), RuntimeError on transport.
     """
     return _cloud_request(_WHOAMI_URL)
+
+
+# ── Neodomain (/agent/*) proxy via JWT ───────────────────────────────────────
+#
+# The deploy token (nws_dt_) authenticates against dashboard /api/* paths.
+# The Neodomain platform itself (story.neodomain.cn, neowow.neodomain.cn,
+# ga.neodomain.cn) auths via JWT in an `accessToken` header. After the
+# OAuth-in-Hermes flow lands the JWT in our state file, these helpers
+# can call /agent/user/points/info, /agent/ai-image-generation/*, etc.,
+# directly — no dashboard hop.
+
+# Neodomain's API base. We use the same host the OAuth flow points at
+# (neowow.neodomain.cn) — that's the production environment per the
+# user's instruction.  /agent/* endpoints all live under it.
+_NEODOMAIN_BASE = "https://neowow.neodomain.cn"
+
+
+def _neodomain_get(path: str) -> dict:
+    """GET <NEODOMAIN_BASE><path> with the saved JWT.
+
+    Surfaces the same exceptions the cloud-config proxy does so route
+    handlers can map them uniformly:
+      ValueError   → no JWT saved (UI tells user to log in)
+      RuntimeError → HTTP / transport error
+    """
+    jwt = get_jwt()
+    if not jwt:
+        raise ValueError(
+            "未登录 Neodomain。点击下方「登录 Neodomain」按钮先完成授权。"
+        )
+    url = _NEODOMAIN_BASE + path
+    req = urllib.request.Request(
+        url,
+        headers={
+            "accessToken": jwt,
+            "Accept":      "application/json",
+            "User-Agent":  "Hermes/neowow-jwt-proxy",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")
+            err = json.loads(body).get("errMessage") or body
+        except Exception:
+            err = body or str(e)
+        # 401 / 403 → JWT likely expired (Neodomain JWTs ~30 days).
+        # Tell the caller so the UI can prompt for re-login instead
+        # of showing a generic error.
+        if e.code in (401, 403):
+            raise RuntimeError(
+                f"Neodomain 拒绝访问 ({e.code})：{err}。可能 JWT 已过期，请重新登录。"
+            )
+        raise RuntimeError(f"Neodomain API error ({e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach Neodomain: {e.reason}")
+
+
+def get_points_info() -> dict:
+    """Proxy GET /agent/user/points/info — returns the structured
+    points + membership response shape documented in
+    /Users/ff/Documents/api/获取余额度.md:
+
+      data: {
+        totalAvailablePoints: int,
+        pointsDetails: [{pointsType, pointsTypeName, currentPoints,
+                         expireTime, ...}, ...],
+        membershipInfo: {levelCode, levelName, expireTime,
+                         dailyPointsQuota, ...},
+      }
+
+    The UI renders this as the balance chip + membership badge (mirror
+    of dashboard's UserPoints.tsx, just running locally in Hermes).
+    """
+    raw = _neodomain_get("/agent/user/points/info")
+    if not isinstance(raw, dict) or not raw.get("success") or not raw.get("data"):
+        # Surface the platform's errMessage when present; otherwise a
+        # generic "no data" so the UI can show something useful.
+        msg = (raw or {}).get("errMessage") or "Neodomain 返回空数据"
+        raise RuntimeError(msg)
+    return raw["data"]
 
 
 def get_cloud_status() -> dict:

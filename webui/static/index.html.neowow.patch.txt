@@ -34,6 +34,10 @@
                 </div>
                 <a href="https://app.neowow.studio/account" target="_blank" rel="noreferrer" class="btn-tiny" style="text-decoration:none;flex-shrink:0">账户中心 →</a>
               </div>
+              <!-- Neodomain JWT block — only shown when an identity is -->
+              <!-- known. Two states: logged out (button to start OAuth) -->
+              <!-- and logged in (balance + membership + logout). -->
+              <div id="neowowJwtBlock" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);font-size:12px"></div>
             </div>
 
             <!-- Token field -->

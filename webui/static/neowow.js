@@ -79,8 +79,14 @@
     // Identity chip — pulls /api/me/whoami so the user sees who they're
     // logged in as. Skipped when no token is saved (the chip stays
     // hidden and the user just sees the Token field).
-    if (d.hasToken) void loadIdentityChip();
-    else hideIdentityChip();
+    if (d.hasToken) {
+      void loadIdentityChip();
+      // JWT block (Login Neodomain / balance) is part of the same card.
+      // Pass the status we already have so it doesn't re-fetch.
+      void loadJwtBlock(d);
+    } else {
+      hideIdentityChip();
+    }
   }
 
   // ── Identity chip ────────────────────────────────────────────────────
@@ -134,6 +140,153 @@
     const card = $('neowowIdentityCard');
     if (card) card.style.display = 'none';
   }
+
+  // ── JWT (Neodomain login) sub-block of the identity card ────────────────
+  //
+  // Three states the panel toggles between:
+  //   1. No deploy-token → identity card hidden entirely (handled above)
+  //   2. Deploy-token but no JWT → "登录 Neodomain" button to start OAuth
+  //   3. Deploy-token + JWT → balance / membership / "退出 Neodomain" button
+  //
+  // The OAuth flow uses the dashboard's existing /api/oauth/start
+  // endpoint with our localhost callback as the return URL.  Dashboard's
+  // sanitizeReturnUrl already whitelists localhost (the cross-origin
+  // session fragment work in commit 51361e4 added that), so no
+  // dashboard-side change is needed.
+
+  async function loadJwtBlock(statusFromCaller) {
+    const block = $('neowowJwtBlock');
+    if (!block) return;
+    // We may already have a fresh status from loadNeowowStatus that
+    // called us; otherwise refetch.
+    let status = statusFromCaller;
+    if (!status) {
+      try {
+        const r = await fetch('/api/neowow/status');
+        if (!r.ok) throw new Error('status http ' + r.status);
+        status = await r.json();
+      } catch (e) {
+        block.innerHTML = `<span style="color:#ef4444">加载授权状态失败：${escapeHtml(e.message)}</span>`;
+        return;
+      }
+    }
+
+    if (!status.hasJwt) {
+      // State 2: prompt for OAuth.
+      block.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <div style="color:var(--muted);line-height:1.6">
+            尚未登录 Neodomain — 登录后这里会显示积分余额，并解锁 Hermes 直接调用图片 / 视频生成。
+          </div>
+          <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none;flex-shrink:0">
+            🔑 登录 Neodomain
+          </button>
+        </div>
+      `;
+      return;
+    }
+
+    // State 3: have JWT — fetch balance + membership and render.
+    block.innerHTML = `<span style="color:var(--muted)">加载积分余额…</span>`;
+    try {
+      const r = await fetch('/api/neowow/points');
+      const d = await r.json();
+      if (!r.ok) {
+        // 502 + "JWT 已过期" type message — show with re-login prompt
+        block.innerHTML = `
+          <div style="color:#e8a030;line-height:1.6">⚠️ ${escapeHtml(d.error || ('HTTP '+r.status))}</div>
+          <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none;margin-top:6px">
+            🔑 重新登录 Neodomain
+          </button>
+        `;
+        return;
+      }
+      renderBalance(block, d, status);
+    } catch (e) {
+      block.innerHTML = `<span style="color:#ef4444">${escapeHtml(e.message || 'unknown')}</span>`;
+    }
+  }
+
+  function renderBalance(el, points, status) {
+    const total = points.totalAvailablePoints || 0;
+    const m     = points.membershipInfo || {};
+    const memBadge = m.levelCode && m.levelCode !== 'FREE'
+      ? `<span style="display:inline-block;padding:1px 6px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;font-size:10px;font-weight:700;border-radius:6px;letter-spacing:0.3px;margin-left:6px">${escapeHtml(m.levelCode)}</span>`
+      : '';
+    // Per-type breakdown — only show types the user has nonzero of
+    const details = (points.pointsDetails || []).filter(p => p.currentPoints > 0);
+    const detailRows = details.map(p => {
+      const expiry = p.expireTime ? ` <span style="color:var(--muted);font-size:10px">到期 ${escapeHtml(String(p.expireTime).slice(0,10))}</span>` : '';
+      return `<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:2px">
+        <span>${escapeHtml(p.pointsTypeName || ('类型 '+p.pointsType))}${expiry}</span>
+        <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${p.currentPoints.toLocaleString()}</span>
+      </div>`;
+    }).join('');
+
+    const memInfo = m.levelCode && m.levelCode !== 'FREE'
+      ? `<div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">
+           ${escapeHtml(m.levelName || m.levelCode)} 会员
+           ${m.membershipTypeDesc ? '· ' + escapeHtml(m.membershipTypeDesc) : ''}
+           ${m.expireTime ? '· 到期 <strong>' + escapeHtml(String(m.expireTime).slice(0,10)) + '</strong>' : ''}
+           ${m.dailyPointsQuota ? '· 每日赠送 ' + Number(m.dailyPointsQuota).toLocaleString() : ''}
+         </div>`
+      : '';
+
+    // JWT-mask + logout link
+    const masked = status && status.maskedJwt ? `· <code style="font-size:10px;color:var(--muted)">${escapeHtml(status.maskedJwt)}</code>` : '';
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div>
+          <div style="font-weight:700;color:#c7d2fe;font-size:18px;font-variant-numeric:tabular-nums">
+            💎 ${total.toLocaleString()}
+            ${memBadge}
+          </div>
+          ${memInfo}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+          <a href="https://app.neowow.studio/account" target="_blank" rel="noreferrer" class="btn-tiny" style="text-decoration:none">💎 充值</a>
+          <button class="btn-tiny" onclick="neowowClearJwt()" style="font-size:10px;padding:2px 8px">退出 Neodomain</button>
+        </div>
+      </div>
+      ${detailRows ? '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(255,255,255,0.06)">' + detailRows + '</div>' : ''}
+      <div style="margin-top:6px;font-size:10px;color:var(--muted)">已登录 Neodomain ${masked}</div>
+    `;
+  }
+
+  // ── OAuth start (button click) ───────────────────────────────────────
+  // Build the dashboard URL with our localhost callback as return.
+  // The dashboard's existing /api/oauth/start route handles state +
+  // platform redirect + callback — same as Web does today.  After the
+  // user completes login, dashboard's /api/oauth/callback redirects
+  // them to <return>#neo_session=<base64>; the callback HTML at
+  // /api/neowow/oauth-callback persists the JWT + tells the user to
+  // close that tab.
+  window.neowowStartOAuth = function () {
+    const ret = window.location.origin + '/api/neowow/oauth-callback';
+    const url = 'https://app.neowow.studio/api/oauth/start?return=' + encodeURIComponent(ret);
+    // Open in a new tab so the user's Hermes session is preserved if
+    // the OAuth flow gets interrupted.
+    window.open(url, '_blank');
+  };
+
+  window.neowowClearJwt = async function () {
+    if (!confirm('确认退出 Neodomain？\n积分余额信息会消失，但保存的 deploy token 不受影响。')) return;
+    try {
+      const r = await fetch('/api/neowow/jwt', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ clear: true }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || ('HTTP '+r.status));
+      }
+      void loadJwtBlock();
+    } catch (e) {
+      alert('退出失败：' + (e.message || e));
+    }
+  };
 
   // ── Cloud config — read-only status card ─────────────────────────────
   async function loadCloudStatus() {

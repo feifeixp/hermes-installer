@@ -53,6 +53,47 @@
             logger.exception("neowow cloud-active failed")
             return bad(handler, str(e), status=500)
 
+    # OAuth callback HTML — the user is sent here by the dashboard's
+    # /api/oauth/callback after they finish the Login Neodomain flow.
+    # The dashboard appends `#neo_session=<base64>` to the return URL;
+    # this tiny HTML page reads the fragment, POSTs the JWT to our
+    # /api/neowow/jwt endpoint to persist it, and shows a success
+    # message the user can close.
+    #
+    # Why not redirect-from-server: fragments are client-side only.
+    # The server can't see them. So we serve a static HTML that runs
+    # JS to extract the JWT and call our save endpoint.
+    if parsed.path == "/api/neowow/oauth-callback":
+        from api.neowow import _OAUTH_CALLBACK_HTML
+        try:
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/html; charset=utf-8")
+            handler.send_header("Cache-Control", "no-store")
+            body_bytes = _OAUTH_CALLBACK_HTML.encode("utf-8")
+            handler.send_header("Content-Length", str(len(body_bytes)))
+            handler.end_headers()
+            handler.wfile.write(body_bytes)
+            return True
+        except Exception as e:
+            logger.exception("oauth-callback render failed")
+            return bad(handler, str(e), status=500)
+
+    # Points + membership info — proxies Neodomain's
+    # /agent/user/points/info via the saved JWT. Returns the platform's
+    # data verbatim (totalAvailablePoints, pointsDetails, membershipInfo)
+    # so the UI can mirror what the dashboard's UserPoints chip shows.
+    if parsed.path == "/api/neowow/points":
+        from api.neowow import get_points_info
+        try:
+            return j(handler, get_points_info())
+        except ValueError as e:
+            return bad(handler, str(e))            # no JWT saved
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)  # Neodomain rejected / unreachable
+        except Exception as e:
+            logger.exception("neowow points failed")
+            return bad(handler, str(e), status=500)
+
     # Identity chip — proxies /api/me/whoami so the WebUI can render
     # "Logged in as <nickname> · ENTERPRISE" without exposing the
     # token to the browser. Cheap (one network call + one TableStore
@@ -115,6 +156,23 @@
             return bad(handler, str(e))
         except Exception as e:
             logger.exception("neowow token save failed")
+            return bad(handler, str(e), status=500)
+
+    # JWT save / clear — companion to /api/neowow/token but for the
+    # Neodomain user-auth JWT we capture from the OAuth callback. The
+    # callback HTML POSTs here with { jwt: "eyJ..." }; the WebUI's
+    # logout button POSTs { clear: true }.
+    if parsed.path == "/api/neowow/jwt":
+        try:
+            from api.neowow import save_jwt, clear_jwt
+            if body and body.get("clear"):
+                return j(handler, clear_jwt())
+            jwt = (body or {}).get("jwt", "")
+            return j(handler, save_jwt(jwt))
+        except ValueError as e:
+            return bad(handler, str(e))
+        except Exception as e:
+            logger.exception("neowow jwt save failed")
             return bad(handler, str(e), status=500)
 
     if parsed.path == "/api/neowow/deploy":
