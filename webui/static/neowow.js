@@ -354,6 +354,53 @@
     };
   }
 
+  // ── Token scope badges ────────────────────────────────────────────────
+  //
+  // Call /api/neowow/whoami (which proxies dashboard /api/me/whoami with
+  // the saved deploy token) and render the granted scopes as compact
+  // pills next to the masked token. Mirrors what the dashboard's
+  // /account/deploy-tokens page shows so the user sees the same answer
+  // in both places.
+  //
+  // Failures are silent — scope display is a nice-to-have and we
+  // shouldn't paint over the actual token-status line if whoami is
+  // unreachable (offline, expired, etc.).
+
+  /** Map a scope id to a short display label. Mirrors SCOPE_LABELS in
+   *  dashboard's lib/scopes.ts; trimmed for the popover-tight space. */
+  const SCOPE_LABELS = {
+    'deploy':           '部署',
+    'skills:read':      '查看技能',
+    'skills:subscribe': '订阅技能',
+    'skills:publish':   '发布技能',
+    'configs:read':     '读配置',
+    'configs:write':    '改配置',
+  };
+
+  async function renderTokenScopeBadges() {
+    const slot = document.getElementById('neowowTokenScopes');
+    if (!slot) return;
+    try {
+      const r = await fetch('/api/neowow/whoami', { cache: 'no-store' });
+      if (!r.ok) return;       // status line already rendered; just skip badges
+      const d = await r.json();
+      const scopes = Array.isArray(d.scopes) ? d.scopes : [];
+      if (scopes.length === 0) {
+        slot.innerHTML = '<span style="font-size:10px;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,0.04);color:var(--muted);border:1px dashed rgba(255,255,255,0.12)">无权限（已禁用）</span>';
+        return;
+      }
+      if (scopes.includes('*')) {
+        slot.innerHTML = '<span title="此 token 创建于权限分级之前；可在 dashboard 编辑收紧" style="font-size:10px;padding:1px 7px;border-radius:999px;background:rgba(245,158,11,0.12);color:#f59e0b;border:1px solid rgba(245,158,11,0.3)">完全访问（旧）</span>';
+        return;
+      }
+      slot.innerHTML = scopes
+        .map(s => `<span style="font-size:10px;padding:1px 7px;border-radius:999px;background:rgba(124,58,237,0.12);color:#a78bfa;border:1px solid rgba(124,58,237,0.25)">${escapeHtml(SCOPE_LABELS[s] || s)}</span>`)
+        .join('');
+    } catch {
+      // Silent — badges are decorative.
+    }
+  }
+
   // ── Status ────────────────────────────────────────────────────────────
   async function loadNeowowStatus() {
     const statusEl = $('neowowTokenStatus');
@@ -368,11 +415,16 @@
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       if (d.hasToken) {
-        statusEl.innerHTML = `已保存 token：<code>${escapeHtml(d.maskedToken)}</code>`;
+        statusEl.innerHTML = `已保存 token：<code>${escapeHtml(d.maskedToken)}</code><span id="neowowTokenScopes" style="margin-left:8px;display:inline-flex;flex-wrap:wrap;gap:4px;vertical-align:middle"></span>`;
         statusEl.style.color = 'var(--accent)';
         if (inputEl) inputEl.value = '';
         if (inputEl) inputEl.placeholder = '粘贴新 token 可覆盖';
         if (clearBtn) clearBtn.style.display = '';
+        // Fire scope fetch in parallel — purely cosmetic, OK if it fails.
+        // We pass through the dashboard's whoami via /api/neowow/whoami,
+        // which authenticates with the saved deploy token and returns
+        // the scope set we stamped at mint time.
+        void renderTokenScopeBadges();
       } else {
         statusEl.innerHTML = '还没保存 token。<a href="https://app.neowow.studio/account/deploy-tokens" target="_blank" rel="noreferrer" style="color:var(--accent)">前往 app.neowow.studio 生成 →</a>';
         statusEl.style.color = 'var(--muted)';
