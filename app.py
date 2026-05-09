@@ -483,10 +483,28 @@ async def _install_generator() -> AsyncGenerator[str, None]:
         yield _log("通过 WSL2 运行官方安装脚本（首次约需 5-10 分钟）...")
         yield _log(f"命令: curl -fsSL {INSTALL_SCRIPT} | bash")
 
+        # WHY setsid -w:
+        #   install.sh's prompt_yes_no does
+        #     elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        #         IFS= read -r answer < /dev/tty
+        # When wsl is spawned from a non-tty Python parent, WSL still
+        # ALLOCATES a /dev/tty inside the distro, but no one is on the
+        # master end to write to it — so the read blocks forever and the
+        # user sees a frozen "Install ripgrep…?[Y/n]" line.
+        #
+        # `setsid -w` creates a new session with NO controlling terminal,
+        # which makes opening /dev/tty fail. install.sh then falls to the
+        # `else answer=""` branch and uses the default (yes for ripgrep/
+        # ffmpeg, since the prompt is `[Y/n]`). Everything proceeds non-
+        # interactively. -w makes setsid wait for the child so we still
+        # get the real exit code.
+        #
+        # </dev/null on the outer bash is belt-and-suspenders: even if some
+        # future install.sh tries to read stdin directly, we feed EOF.
         rc = [0]
         async for e in _run_step(
             ["wsl", "--", "bash", "-c",
-             f"curl -fsSL {INSTALL_SCRIPT} | bash"],
+             f"setsid -w bash -c 'curl -fsSL {INSTALL_SCRIPT} | bash' </dev/null"],
             rc_box=rc,
         ):
             yield e
@@ -654,28 +672,24 @@ HERMES_INSTALL_URL = "https://hermes-agent.nousresearch.com/install.sh"
 async def api_install_simple():
     """Run the official one-liner: curl -fsSL URL | bash  (SSE stream).
 
-    On Windows this falls back to the native git+uv path (`_install_
-    generator`) instead of running install.sh through WSL.  Reason:
-    install.sh's `install_system_packages` step prompts the user to
-    confirm ripgrep/ffmpeg installation via:
+    On Windows this delegates to `_install_generator()`, which runs the
+    same install.sh through WSL2 but wraps the bash invocation in
+    `setsid -w` so the script's `prompt_yes_no` calls fall through to
+    the non-interactive default ("yes" for ripgrep/ffmpeg) instead of
+    blocking on a /dev/tty read no one can answer.
 
-        prompt_yes_no "Install ripgrep for faster file search and …"
-
-    The script reads the answer from `/dev/tty`, which inside a WSL
-    bash spawned from a non-tty parent (our subprocess in pywebview)
-    is allocated by WSL but has no master end the user can write to.
-    The read blocks indefinitely and the install hangs.
-
-    The native path skips install.sh entirely — it does
-    `git clone + uv venv + uv pip install -e .[all]` from Python with
-    no bash/tty involvement.  ripgrep/ffmpeg are optional anyway
-    (file search falls back to grep, TTS shows a warning); users who
-    want them can install via winget/choco/scoop afterward.
+    Earlier versions claimed this branch did "git clone + uv pip
+    install" entirely from Python — that was aspirational, not what
+    `_install_generator()` actually did.  Hermes Agent on Windows
+    requires its dependencies inside the WSL distro (apt-installed
+    Python, system libs, etc.), so install.sh is genuinely the right
+    tool; we just need to neutralize its tty prompt.
     """
 
-    # Windows: detour to the manual native installer.  The "simple"
-    # one-liner is a Unix construct; on Windows the WSL path has the
-    # tty-blocking ripgrep/ffmpeg prompt that strands the user.
+    # Windows: detour through `_install_generator()`, which on win32
+    # runs the official install.sh under `setsid -w` to dodge the
+    # tty-blocking ripgrep/ffmpeg prompt. See the comment block in
+    # `_install_generator` for the full diagnosis.
     if sys.platform == "win32":
         return StreamingResponse(
             _install_generator(),
