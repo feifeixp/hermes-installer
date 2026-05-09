@@ -84,65 +84,141 @@ apt-get update -qq
 apt-get install -y -qq curl ca-certificates git debian-keyring debian-archive-keyring apt-transport-https
 
 # ── 2. Install Caddy (if not present) ────────────────────────────────
+#
+# Caddy install is the #1 fragile step on China cloud servers:
+#   • Cloudsmith: SSL handshake often fails (common from CN networks)
+#   • api.github.com: rate-limited or blocked, hangs without timeout
+#   • github.com release downloads: slow / TCP RST
+#
+# Strategy: hard `--max-time` on every curl so we never hang. Try
+# 4 sources in order, take whoever responds first:
+#   1. Cloudsmith (official; works in EU/US)
+#   2. github.com direct release (works in US/most of world)
+#   3. ghproxy.com mirror (China-friendly GitHub proxy)
+#   4. mirror.ghproxy.com (alt China-friendly mirror)
+# Pin to a known version so we don't depend on api.github.com.
+CADDY_VER_PIN="2.8.4"
+
+# Helper: install Caddy from a tar.gz URL. Returns 0 on success.
+_try_caddy_url() {
+    local url="$1"
+    local arch="$2"
+    rm -f /tmp/caddy.tar.gz
+    if ! curl -fsSL --max-time 60 --retry 1 "$url" -o /tmp/caddy.tar.gz 2>/dev/null; then
+        return 1
+    fi
+    if ! tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy 2>/dev/null; then
+        rm -f /tmp/caddy.tar.gz
+        return 1
+    fi
+    chmod +x /usr/local/bin/caddy
+    rm -f /tmp/caddy.tar.gz
+    /usr/local/bin/caddy version >/dev/null 2>&1
+}
+
 if ! command -v caddy &>/dev/null; then
     echo "→ Installing Caddy..."
     CADDY_OK=false
 
-    # Try Cloudsmith (Caddy's official distro) — retry SSL flakes common
-    # from servers behind certain firewalls.
-    if curl -fsSL --retry 3 --retry-delay 3 --retry-all-errors \
+    # ── Try 1: Cloudsmith apt repo (official) ─────────────────────────
+    # Remove any stale keyring file FIRST so gpg --dearmor doesn't prompt
+    # to overwrite (which hangs the script).
+    rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    if curl -fsSL --max-time 15 \
         https://dl.cloudsmith.io/public/caddy/stable/gpg.key 2>/dev/null \
-        | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null; then
+        | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null; then
 
-        curl -fsSL --retry 3 --retry-delay 3 --retry-all-errors \
+        if curl -fsSL --max-time 15 \
             https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
-            > /etc/apt/sources.list.d/caddy-stable.list
+            > /etc/apt/sources.list.d/caddy-stable.list 2>/dev/null; then
 
-        apt-get update -qq 2>/dev/null || true
-        apt-get install -y -qq caddy 2>/dev/null && CADDY_OK=true
+            if apt-get update -qq 2>/dev/null && apt-get install -y -qq caddy 2>/dev/null; then
+                CADDY_OK=true
+                echo "  → Caddy installed via Cloudsmith"
+            fi
+        fi
     fi
 
-    # Fallback: download binary directly from GitHub (no GPG/Cloudsmith needed)
+    # ── Try 2/3/4: tar.gz binaries from various hosts ─────────────────
     if [[ "$CADDY_OK" != "true" ]]; then
-        echo "  Cloudsmith unavailable, falling back to GitHub binary..."
-        CADDY_VER=$(curl -fsSL --retry 3 --retry-delay 3 \
-            https://api.github.com/repos/caddyserver/caddy/releases/latest 2>/dev/null \
-            | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "v\?\([^"]*\)".*/\1/')
-        [[ -z "$CADDY_VER" ]] && CADDY_VER="2.8.4"
-
         ARCH=$(uname -m)
         [[ "$ARCH" == "x86_64" ]] && ARCH="amd64"
         [[ "$ARCH" == "aarch64" ]] && ARCH="arm64"
 
-        curl -fsSL --retry 3 --retry-delay 3 \
-            "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VER}/caddy_${CADDY_VER}_linux_${ARCH}.tar.gz" \
-            -o /tmp/caddy.tar.gz
+        # GitHub release path stays the same for all mirrors; only the
+        # host changes. We pin CADDY_VER_PIN so we don't have to query
+        # api.github.com (which is rate-limited from CN).
+        REL_PATH="caddyserver/caddy/releases/download/v${CADDY_VER_PIN}/caddy_${CADDY_VER_PIN}_linux_${ARCH}.tar.gz"
 
-        tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy
-        chmod +x /usr/local/bin/caddy
-        rm -f /tmp/caddy.tar.gz
+        for HOST_PREFIX in \
+            "https://github.com/" \
+            "https://ghproxy.com/https://github.com/" \
+            "https://mirror.ghproxy.com/https://github.com/" \
+        ; do
+            URL="${HOST_PREFIX}${REL_PATH}"
+            echo "  → Trying: $URL"
+            if _try_caddy_url "$URL" "$ARCH"; then
+                CADDY_OK=true
+                echo "  → Caddy installed from $HOST_PREFIX"
+                break
+            fi
+        done
 
-        # Create systemd unit from Caddy's built-in template
-        caddy environ >/dev/null 2>&1
-        groupadd --system caddy 2>/dev/null || true
-        useradd --system --gid caddy --create-home \
-            --home-dir /var/lib/caddy --shell /usr/sbin/nologin \
-            --comment "Caddy web server" caddy 2>/dev/null || true
+        # systemd unit (only needed for binary install — apt path bundles it)
+        if [[ "$CADDY_OK" == "true" ]]; then
+            groupadd --system caddy 2>/dev/null || true
+            useradd --system --gid caddy --create-home \
+                --home-dir /var/lib/caddy --shell /usr/sbin/nologin \
+                --comment "Caddy web server" caddy 2>/dev/null || true
 
-        curl -fsSL --retry 3 --retry-delay 3 \
-            "https://raw.githubusercontent.com/caddyserver/dist/master/init/caddy.service" \
-            -o /etc/systemd/system/caddy.service
-        systemctl daemon-reload
-        systemctl enable caddy
-        CADDY_OK=true
+            # Try to fetch the official caddy.service unit. If we can't,
+            # write a minimal one inline — this should never block install.
+            if ! curl -fsSL --max-time 15 \
+                "https://ghproxy.com/https://raw.githubusercontent.com/caddyserver/dist/master/init/caddy.service" \
+                -o /etc/systemd/system/caddy.service 2>/dev/null; then
+                cat > /etc/systemd/system/caddy.service <<'CADDY_UNIT'
+[Unit]
+Description=Caddy
+After=network.target
+
+[Service]
+User=caddy
+Group=caddy
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+CADDY_UNIT
+            fi
+            mkdir -p /etc/caddy
+            systemctl daemon-reload
+            systemctl enable caddy 2>/dev/null || true
+        fi
     fi
 
     if [[ "$CADDY_OK" != "true" ]]; then
-        echo "ERROR: Failed to install Caddy via Cloudsmith or GitHub binary."
-        echo "Install manually: https://caddyserver.com/docs/install"
+        cat <<'EOF'
+ERROR: All Caddy install methods failed. Manual install:
+
+  ssh into this server and run:
+
+    curl -fsSL --max-time 60 \
+      "https://ghproxy.com/https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz" \
+      -o /tmp/caddy.tar.gz
+    sudo tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy
+    sudo chmod +x /usr/local/bin/caddy
+
+  Then re-run this script.
+EOF
         exit 1
     fi
-    echo "  → Caddy installed: $(caddy version | head -1)"
+    echo "  ✓ Caddy installed: $(caddy version | head -1)"
 else
     echo "→ Caddy already installed: $(caddy version | head -1)"
 fi
