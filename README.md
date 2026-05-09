@@ -24,6 +24,18 @@
 - 设置面板：模型配置 / 多 Profile / 工具集 / 高级参数
 - Gateway 状态实时显示
 
+### Neowow Studio 集成
+
+桌面端与 [app.neowow.studio](https://app.neowow.studio) 双向打通，云端是 SSOT：
+
+- **OAuth 登录** — 侧栏头像点击即可在系统浏览器完成授权；登录态自动回写桌面，无需粘贴 token
+- **积分 / 会员** — 头像 popover 实时显示余额（按消耗类型分项）、会员等级，点击"充值"直达微信扫码下单
+- **配置云同步** — 在 web 端编辑的 Hermes 配置一键拉到本地（`~/.hermes/config.yaml`），告别多机重新配
+- **技能订阅同步** — 商店订阅的 Hermes 技能拉到 `~/.hermes/skills/_neowow/<id>/SKILL.md`，取消订阅自动清理
+- **应用一键发布** — Workspace 里的 webapp 一键部署到 `*.neowow.studio` 子域名（仍保留 deploy token 路径供 CI 使用）
+
+> 旧的 `nws_dt_` deploy token 仍然支持（在设置 → 高级里），用于无浏览器的 CI 环境。
+
 ### 桌面应用打包
 
 - **macOS**：`.app` + `.dmg`（pywebview + WKWebView 原生窗口）
@@ -84,9 +96,14 @@ hermes-installer/
 │   ├── bootstrap.py        #   启动引导（自动安装 + 环境准备）
 │   ├── server.py           #   ThreadingHTTPServer 入口
 │   ├── start.sh            #   手动启动脚本
-│   └── api/                #   API 路由、配置、会话、Gateway 通信
-├── app.py                  # [deprecated] FastAPI 后端（保留用于微信登录等端点）
-├── index.html              # [deprecated] 旧安装向导前端
+│   ├── api/                #   API 路由、配置、会话、Gateway 通信
+│   │   ├── neowow.py       #     Neowow Studio 集成（OAuth / 积分 / 部署 / 配置同步）
+│   │   ├── skills.py       #     技能订阅 → ~/.hermes/skills/_neowow 同步
+│   │   └── updates.py      #     应用自更新（带 auto-rebase）
+│   └── static/
+│       └── neowow.js       #   侧栏头像状态机 + 登录 popover + 缓存绕过
+├── app.py                  # FastAPI 后端（安装流程 SSE / 微信登录端点）
+├── INTEGRATIONS.md         # 与 nesquena/hermes-webui 共存的 subtree 维护手册
 ├── bundle_source.py        # 离线源码打包工具
 ├── hermes_installer.spec   # PyInstaller 打包配置
 ├── fix_annotations.py      # Python 兼容性修复
@@ -186,13 +203,15 @@ platforms:
 - [x] pywebview 原生桌面应用
 - [x] WebUI 现代对话界面
 - [x] 首次运行 onboarding 向导（12 提供商）
+- [x] **Neowow Studio 集成** — OAuth 登录 / 积分余额 / 微信充值 / 配置云同步 / 应用一键发布
+- [x] **Hermes 技能订阅同步** — `app.neowow.studio` 商店订阅 → `~/.hermes/skills/_neowow/`
+- [x] **应用自动更新** — 带 auto-rebase，本地有 commit 也能干净更新
 
 ### 📋 计划中
 
-- [ ] **Hermes 技能商店** — 浏览、安装、分享 Hermes Agent 技能
-- [ ] **neowow.studio 集成** — 打通 AIGC 创作者生态
+- [ ] **Hermes 技能商店浏览页** — 在桌面端直接浏览 / 试用 / 收藏
+- [ ] **本地技能发布** — 把本地写的 SKILL.md 一键发到商店
 - [ ] Windows 打包 CI/CD（GitHub Actions）
-- [ ] 应用自动更新
 - [ ] 多语言支持（i18n）
 - [ ] 离线安装包（内置 Python + Hermes Agent）
 
@@ -203,6 +222,7 @@ platforms:
 - Windows 11 内置 Edge WebView2，无需额外安装
 - Windows 10 用户如遇问题，请安装 [Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
 - 首次运行 SmartScreen 提示时，点「更多信息」→「仍要运行」
+- 安装 Hermes Agent 走原生 git + uv 路径（不走 install.sh），避免 WSL bash 的 `/dev/tty` 交互卡死
 
 ---
 
