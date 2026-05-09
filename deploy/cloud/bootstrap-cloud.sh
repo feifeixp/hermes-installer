@@ -30,34 +30,46 @@ fi
 
 # Must run as root (writes to /etc/, /opt/, creates user).
 #
-# We can't auto-elevate via `exec sudo bash "$0" "$@"` reliably:
-# when the script is piped from curl (the canonical install path
-# documented in CLOUD_DEPLOY.md), `$0` is the string "bash" (the
-# shell name, not a file path), so the re-exec becomes `sudo bash
-# bash chat.neowow.studio` which errors with "cannot execute binary
-# file". Instead we tell the user how to retry — explicit and
-# debuggable.
+# Auto-elevate when possible. Two scenarios:
+#   1. Running from a saved file path → simple `exec sudo bash "$0" "$@"`.
+#   2. Piped from `curl ... | bash` → $0 is the shell name "bash", not
+#      a file we can re-exec. Re-fetch the script from a known URL and
+#      pipe THAT through sudo bash. Idiomatic for curl-pipe installers.
+#
+# The re-fetch URL defaults to upstream main, but can be overridden via
+# HERMES_BOOTSTRAP_URL when running a fork or pinning to a tag.
+HERMES_BOOTSTRAP_URL="${HERMES_BOOTSTRAP_URL:-https://raw.githubusercontent.com/feifeixp/hermes-installer/main/deploy/cloud/bootstrap-cloud.sh}"
+
 if [[ $EUID -ne 0 ]]; then
-    cat >&2 <<EOF
-ERROR: This script needs root privileges.
+    if [[ -f "$0" ]]; then
+        echo "→ Re-running with sudo (script path: $0)..."
+        exec sudo -E bash "$0" "$@"
+    fi
+    # curl-pipe path: re-fetch + re-pipe through sudo bash.
+    if ! command -v curl >/dev/null 2>&1; then
+        cat >&2 <<EOF
+ERROR: This script needs root privileges and curl is not available
+to re-fetch itself for sudo. Either:
 
-If you piped it from curl, put sudo BEFORE the pipe:
+  • Run as root from the start:
+      sudo -i
+      curl -fsSL ${HERMES_BOOTSTRAP_URL} | bash -s -- ${DOMAIN}
 
-  curl -fsSL https://raw.githubusercontent.com/feifeixp/hermes-installer/main/deploy/cloud/bootstrap-cloud.sh \\
-    | sudo bash -s -- $DOMAIN
-
-Or download first, then run:
-
-  curl -fsSL https://raw.githubusercontent.com/feifeixp/hermes-installer/main/deploy/cloud/bootstrap-cloud.sh -o bootstrap-cloud.sh
-  sudo bash bootstrap-cloud.sh $DOMAIN
-
-Or run it directly as root:
-
-  sudo -i
-  curl -fsSL https://... | bash -s -- $DOMAIN
-
+  • Or download manually then sudo:
+      wget ${HERMES_BOOTSTRAP_URL}
+      sudo bash bootstrap-cloud.sh ${DOMAIN}
 EOF
-    exit 1
+        exit 1
+    fi
+    echo "→ Re-running with sudo (re-fetching from ${HERMES_BOOTSTRAP_URL})..."
+    # `bash -c "<script>" PROGNAME ARGS...` — PROGNAME is consumed as
+    # \$0 inside the new bash, ARGS become \$1..\$N. We pass "bootstrap-
+    # cloud" as the friendly progname so error messages don't say "bash".
+    SCRIPT_BODY="$(curl -fsSL "$HERMES_BOOTSTRAP_URL")" || {
+        echo "ERROR: Could not re-fetch ${HERMES_BOOTSTRAP_URL}" >&2
+        exit 1
+    }
+    exec sudo -E bash -c "$SCRIPT_BODY" bootstrap-cloud "$@"
 fi
 
 # ── 1. Detect distro ─────────────────────────────────────────────────
@@ -74,10 +86,63 @@ apt-get install -y -qq curl ca-certificates git debian-keyring debian-archive-ke
 # ── 2. Install Caddy (if not present) ────────────────────────────────
 if ! command -v caddy &>/dev/null; then
     echo "→ Installing Caddy..."
-    curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
-    apt-get update -qq
-    apt-get install -y -qq caddy
+    CADDY_OK=false
+
+    # Try Cloudsmith (Caddy's official distro) — retry SSL flakes common
+    # from servers behind certain firewalls.
+    if curl -fsSL --retry 3 --retry-delay 3 --retry-all-errors \
+        https://dl.cloudsmith.io/public/caddy/stable/gpg.key 2>/dev/null \
+        | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null; then
+
+        curl -fsSL --retry 3 --retry-delay 3 --retry-all-errors \
+            https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+            > /etc/apt/sources.list.d/caddy-stable.list
+
+        apt-get update -qq 2>/dev/null || true
+        apt-get install -y -qq caddy 2>/dev/null && CADDY_OK=true
+    fi
+
+    # Fallback: download binary directly from GitHub (no GPG/Cloudsmith needed)
+    if [[ "$CADDY_OK" != "true" ]]; then
+        echo "  Cloudsmith unavailable, falling back to GitHub binary..."
+        CADDY_VER=$(curl -fsSL --retry 3 --retry-delay 3 \
+            https://api.github.com/repos/caddyserver/caddy/releases/latest 2>/dev/null \
+            | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "v\?\([^"]*\)".*/\1/')
+        [[ -z "$CADDY_VER" ]] && CADDY_VER="2.8.4"
+
+        ARCH=$(uname -m)
+        [[ "$ARCH" == "x86_64" ]] && ARCH="amd64"
+        [[ "$ARCH" == "aarch64" ]] && ARCH="arm64"
+
+        curl -fsSL --retry 3 --retry-delay 3 \
+            "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VER}/caddy_${CADDY_VER}_linux_${ARCH}.tar.gz" \
+            -o /tmp/caddy.tar.gz
+
+        tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy
+        chmod +x /usr/local/bin/caddy
+        rm -f /tmp/caddy.tar.gz
+
+        # Create systemd unit from Caddy's built-in template
+        caddy environ >/dev/null 2>&1
+        groupadd --system caddy 2>/dev/null || true
+        useradd --system --gid caddy --create-home \
+            --home-dir /var/lib/caddy --shell /usr/sbin/nologin \
+            --comment "Caddy web server" caddy 2>/dev/null || true
+
+        curl -fsSL --retry 3 --retry-delay 3 \
+            "https://raw.githubusercontent.com/caddyserver/dist/master/init/caddy.service" \
+            -o /etc/systemd/system/caddy.service
+        systemctl daemon-reload
+        systemctl enable caddy
+        CADDY_OK=true
+    fi
+
+    if [[ "$CADDY_OK" != "true" ]]; then
+        echo "ERROR: Failed to install Caddy via Cloudsmith or GitHub binary."
+        echo "Install manually: https://caddyserver.com/docs/install"
+        exit 1
+    fi
+    echo "  → Caddy installed: $(caddy version | head -1)"
 else
     echo "→ Caddy already installed: $(caddy version | head -1)"
 fi
