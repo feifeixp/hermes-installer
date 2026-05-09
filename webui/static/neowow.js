@@ -109,9 +109,25 @@
 
     // Position the popover next to the rail button. Rail is on the
     // LEFT edge of the viewport so we anchor to its right.
-    const rect = btn.getBoundingClientRect();
-    popover.style.left = (rect.right + 8) + 'px';
-    popover.style.top  = Math.max(8, rect.top - 8) + 'px';
+    //
+    // Vertical anchor: the avatar sits at the BOTTOM of the rail, so
+    // anchoring from `top` (popover.style.top) made the popover grow
+    // downward off-screen as content (membership + balance breakdown +
+    // buttons) accumulated. We pin from `bottom` instead — the popover's
+    // bottom edge sits near the button's bottom edge, with a min margin
+    // from the viewport bottom — and the popover grows UPWARD.
+    //
+    // Math:
+    //   `popover.style.bottom = X` puts the popover's bottom X px from
+    //   viewport bottom. We want X = window.innerHeight - rect.bottom
+    //   (popover bottom = button bottom). If the button is so close to
+    //   the viewport bottom that this would leave < `margin` px of
+    //   breathing room, clamp to `margin`.
+    const rect   = btn.getBoundingClientRect();
+    const margin = 12;
+    popover.style.left   = (rect.right + 8) + 'px';
+    popover.style.top    = 'auto';
+    popover.style.bottom = Math.max(margin, window.innerHeight - rect.bottom) + 'px';
     body.innerHTML = '<div style="color:var(--muted)">加载积分余额…</div>';
     popover.style.display = 'block';
 

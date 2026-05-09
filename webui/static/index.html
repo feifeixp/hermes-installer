@@ -120,7 +120,7 @@
   <!-- Anchored next to the avatar rail button. Hidden by default; -->
   <!-- shown by neowowAvatarClick() when the user already has a JWT. -->
   <!-- Logged-out clicks bypass this and start OAuth directly. -->
-  <div id="neowowAuthPopover" style="display:none;position:fixed;z-index:1500;min-width:280px;max-width:320px;padding:14px;background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.10);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,0.55);font-size:13px;line-height:1.5">
+  <div id="neowowAuthPopover" style="display:none;position:fixed;z-index:1500;min-width:280px;max-width:320px;max-height:calc(100vh - 24px);overflow-y:auto;padding:14px;background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.10);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,0.55);font-size:13px;line-height:1.5">
     <div id="neowowAuthPopBody" style="display:flex;flex-direction:column;gap:10px"></div>
   </div>
   <!-- END: Neowow integration — auth popover -->
