@@ -120,26 +120,48 @@ if ! command -v caddy &>/dev/null; then
     echo "→ Installing Caddy..."
     CADDY_OK=false
 
-    # ── Try 1: Cloudsmith apt repo (official) ─────────────────────────
+    # ── Try 1: Ubuntu universe / Debian repo (works on aliyun mirrors) ─
+    # On China cloud servers (Tencent / Aliyun), apt mirrors are usually
+    # local and fast — preferred over any github / cloudsmith download.
+    # Universe has Caddy 2.4+ which has every feature we need.
+    if apt-get install -y -qq caddy 2>/dev/null; then
+        CADDY_OK=true
+        echo "  → Caddy installed via apt (system repo)"
+    fi
+
+    # If the package isn't in the default sources, try enabling universe.
+    if [[ "$CADDY_OK" != "true" ]] && command -v add-apt-repository &>/dev/null; then
+        add-apt-repository -y universe 2>/dev/null || true
+        apt-get update -qq 2>/dev/null || true
+        if apt-get install -y -qq caddy 2>/dev/null; then
+            CADDY_OK=true
+            echo "  → Caddy installed via apt universe"
+        fi
+    fi
+
+    # ── Try 2: Cloudsmith apt repo (official Caddy distro) ─────────────
     # Remove any stale keyring file FIRST so gpg --dearmor doesn't prompt
     # to overwrite (which hangs the script).
-    rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    if curl -fsSL --max-time 15 \
-        https://dl.cloudsmith.io/public/caddy/stable/gpg.key 2>/dev/null \
-        | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null; then
-
+    if [[ "$CADDY_OK" != "true" ]]; then
+        echo "  → System repo unavailable, trying Cloudsmith..."
+        rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
         if curl -fsSL --max-time 15 \
-            https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
-            > /etc/apt/sources.list.d/caddy-stable.list 2>/dev/null; then
+            https://dl.cloudsmith.io/public/caddy/stable/gpg.key 2>/dev/null \
+            | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null; then
 
-            if apt-get update -qq 2>/dev/null && apt-get install -y -qq caddy 2>/dev/null; then
-                CADDY_OK=true
-                echo "  → Caddy installed via Cloudsmith"
+            if curl -fsSL --max-time 15 \
+                https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+                > /etc/apt/sources.list.d/caddy-stable.list 2>/dev/null; then
+
+                if apt-get update -qq 2>/dev/null && apt-get install -y -qq caddy 2>/dev/null; then
+                    CADDY_OK=true
+                    echo "  → Caddy installed via Cloudsmith"
+                fi
             fi
         fi
     fi
 
-    # ── Try 2/3/4: tar.gz binaries from various hosts ─────────────────
+    # ── Try 3-7: tar.gz binaries from various hosts ────────────────────
     if [[ "$CADDY_OK" != "true" ]]; then
         ARCH=$(uname -m)
         [[ "$ARCH" == "x86_64" ]] && ARCH="amd64"
@@ -150,10 +172,16 @@ if ! command -v caddy &>/dev/null; then
         # api.github.com (which is rate-limited from CN).
         REL_PATH="caddyserver/caddy/releases/download/v${CADDY_VER_PIN}/caddy_${CADDY_VER_PIN}_linux_${ARCH}.tar.gz"
 
+        # Order: direct first (fast outside CN), then a half-dozen CN
+        # mirrors of varying lifespans. Some of these come and go but
+        # at any given moment usually one or two work.
         for HOST_PREFIX in \
             "https://github.com/" \
+            "https://kkgithub.com/" \
+            "https://gh.api.99988866.xyz/https://github.com/" \
             "https://ghproxy.com/https://github.com/" \
             "https://mirror.ghproxy.com/https://github.com/" \
+            "https://gh.idayer.com/https://github.com/" \
         ; do
             URL="${HOST_PREFIX}${REL_PATH}"
             echo "  → Trying: $URL"
@@ -204,17 +232,24 @@ CADDY_UNIT
 
     if [[ "$CADDY_OK" != "true" ]]; then
         cat <<'EOF'
-ERROR: All Caddy install methods failed. Manual install:
+ERROR: All Caddy install methods failed.
 
-  ssh into this server and run:
+Try these manually, in order (first one that works wins):
 
-    curl -fsSL --max-time 60 \
-      "https://ghproxy.com/https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz" \
-      -o /tmp/caddy.tar.gz
-    sudo tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy
-    sudo chmod +x /usr/local/bin/caddy
+  # 1. Ubuntu/Debian system repo (best for China cloud — uses your apt mirror)
+  sudo apt update
+  sudo add-apt-repository -y universe   # if needed
+  sudo apt update
+  sudo apt install -y caddy
+  caddy version   # should print v2.4+
 
-  Then re-run this script.
+  # 2. Tencent Cloud / Aliyun container image market — search for "caddy"
+  #    and pull the official caddy/caddy image, then expose its binary
+
+  # 3. Snap (auto-updates)
+  sudo snap install caddy
+
+After Caddy is on PATH, re-run this script — it will detect Caddy and skip.
 EOF
         exit 1
     fi
