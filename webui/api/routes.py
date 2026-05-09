@@ -1616,6 +1616,35 @@ def handle_get(handler, parsed) -> bool:
         )
 
     if parsed.path == "/login":
+        # In neodomain mode the password form is meaningless — auth is
+        # delegated to app.neowow.studio's OAuth. If a user lands here
+        # (cached link / explicit URL) just redirect them to the OAuth
+        # start URL with a return back to /. The check_auth flow already
+        # does this for protected routes; this branch handles the case
+        # where /login itself is the destination.
+        try:
+            from api.auth import get_auth_mode
+            if get_auth_mode() == "neodomain":
+                import os as _os, urllib.parse as _up
+                _ret_proto = handler.headers.get("X-Forwarded-Proto", "").strip() or "https"
+                _ret_host  = (handler.headers.get("X-Forwarded-Host", "").strip()
+                              or handler.headers.get("Host", "").strip()
+                              or "chat.neowow.studio")
+                _ret = f"{_ret_proto}://{_ret_host}/"
+                _start = _os.getenv(
+                    "HERMES_NEODOMAIN_OAUTH_START",
+                    "https://app.neowow.studio/api/oauth/start",
+                ).strip()
+                handler.send_response(302)
+                handler.send_header("Location", f"{_start}?return={_up.quote(_ret, safe='')}")
+                handler.end_headers()
+                return True
+        except Exception:
+            # Defensive: if anything goes wrong here just fall through
+            # to the normal password login page. Worst case the user
+            # sees a form they can't use; better than a 500.
+            pass
+
         _settings = load_settings()
         _bn = _html.escape(_settings.get("bot_name") or "Hermes")
         _lang = _settings.get("language", "en")

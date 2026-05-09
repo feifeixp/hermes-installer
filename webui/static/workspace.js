@@ -9,10 +9,21 @@ async function api(path,opts={}){
     try{
       const res=await fetch(url.href,{credentials:'include',headers:{'Content-Type':'application/json'},...opts});
       if(!res.ok){
-        // 401 means the auth session expired. Redirect to /login so the user can
-        // re-authenticate. This is especially important for iOS PWA (standalone mode)
-        // where a server-side 302 → /login opens in Safari instead of within the PWA.
-        if(res.status===401){window.location.href='/login?next='+encodeURIComponent(window.location.pathname+window.location.search);return;}
+        // 401 means the auth session expired. Redirect destination depends on
+        // auth mode: neodomain mode returns {loginUrl: 'https://app.neowow.studio/...'},
+        // password mode just sends 401 → fall back to /login local page.
+        // (See ui.js _redirectIfUnauth for the canonical implementation; we
+        // duplicate the logic here because workspace.js predates that helper.)
+        if(res.status===401){
+          const fallback = '/login?next='+encodeURIComponent(window.location.pathname+window.location.search);
+          try {
+            const body = await res.clone().json().catch(() => null);
+            window.location.href = (body && typeof body.loginUrl === 'string') ? body.loginUrl : fallback;
+          } catch {
+            window.location.href = fallback;
+          }
+          return;
+        }
         const text=await res.text();
         // Parse JSON error body and surface the human-readable message,
         // rather than showing raw JSON like {"error":"Profile 'x' does not exist."}

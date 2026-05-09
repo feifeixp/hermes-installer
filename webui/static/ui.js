@@ -9,10 +9,36 @@ const SESSION_QUEUES={};  // keyed by session_id for queued follow-up turns
 // single-threaded so only one done event fires at a time in practice.
 let _queueDrainSid=null;
 const $=id=>document.getElementById(id);
-// Redirect to /login when the server responds with 401 (auth session expired).
-// Handles iOS PWA standalone mode where a server-side 302→/login would break
-// out of the PWA shell into Safari instead of navigating within it.
-function _redirectIfUnauth(res){if(res&&res.status===401){window.location.href='/login?next='+encodeURIComponent(window.location.pathname+window.location.search);return true;}return false;}
+// Redirect on 401 (auth session expired). Handles two auth modes:
+//   • password mode → /login local page (default)
+//   • neodomain mode → server returns {error, loginUrl} pointing at
+//     app.neowow.studio's OAuth start. We can't tell from the 401
+//     status alone which mode the server is in, so we read the body's
+//     `loginUrl` field — when present it wins, otherwise fall back to
+//     /login. The body read is one-shot; we do it best-effort with a
+//     fallback so a non-JSON body (or a body already consumed by an
+//     earlier handler) doesn't deadlock the redirect.
+//
+// Handles iOS PWA standalone mode where a server-side 302→/login would
+// break out of the PWA shell into Safari instead of navigating within it.
+function _redirectIfUnauth(res){
+  if(!res||res.status!==401) return false;
+  // Try to extract a loginUrl from the 401 body. Reading body consumes
+  // it, so callers that needed the body lost it — but that's fine:
+  // their request was unauthorized and they shouldn't process the
+  // response anyway. Use a clone so the original res can still be read
+  // if it wasn't yet (clone() is cheap).
+  const fallback = '/login?next='+encodeURIComponent(window.location.pathname+window.location.search);
+  try {
+    res.clone().json().then(d => {
+      const url = (d && typeof d.loginUrl === 'string') ? d.loginUrl : fallback;
+      window.location.href = url;
+    }).catch(() => { window.location.href = fallback; });
+  } catch {
+    window.location.href = fallback;
+  }
+  return true;
+}
 function _getSessionQueue(sid, create=false){
   if(!sid) return [];
   if(!SESSION_QUEUES[sid]&&create) SESSION_QUEUES[sid]=[];
