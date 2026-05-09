@@ -29,9 +29,35 @@ if [[ -z "$DOMAIN" ]]; then
 fi
 
 # Must run as root (writes to /etc/, /opt/, creates user).
+#
+# We can't auto-elevate via `exec sudo bash "$0" "$@"` reliably:
+# when the script is piped from curl (the canonical install path
+# documented in CLOUD_DEPLOY.md), `$0` is the string "bash" (the
+# shell name, not a file path), so the re-exec becomes `sudo bash
+# bash chat.neowow.studio` which errors with "cannot execute binary
+# file". Instead we tell the user how to retry — explicit and
+# debuggable.
 if [[ $EUID -ne 0 ]]; then
-    echo "Re-running with sudo..."
-    exec sudo -E bash "$0" "$@"
+    cat >&2 <<EOF
+ERROR: This script needs root privileges.
+
+If you piped it from curl, put sudo BEFORE the pipe:
+
+  curl -fsSL https://raw.githubusercontent.com/feifeixp/hermes-installer/main/deploy/cloud/bootstrap-cloud.sh \\
+    | sudo bash -s -- $DOMAIN
+
+Or download first, then run:
+
+  curl -fsSL https://raw.githubusercontent.com/feifeixp/hermes-installer/main/deploy/cloud/bootstrap-cloud.sh -o bootstrap-cloud.sh
+  sudo bash bootstrap-cloud.sh $DOMAIN
+
+Or run it directly as root:
+
+  sudo -i
+  curl -fsSL https://... | bash -s -- $DOMAIN
+
+EOF
+    exit 1
 fi
 
 # ── 1. Detect distro ─────────────────────────────────────────────────
@@ -73,47 +99,65 @@ else
     sudo -u hermes git clone https://github.com/feifeixp/hermes-installer.git "$INSTALL_DIR"
 fi
 
-# ── 5. Install Python deps + Hermes Agent ────────────────────────────
-echo "→ Running webui/start.sh once to install Hermes Agent + venv (this may take 5-10 minutes)..."
-echo "  (subsequent restarts will reuse the venv)"
-sudo -u hermes bash -c "cd $INSTALL_DIR && bash webui/start.sh --foreground &"
-START_PID=$!
-sleep 60
-if ! kill -0 $START_PID 2>/dev/null; then
-    echo "  start.sh exited early — check $INSTALL_DIR for errors"
-    exit 1
-fi
-# Stop the foreground server; systemd will take over.
-kill $START_PID 2>/dev/null || true
-wait $START_PID 2>/dev/null || true
-
-# ── 6. Install systemd unit ──────────────────────────────────────────
+# ── 5. Install systemd unit ──────────────────────────────────────────
+# We DON'T pre-run start.sh manually. The unit file invokes it on
+# first start; bootstrap.py inside detects missing hermes-agent and
+# installs it (clone + venv + uv pip install). This way the install
+# runs as the `hermes` user with the right systemd environment, and
+# we get a single observable progress source (journalctl) instead of
+# split between stdout and the systemd journal.
 echo "→ Installing systemd unit..."
 cp "$INSTALL_DIR/deploy/cloud/hermes-webui.service" /etc/systemd/system/hermes-webui.service
 systemctl daemon-reload
 systemctl enable hermes-webui
 
-# ── 7. Install Caddyfile ─────────────────────────────────────────────
+# ── 6. Install Caddyfile ─────────────────────────────────────────────
 echo "→ Writing /etc/caddy/Caddyfile (substituting domain $DOMAIN)..."
 sed "s|chat.neowow.studio|$DOMAIN|g" "$INSTALL_DIR/deploy/cloud/Caddyfile.template" > /etc/caddy/Caddyfile
 systemctl reload caddy
 
-# ── 8. Start services ────────────────────────────────────────────────
-echo "→ Starting hermes-webui..."
+# ── 7. Start services ────────────────────────────────────────────────
+echo "→ Starting hermes-webui (FIRST start triggers install — 5-10 min)..."
 systemctl start hermes-webui
 
-# ── 9. Health check ──────────────────────────────────────────────────
-echo "→ Waiting for WebUI to become healthy (up to 60 s)..."
-for i in {1..30}; do
+# ── 8. Health check ──────────────────────────────────────────────────
+# First-boot install includes git clone of hermes-agent (~50 MB), uv
+# venv creation, and `uv pip install -e .[all]` (~700 MB of Python
+# wheels). On a clean ecs.t6 this realistically takes 5-10 minutes.
+# We poll for up to 15 min and emit progress so the user doesn't think
+# we hung.
+echo "→ Waiting for WebUI to become healthy (up to 15 min)..."
+HEALTH_OK=false
+for i in {1..90}; do
     if curl -fsS http://127.0.0.1:7891/health >/dev/null 2>&1; then
+        HEALTH_OK=true
         echo "  ✓ WebUI is up!"
         break
     fi
-    sleep 2
+    # Every 30 s, peek at the journal so the user sees something
+    # is actually happening (vs. silent hang).
+    if (( i % 3 == 0 )); then
+        echo "  ... still installing (${i}0 s elapsed); recent log:"
+        journalctl -u hermes-webui --no-pager -n 1 --since "5 sec ago" 2>/dev/null \
+            | sed 's/^/      /' || true
+    fi
+    sleep 10
 done
 
-if ! curl -fsS http://127.0.0.1:7891/health >/dev/null 2>&1; then
-    echo "  ✗ WebUI did not become healthy. Check: journalctl -u hermes-webui -e"
+if [[ "$HEALTH_OK" != "true" ]]; then
+    cat <<EOF
+  ✗ WebUI did not become healthy after 15 minutes.
+
+  Diagnostic commands:
+    sudo systemctl status hermes-webui
+    sudo journalctl -u hermes-webui --no-pager -n 200
+
+  Common causes:
+    • Slow disk / network — bump ECS spec or wait longer; install may still complete
+    • Out of memory — the agent venv install needs ~1 GB peak. Check free -m
+    • git clone failed — check ECS can reach github.com
+    • uv install failed — check ECS can reach pypi.org
+EOF
     exit 1
 fi
 
