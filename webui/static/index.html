@@ -252,6 +252,12 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,2 22,8.5 22,15.5 12,22 2,15.5 2,8.5"/><line x1="12" y1="22" x2="12" y2="12"/><polyline points="2,8.5 12,12 22,8.5"/></svg>
           <span>Neowow Studio</span>
         </button>
+        <!-- BEGIN: Gateway connection mode — side-menu entry  (custom; not from upstream) -->
+        <button type="button" class="side-menu-item" data-settings-section="gateway" onclick="switchSettingsSection('gateway')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <span>连接模式</span>
+        </button>
+        <!-- END: Gateway connection mode — side-menu entry -->
         <!-- END: Neowow integration — side-menu entry -->
         <button type="button" class="side-menu-item" data-settings-section="system" onclick="switchSettingsSection('system')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/></svg>
@@ -1101,6 +1107,93 @@
           <!-- ════════════════════════════════════════════════════════════════
                END: Neowow integration — settings pane
                ════════════════════════════════════════════════════════════════ -->
+
+          <!-- ════════════════════════════════════════════════════════════════
+               BEGIN: Gateway connection mode — settings pane
+               (custom; not from upstream)
+
+               Lets the user choose between running everything locally
+               (default) and connecting to a remote Hermes WebUI on a
+               cloud server. Mode change requires restarting Hermes
+               Installer to take effect (main.py reads gateway.json once
+               at startup).
+               ════════════════════════════════════════════════════════════════ -->
+          <div class="settings-pane" id="settingsPaneGateway">
+            <div class="settings-section-head">
+              <div>
+                <div class="settings-section-title">连接模式</div>
+                <div class="settings-section-meta">在本地运行 Hermes Agent，或连接到云端服务器上部署的实例。</div>
+              </div>
+            </div>
+
+            <!-- Current state badge — set by gateway.js on panel open -->
+            <div id="gatewayCurrentMode" style="margin-bottom:18px;padding:12px 14px;border-radius:8px;background:var(--code-bg);border:1px solid var(--border2);font-size:13px;color:var(--muted)">
+              加载中…
+            </div>
+
+            <!-- Mode picker -->
+            <div class="settings-field">
+              <label>模式</label>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+                <label class="gw-radio" style="display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border:1px solid var(--border2);border-radius:8px;cursor:pointer">
+                  <input type="radio" name="gatewayMode" value="local" checked style="margin-top:3px">
+                  <div style="flex:1">
+                    <div style="font-weight:600;color:var(--text);font-size:13px">本机运行（默认）</div>
+                    <div style="color:var(--muted);font-size:11px;margin-top:3px;line-height:1.5">
+                      Hermes Agent 装在你这台机器上，所有会话、技能、工具都在本机执行。隐私性最高，能改本地代码。
+                    </div>
+                  </div>
+                </label>
+                <label class="gw-radio" style="display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border:1px solid var(--border2);border-radius:8px;cursor:pointer">
+                  <input type="radio" name="gatewayMode" value="remote" style="margin-top:3px">
+                  <div style="flex:1">
+                    <div style="font-weight:600;color:var(--text);font-size:13px">远程连接</div>
+                    <div style="color:var(--muted);font-size:11px;margin-top:3px;line-height:1.5">
+                      连接到云端部署的 Hermes WebUI。会话存在云端，多设备共享。<strong>本机文件操作不可用</strong>。
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <!-- Remote-mode fields (shown only when "remote" radio is selected) -->
+            <div id="gatewayRemoteFields" style="display:none;margin-top:8px">
+              <div class="settings-field">
+                <label for="gatewayRemoteUrl">远程 URL <span style="color:#ef4444">*</span></label>
+                <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
+                  你云端部署的 Hermes WebUI 完整地址，包含 <code>https://</code>。
+                </div>
+                <input type="text" id="gatewayRemoteUrl" placeholder="https://hermes.example.com" style="width:100%;padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-size:13px">
+              </div>
+              <div class="settings-field">
+                <label for="gatewayRemoteLabel">显示名称（可选）</label>
+                <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
+                  给这个连接起个名字，会显示在窗口标题上。
+                </div>
+                <input type="text" id="gatewayRemoteLabel" placeholder="我的 GPU 服务器" maxlength="60" style="width:100%;padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-size:13px">
+              </div>
+              <div style="margin-top:8px;padding:10px 12px;font-size:11px;line-height:1.5;background:rgba(56,139,253,0.08);border:1px solid rgba(56,139,253,0.25);border-radius:6px;color:var(--muted)">
+                💡 <strong>需要服务端先部署好</strong>。看 <code>docs/REMOTE_DEPLOY.md</code> 用 Caddy 或 Cloudflare Tunnel 几分钟搞定。
+              </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div style="display:flex;gap:10px;margin-top:18px">
+              <button class="sm-btn" id="gatewaySaveBtn" onclick="saveGatewayConfig()" style="font-weight:600">
+                保存
+              </button>
+              <button class="sm-btn" id="gatewayResetBtn" onclick="resetGatewayConfig()" style="color:var(--muted)">
+                重置为本机模式
+              </button>
+            </div>
+
+            <!-- Save result / restart hint -->
+            <div id="gatewaySaveResult" style="margin-top:12px;font-size:12px;line-height:1.5"></div>
+          </div>
+          <!-- ════════════════════════════════════════════════════════════════
+               END: Gateway connection mode — settings pane
+               ════════════════════════════════════════════════════════════════ -->
+
           <div class="settings-pane" id="settingsPaneSystem">
             <div class="settings-section-head">
               <div>
@@ -1261,6 +1354,7 @@
 <script src="static/messages.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/panels.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/neowow.js?v=__WEBUI_VERSION__" defer></script>
+<script src="static/gateway.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/onboarding.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/boot.js?v=__WEBUI_VERSION__" defer></script>
 </body>

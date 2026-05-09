@@ -329,7 +329,94 @@ WEBUI_DEFAULT_PORT = 8787
 WEBUI_STARTUP_TIMEOUT = 300  # 5 minutes (bootstrap may install hermes-agent)
 
 
+def _read_gateway_config() -> dict:
+    """Read ~/.hermes/webui/gateway.json directly — main.py runs BEFORE
+    the webui package is on the import path, so we can't `from api.
+    gateway_config import ...` here. Keep the schema in sync with
+    webui/api/gateway_config.py.
+
+    Always returns a dict with at minimum a `mode` key. Errors degrade
+    silently to {"mode":"local"} so a corrupt file never bricks the
+    installer — user can fix via --reset-gateway.
+    """
+    import json
+    state_dir = Path(os.getenv("HERMES_WEBUI_STATE_DIR",
+                               str(Path.home() / ".hermes" / "webui")))
+    path = state_dir / "gateway.json"
+    if not path.exists():
+        return {"mode": "local"}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {"mode": "local"}
+        return raw
+    except Exception as exc:
+        log.warning("gateway.json unreadable, falling back to local: %s", exc)
+        return {"mode": "local"}
+
+
+def _reset_gateway_config():
+    """Wipe the gateway config file and report. Used by `--reset-gateway`
+    to recover when a saved remote URL is broken/unreachable and the
+    user can't access the settings UI to fix it."""
+    state_dir = Path(os.getenv("HERMES_WEBUI_STATE_DIR",
+                               str(Path.home() / ".hermes" / "webui")))
+    path = state_dir / "gateway.json"
+    if path.exists():
+        try:
+            path.unlink()
+            print(f"已重置 gateway 配置: {path}", file=sys.stderr)
+        except OSError as exc:
+            print(f"无法删除 {path}: {exc}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print(f"配置文件不存在: {path}（已经是本地模式）", file=sys.stderr)
+
+
+def _run_remote_mode(url: str, label: str = ""):
+    """Remote mode: skip bootstrap entirely, open the configured URL in
+    a native window. The cloud-side WebUI handles its own auth (login
+    page, session cookies) — we don't need to thread tokens through.
+
+    No port-conflict check, no install, no spawn, no cleanup. The window
+    closing == process exit. Pure thin client.
+    """
+    title = f"Hermes · {label}" if label else "Hermes (远程)"
+    log.info("Remote mode: opening %s as %s", url, title)
+    try:
+        _open_native_window(title, url, on_close=None)
+    except Exception as exc:
+        log.exception("remote-mode pywebview failed: %s", exc)
+        _alert("Hermes Installer",
+               f"无法打开远程 WebUI: {exc}\n\n"
+               f"配置的 URL: {url}\n\n"
+               f"如果 URL 有误，请运行：\n"
+               f"  hermes-installer --reset-gateway\n"
+               f"重置回本地模式。")
+        sys.exit(1)
+
+
 def main():
+    # Recovery flag — wipes gateway.json and exits. Useful when a saved
+    # remote URL is broken and the user can't reach the settings UI.
+    if "--reset-gateway" in sys.argv:
+        _reset_gateway_config()
+        sys.exit(0)
+
+    # ── Remote mode short-circuit ────────────────────────────────────────
+    # If the user has configured a remote WebUI URL, bypass bootstrap +
+    # install + local server entirely. The Hermes Installer becomes a
+    # thin pywebview shell pointing at the cloud WebUI.
+    cfg = _read_gateway_config()
+    if cfg.get("mode") == "remote":
+        url = (cfg.get("url") or "").strip()
+        if url:
+            _run_remote_mode(url, label=str(cfg.get("label") or ""))
+            return
+        # Configured as remote but URL empty: log + fall through to local.
+        log.warning("gateway.json has mode=remote but empty url; falling back to local")
+
+    # ── Local mode (default / current behavior) ──────────────────────────
     port = WEBUI_DEFAULT_PORT
     host = "127.0.0.1"
 

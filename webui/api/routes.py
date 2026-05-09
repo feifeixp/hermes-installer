@@ -2170,6 +2170,18 @@ def handle_get(handler, parsed) -> bool:
     # END: Neowow integration — GET routes
     # ════════════════════════════════════════════════════════════════════
 
+    # Gateway connection mode (local vs remote). Read by the settings
+    # UI to render the connection picker, and by main.py at launch to
+    # decide whether to spawn a local Hermes Agent or just open a
+    # remote URL. See webui/api/gateway_config.py for the storage shape.
+    if parsed.path == "/api/gateway/config":
+        from api.gateway_config import load_gateway_config
+        try:
+            return j(handler, load_gateway_config())
+        except Exception as e:
+            logger.exception("gateway/config GET failed")
+            return bad(handler, str(e), status=500)
+
     if parsed.path == "/api/workspaces/suggest":
         qs = parse_qs(parsed.query)
         prefix = qs.get("prefix", [""])[0]
@@ -3751,6 +3763,31 @@ def handle_post(handler, parsed) -> bool:
     # ════════════════════════════════════════════════════════════════════
     # END: Neowow integration — POST routes
     # ════════════════════════════════════════════════════════════════════
+
+    # Gateway config: save (mode/url/label) or clear. Clearing reverts to
+    # local mode — equivalent to deleting gateway.json. The UI uses this
+    # for both "switch to remote" (POST {mode:"remote",url:"..."}) and
+    # "go back to local" (POST {mode:"local"} or {clear:true}).
+    #
+    # NOTE: changing this config doesn't take effect until the next
+    # Hermes Installer launch (main.py reads it once at startup). The UI
+    # tells the user to restart after saving.
+    if parsed.path == "/api/gateway/config":
+        from api.gateway_config import save_gateway_config, clear_gateway_config
+        try:
+            if body and body.get("clear"):
+                clear_gateway_config()
+                return j(handler, {"ok": True, "mode": "local"})
+            mode  = (body or {}).get("mode", "")
+            url   = (body or {}).get("url", "")
+            label = (body or {}).get("label", "")
+            cfg = save_gateway_config(mode=mode, url=url, label=label)
+            return j(handler, {"ok": True, **cfg})
+        except ValueError as e:
+            return bad(handler, str(e))
+        except Exception as e:
+            logger.exception("gateway/config POST failed")
+            return bad(handler, str(e), status=500)
 
     return False  # 404
 
