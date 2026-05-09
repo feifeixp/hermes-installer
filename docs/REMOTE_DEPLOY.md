@@ -1,168 +1,62 @@
-# 远程部署 — 把 Hermes WebUI 跑在云端
+# 远程模式 — 让桌面 Hermes 连云端 WebUI
 
-让你的 Hermes Installer 桌面壳连接到云端服务器上部署的 Hermes WebUI，
-而不是本机。适合多设备访问、GPU 服务器、或者团队共享一个 Agent。
-
-> **注意范围**：本文档讲的是**路径 A**（远程 WebUI）。本机文件操作、
-> Workspace、本机 Terminal 在远程模式下**不可用**（agent 跑在云端，
-> 看不到你本机的文件）。如果你需要保留本机文件能力，看 README 的
-> "路径 B：仅替换 LLM API"。
+> **谁该看这个文档：** 已经装了 Hermes Installer 桌面版的用户，想让它
+> 直接打开云端 WebUI，而不是在本机跑 Hermes Agent。
+>
+> **运维 / 部署人员**看 [CLOUD_DEPLOY.md](./CLOUD_DEPLOY.md)。
 
 ---
 
-## 总体架构
+## 三种连接模式
 
-```
-[本机]                        [云端服务器]
-桌面壳 (pywebview)             ├─ Hermes Installer (一份完整代码)
-   │                          ├─ Hermes Agent (本地装好)
-   │ HTTPS                    ├─ WebUI 服务 (server.py, port 7891)
-   ▼                          └─ 反向代理 (Caddy/Nginx) + HTTPS
-https://hermes.example.com ──→ port 7891
-```
+桌面版 Hermes Installer 现在支持三种打开方式：
 
-云端跑一份完整的 hermes-installer（Hermes Agent + WebUI 都装在云上），
-本机的 Hermes Installer 只是个 pywebview 窗口指向云端的 URL。
+### 1. 本机模式（默认）
+跟之前一样 — Hermes Agent 装在你这台机器上，所有数据本地。
+- ✅ 隐私最好（文件不离开本机）
+- ✅ 能改本地代码
+- ❌ 装一次需要 5-10 分钟
+- ❌ 只能在这台机器用
 
----
+### 2. 云端模式（这个文档讲的）
+桌面壳直接打开云端 WebUI，跳过本机安装。
+- ✅ 零本机依赖
+- ✅ 多设备 — 浏览器也能用同一个 URL
+- ❌ 文件操作受限（看不到本机文件）
+- ❌ 需要云端服务（你自己部署 OR 用 `chat.neowow.studio` 公共版）
 
-## 第一步 — 服务端部署
-
-### 选项 A：自有 VPS + Caddy（推荐，5 分钟）
-
-#### 1. 装 Hermes Installer 到云端
-
-```bash
-ssh root@your-vps
-git clone https://github.com/feifeixp/hermes-installer.git
-cd hermes-installer
-bash webui/start.sh   # 会装 Hermes Agent + 起 server.py
-```
-
-`start.sh` 跑完之后 WebUI 监听在 `127.0.0.1:7891`。
-
-#### 2. 装 Caddy 反代
-
-```bash
-# Debian/Ubuntu
-sudo apt install -y caddy
-
-# 编辑配置
-sudo tee /etc/caddy/Caddyfile <<'EOF'
-hermes.example.com {
-  reverse_proxy 127.0.0.1:7891
-}
-EOF
-
-sudo systemctl reload caddy
-```
-
-Caddy 会**自动签 LetsEncrypt 证书**（前提：DNS 已经把 `hermes.example.com`
-A 记录指向你的服务器 IP，且 80/443 端口开放）。
-
-#### 3. 加访问控制（必须！）
-
-WebUI 自己的认证靠 `HERMES_WEBUI_PASSWORD` 环境变量。开机前先设：
-
-```bash
-# 加到 /etc/systemd/system/hermes-webui.service 或 ~/.bashrc
-export HERMES_WEBUI_PASSWORD='生成一个强密码'
-
-# 重启 webui 服务
-pkill -f 'webui/server.py'
-bash webui/start.sh
-```
-
-现在访问 `https://hermes.example.com` 会先看到密码登录页。
-
-> 进阶：如果你已经有 Neodomain 账号体系，建议在 Caddy 那一层加个
-> OAuth2 proxy（`oauth2-proxy`）做 SSO，比静态密码更安全。
+### 3. 直接用浏览器
+连桌面 Hermes Installer 都不用装，直接 https://chat.neowow.studio。
+- ✅ 完全零安装
+- 唯一缺点：要切换的时候要在浏览器收藏夹里找
 
 ---
 
-### 选项 B：Cloudflare Tunnel（无公网 IP / 不想买域名）
+## 怎么切到云端模式
 
-如果你的服务器没有公网 IP，或者懒得弄 DNS + 证书，用 Cloudflare Tunnel：
+### 在桌面 Hermes Installer 里：
 
-#### 1. 装 cloudflared
-
-```bash
-# 装 cloudflared 二进制
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
-chmod +x /usr/local/bin/cloudflared
-
-# 登录到 Cloudflare（会弹浏览器）
-cloudflared tunnel login
-```
-
-#### 2. 创建 tunnel 并绑定子域
-
-```bash
-cloudflared tunnel create hermes-prod
-# 记下输出的 UUID
-
-cloudflared tunnel route dns hermes-prod hermes.yourdomain.com
-```
-
-#### 3. 启动 tunnel
-
-```bash
-# ~/.cloudflared/config.yml
-tunnel: <UUID>
-credentials-file: /root/.cloudflared/<UUID>.json
-ingress:
-  - hostname: hermes.yourdomain.com
-    service: http://127.0.0.1:7891
-  - service: http_status:404
-```
-
-```bash
-cloudflared tunnel run hermes-prod
-# 后台跑：systemctl enable --now cloudflared
-```
-
-完事 — `https://hermes.yourdomain.com` 已经能访问，**自带 HTTPS 和 DDoS
-防护**。还是别忘了设置 `HERMES_WEBUI_PASSWORD`。
-
-> Cloudflare Tunnel 还有个好处：你服务器不用开任何端口给公网，
-> 全部走出站连接。
-
----
-
-### 选项 C：阿里云 FC / 容器（专业部署）
-
-如果你在用阿里云函数计算 / ECS / 容器服务，思路一样：
-- 容器跑 hermes-installer 镜像（在 webui/start.sh 之外加 Dockerfile）
-- 把 7891 暴露给阿里云的 SLB / API 网关
-- 在 SLB 那层做 HTTPS termination + 鉴权
-
-具体配置因平台而异，超出本文档范围。
-
----
-
-## 第二步 — 本机配置
-
-云端 `https://hermes.example.com` 起来之后，本机 Hermes Installer 怎么连：
-
-### 方法 1：UI 里点点（推荐）
-
-1. 打开 Hermes Installer（仍是本机模式）
+1. 打开 Hermes Installer
 2. 点齿轮（⚙️）→ 「连接模式」
 3. 选「远程连接」
-4. 填 URL：`https://hermes.example.com`
+4. 填 URL：
+   - 用我们提供的：`https://chat.neowow.studio`
+   - 用你自己部署的：`https://chat.yourdomain.com`
 5. （可选）显示名称：`我的 GPU 服务器`
 6. 点「保存」
 7. **退出 Hermes Installer 重启**
 
-### 方法 2：手动写配置
+下次打开就是云端 WebUI 了。
+
+### 直接命令行配置（高级）：
 
 ```bash
 mkdir -p ~/.hermes/webui
 cat > ~/.hermes/webui/gateway.json <<EOF
 {
   "mode":  "remote",
-  "url":   "https://hermes.example.com",
-  "label": "我的 GPU 服务器"
+  "url":   "https://chat.neowow.studio",
+  "label": "Neowow Cloud"
 }
 EOF
 ```
@@ -171,45 +65,66 @@ EOF
 
 ---
 
-## 出问题怎么办
+## 切回本机模式
 
-### 配置错了打不开
-如果你填了一个错误的 URL（比如打错字 / DNS 还没生效），重启之后
-Hermes Installer 会卡住或者报错。**应急恢复**：
+点齿轮 → 连接模式 → 选「本机运行」→ 保存 → 重启。
+
+或者命令行重置：
 
 ```bash
-# 终端运行
 hermes-installer --reset-gateway
-
-# 或手动删配置
-rm ~/.hermes/webui/gateway.json
 ```
-
-下次启动就回到本机模式。
-
-### 远程 WebUI 加载白屏
-打开浏览器直接访问 `https://hermes.example.com`，如果浏览器也白屏，
-说明云端 WebUI 没起来：
-```bash
-ssh root@your-vps
-ps aux | grep server.py    # 应该看到 server.py 在跑
-curl -I http://127.0.0.1:7891/health    # 应该返回 200
-```
-
-### 在本机切回远程后又想切回来
-两种方式：
-- UI：齿轮 → 连接模式 → 选「本机运行」→ 保存 → 重启
-- 或者点「重置为本机模式」按钮
 
 ---
 
-## 安全建议
+## 出问题的应急恢复
 
-1. **密码必须设**。`HERMES_WEBUI_PASSWORD` 没设的话，任何知道 URL 的人
-   都能进来用你的 Agent 花你的钱。
-2. **HTTPS 必须开**（Caddy 默认就是；Cloudflare Tunnel 默认就是）。
-   不要直接 `http://` 暴露 — Bearer token 会明文传。
-3. **.env 文件保密**。云端 `~/.hermes/.env` 里有所有 LLM 提供商的 API
-   key，别 push 到 git，文件权限 0600。
-4. **更新及时**。Hermes Agent 升级会修安全问题；远程实例记得偶尔
-   `cd hermes-agent && git pull`。
+如果你保存了一个错误的 URL（比如 typo），重启 Hermes Installer 之后
+会卡住或者报错。**应急恢复命令**：
+
+```bash
+# Mac / Linux
+hermes-installer --reset-gateway
+
+# Windows（在终端 / Powershell）
+"Hermes Installer.exe" --reset-gateway
+
+# 或者直接删配置文件
+rm ~/.hermes/webui/gateway.json
+```
+
+下次启动就回到本机模式了。
+
+---
+
+## 常见问题
+
+### 云端模式下能改本机代码吗？
+不能。云端 Hermes Agent 看到的是**云端机器**的文件系统，看不到你的本机。
+如果要改本地代码，请用本机模式。
+
+### 云端模式下我的 LLM API key 还需要吗？
+**不需要**。云端跑的 Hermes Agent 用云端的 API key（管理员配的），
+你只要消耗积分。在 `app.neowow.studio/account` 看积分余额。
+
+### 我能同时用本机和云端两个 Hermes 吗？
+可以。`mode=remote` 只影响桌面壳怎么打开 — 你还能开第二个 Hermes
+窗口让它本机模式跑（在另一份 hermes-installer 里）。或者干脆浏览器开
+云端版，桌面跑本地版，两个并行用。
+
+### 云端的 Session 历史和本机的会同步吗？
+不会（Phase 1）。云端 / 本机各自管自己的 `~/.hermes/sessions/`。
+- **共享**：账号身份（Neodomain JWT）、技能商城订阅、Hermes 配置（如果你启用了云端配置同步）、积分余额
+- **不共享**：会话历史、本地工作目录文件
+
+如果你需要会话历史漫游，可以在 `app.neowow.studio` 的"Hermes 配置"
+里把同一份 `config.yaml` 推给本机和云端两边。
+
+### 用 `chat.neowow.studio` 公共版 vs 自己部署，有什么区别？
+- 公共版：免费 / 简单 — 但是**所有用户共享同一个 Agent 实例**，
+  会话历史互相可见，不适合保密任务
+- 自部署：用你自己的 ECS / 服务器，独立账号系统，可以选 GPU 实例。
+  看 [CLOUD_DEPLOY.md](./CLOUD_DEPLOY.md) 部署指南
+
+Phase 2（计划中）会上"每用户独立 ECS 实例"模式，解决公共版的隔离
+问题。

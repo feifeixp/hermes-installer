@@ -1,0 +1,36 @@
+# Caddyfile for chat.neowow.studio (the cloud-hosted Hermes WebUI).
+#
+# Replace `chat.neowow.studio` with your domain. Caddy will auto-issue
+# a Let's Encrypt cert as long as DNS is in place and ports 80/443
+# are reachable from the public Internet.
+#
+# Auth model: the WebUI itself (running with HERMES_WEBUI_AUTH_MODE=
+# neodomain) handles authentication via the `neoToken` cookie set by
+# app.neowow.studio's OAuth callback. Caddy doesn't enforce auth
+# directly — it just reverse-proxies HTTPS to the WebUI server.
+#
+# Recommended placement: /etc/caddy/Caddyfile
+
+chat.neowow.studio {
+    # WebUI runs on 7891 by default (set via HERMES_WEBUI_PORT in the
+    # systemd unit). Anything writing through here is HTTPS-terminated
+    # at Caddy and forwarded as plain HTTP on loopback.
+    reverse_proxy 127.0.0.1:7891 {
+        # Forward the original protocol so the WebUI's auth redirect
+        # logic builds the right return URL (https not http).
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host  {host}
+    }
+
+    # Long-lived SSE connections (chat streaming, gateway watcher) need
+    # generous read/write timeouts. Default is 30 s — way too short.
+    request_body {
+        max_size 50MB
+    }
+
+    # Logs go to stdout by default; collect via journalctl -u caddy
+    # in production. Adjust if you have a centralized logging stack.
+    log {
+        format console
+    }
+}
