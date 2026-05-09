@@ -652,7 +652,36 @@ HERMES_INSTALL_URL = "https://hermes-agent.nousresearch.com/install.sh"
 
 @app.get("/api/install/simple")
 async def api_install_simple():
-    """Run the official one-liner: curl -fsSL URL | bash  (SSE stream)."""
+    """Run the official one-liner: curl -fsSL URL | bash  (SSE stream).
+
+    On Windows this falls back to the native git+uv path (`_install_
+    generator`) instead of running install.sh through WSL.  Reason:
+    install.sh's `install_system_packages` step prompts the user to
+    confirm ripgrep/ffmpeg installation via:
+
+        prompt_yes_no "Install ripgrep for faster file search and …"
+
+    The script reads the answer from `/dev/tty`, which inside a WSL
+    bash spawned from a non-tty parent (our subprocess in pywebview)
+    is allocated by WSL but has no master end the user can write to.
+    The read blocks indefinitely and the install hangs.
+
+    The native path skips install.sh entirely — it does
+    `git clone + uv venv + uv pip install -e .[all]` from Python with
+    no bash/tty involvement.  ripgrep/ffmpeg are optional anyway
+    (file search falls back to grep, TTS shows a warning); users who
+    want them can install via winget/choco/scoop afterward.
+    """
+
+    # Windows: detour to the manual native installer.  The "simple"
+    # one-liner is a Unix construct; on Windows the WSL path has the
+    # tty-blocking ripgrep/ffmpeg prompt that strands the user.
+    if sys.platform == "win32":
+        return StreamingResponse(
+            _install_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     async def _gen() -> AsyncGenerator[str, None]:
         installed, version = check_hermes_installed()
@@ -661,11 +690,14 @@ async def api_install_simple():
             yield f"data: {json.dumps({'type':'done','success':True,'already_installed':True})}\n\n"
             return
 
-        if sys.platform == "win32":
-            cmd = ["wsl", "--", "bash", "-c",
-                   f"curl -fsSL {HERMES_INSTALL_URL} | bash"]
-        else:
-            cmd = ["bash", "-c", f"curl -fsSL {HERMES_INSTALL_URL} | bash"]
+        # Linux / macOS: original curl | bash path. The ripgrep/ffmpeg
+        # prompt CAN reach the user's terminal here because the parent
+        # process is the pywebview window's host, which on these OSes
+        # generally has a tty.  When it doesn't, install.sh's check
+        # `[ -r /dev/tty ] && [ -w /dev/tty ]` fails cleanly and the
+        # script logs a warning then continues without ripgrep — same
+        # graceful degradation we want.
+        cmd = ["bash", "-c", f"curl -fsSL {HERMES_INSTALL_URL} | bash"]
 
         async for event in _stream_subprocess(cmd):
             try:

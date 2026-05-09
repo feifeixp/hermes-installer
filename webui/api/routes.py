@@ -2029,7 +2029,14 @@ def handle_get(handler, parsed) -> bool:
             handler, {"workspaces": load_workspaces(), "last": get_last_workspace()}
         )
 
-    # ── Neowow Studio integration ─────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
+    # BEGIN: Neowow integration — GET routes  (custom; not from upstream)
+    # If a subtree-pull conflict ever clobbers this block, copy it back
+    # from the patch snapshot.  See INTEGRATIONS.md (repo root) for the
+    # full recovery playbook.  Last verified working with upstream 9986d2f.
+    # Companion files: webui/api/neowow.py, webui/static/neowow.js,
+    #                  webui/static/index.html (the settings pane).
+    # ════════════════════════════════════════════════════════════════════
     if parsed.path == "/api/neowow/status":
         from api.neowow import get_status
         try:
@@ -2037,6 +2044,131 @@ def handle_get(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("neowow status failed")
             return bad(handler, str(e), status=500)
+
+    # Lightweight cloud-config status for the settings panel — reads
+    # only what's already on disk, so it's free to call on every panel
+    # open.
+    if parsed.path == "/api/neowow/cloud-status":
+        from api.neowow import get_cloud_status
+        try:
+            return j(handler, get_cloud_status())
+        except Exception as e:
+            logger.exception("neowow cloud-status failed")
+            return bad(handler, str(e), status=500)
+
+    # Full cloud-config list (proxies through the saved deploy-token).
+    # Used by the panel's "查看所有云端配置" expansion.
+    if parsed.path == "/api/neowow/cloud-configs":
+        from api.neowow import list_cloud_configs
+        try:
+            return j(handler, {"configs": list_cloud_configs()})
+        except ValueError as e:
+            return bad(handler, str(e))                    # missing token → 400
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)        # upstream → 502
+        except Exception as e:
+            logger.exception("neowow cloud-configs failed")
+            return bad(handler, str(e), status=500)
+
+    # Active cloud config (full ConfigBlob). Read-only fetch — useful
+    # when the user wants to peek before applying.
+    if parsed.path == "/api/neowow/cloud-active":
+        from api.neowow import get_active_cloud_config
+        try:
+            return j(handler, {"active": get_active_cloud_config()})
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow cloud-active failed")
+            return bad(handler, str(e), status=500)
+
+    # OAuth callback HTML — the user is sent here by the dashboard's
+    # /api/oauth/callback after they finish the Login Neodomain flow.
+    # The dashboard appends `#neo_session=<base64>` to the return URL;
+    # this tiny HTML page reads the fragment, POSTs the JWT to our
+    # /api/neowow/jwt endpoint to persist it, and shows a success
+    # message the user can close.
+    #
+    # Why not redirect-from-server: fragments are client-side only.
+    # The server can't see them. So we serve a static HTML that runs
+    # JS to extract the JWT and call our save endpoint.
+    if parsed.path == "/api/neowow/oauth-callback":
+        from api.neowow import _OAUTH_CALLBACK_HTML
+        try:
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/html; charset=utf-8")
+            handler.send_header("Cache-Control", "no-store")
+            body_bytes = _OAUTH_CALLBACK_HTML.encode("utf-8")
+            handler.send_header("Content-Length", str(len(body_bytes)))
+            handler.end_headers()
+            handler.wfile.write(body_bytes)
+            return True
+        except Exception as e:
+            logger.exception("oauth-callback render failed")
+            return bad(handler, str(e), status=500)
+
+    # Points + membership info — proxies Neodomain's
+    # /agent/user/points/info via the saved JWT. Returns the platform's
+    # data verbatim (totalAvailablePoints, pointsDetails, membershipInfo)
+    # so the UI can mirror what the dashboard's UserPoints chip shows.
+    if parsed.path == "/api/neowow/points":
+        from api.neowow import get_points_info
+        try:
+            return j(handler, get_points_info())
+        except ValueError as e:
+            return bad(handler, str(e))            # no JWT saved
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)  # Neodomain rejected / unreachable
+        except Exception as e:
+            logger.exception("neowow points failed")
+            return bad(handler, str(e), status=500)
+
+    # Identity chip — proxies /api/me/whoami so the WebUI can render
+    # "Logged in as <nickname> · ENTERPRISE" without exposing the
+    # token to the browser. Cheap (one network call + one TableStore
+    # getRow on the dashboard side) so safe to refresh on panel-open.
+    if parsed.path == "/api/neowow/whoami":
+        from api.neowow import get_whoami
+        try:
+            return j(handler, get_whoami())
+        except ValueError as e:
+            return bad(handler, str(e))                    # missing token
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)        # upstream
+        except Exception as e:
+            logger.exception("neowow whoami failed")
+            return bad(handler, str(e), status=500)
+
+    # Local-only inspect of ~/.hermes/skills/_neowow/ — disk read,
+    # never network.  Used by the panel to render "you have N synced
+    # skills" without forcing a round-trip on every open.
+    if parsed.path == "/api/neowow/skills/local-status":
+        from api.skills import get_local_status
+        try:
+            return j(handler, get_local_status())
+        except Exception as e:
+            logger.exception("neowow skills/local-status failed")
+            return bad(handler, str(e), status=500)
+
+    # Cloud preview — proxies the dashboard's /api/me/skills with the
+    # saved deploy-token. Returns metadata only (content stripped) for
+    # the "list of cloud subscriptions" UI.
+    if parsed.path == "/api/neowow/skills/cloud-list":
+        from api.skills import list_cloud_skills
+        try:
+            return j(handler, {"skills": list_cloud_skills()})
+        except ValueError as e:
+            return bad(handler, str(e))                    # missing token
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)        # upstream
+        except Exception as e:
+            logger.exception("neowow skills/cloud-list failed")
+            return bad(handler, str(e), status=500)
+    # ════════════════════════════════════════════════════════════════════
+    # END: Neowow integration — GET routes
+    # ════════════════════════════════════════════════════════════════════
 
     if parsed.path == "/api/workspaces/suggest":
         qs = parse_qs(parsed.query)
@@ -3508,7 +3640,11 @@ def handle_post(handler, parsed) -> bool:
             logger.exception("rollback/restore failed")
             return bad(handler, str(e), status=500)
 
-    # ── Neowow Studio integration (token CRUD + deploy) ───────────────────
+    # ════════════════════════════════════════════════════════════════════
+    # BEGIN: Neowow integration — POST routes  (custom; not from upstream)
+    # See INTEGRATIONS.md for the conflict-recovery playbook.
+    # Last verified working with upstream 9986d2f.
+    # ════════════════════════════════════════════════════════════════════
     if parsed.path == "/api/neowow/token":
         # Save: body { token: "nws_dt_..." }
         # Clear: body { clear: true }
@@ -3522,6 +3658,40 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e))
         except Exception as e:
             logger.exception("neowow token save failed")
+            return bad(handler, str(e), status=500)
+
+    # JWT save / clear — companion to /api/neowow/token but for the
+    # Neodomain user-auth JWT we capture from the OAuth callback. The
+    # callback HTML POSTs here with { jwt: "eyJ..." }; the WebUI's
+    # logout button POSTs { clear: true }.
+    if parsed.path == "/api/neowow/jwt":
+        try:
+            from api.neowow import save_jwt, clear_jwt
+            if body and body.get("clear"):
+                return j(handler, clear_jwt())
+            jwt = (body or {}).get("jwt", "")
+            return j(handler, save_jwt(jwt))
+        except ValueError as e:
+            return bad(handler, str(e))
+        except Exception as e:
+            logger.exception("neowow jwt save failed")
+            return bad(handler, str(e), status=500)
+
+    # OAuth browser launcher — pywebview blocks window.open() inside
+    # the embedded WebUI, so the JS handler calls this endpoint
+    # instead. We use Python's `webbrowser` module to spawn the OS
+    # default browser at the dashboard's /api/oauth/start URL.
+    if parsed.path == "/api/neowow/oauth/launch":
+        try:
+            from api.neowow import launch_oauth
+            return_url = (body or {}).get("returnUrl", "")
+            return j(handler, launch_oauth(return_url))
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=500)
+        except Exception as e:
+            logger.exception("neowow oauth launch failed")
             return bad(handler, str(e), status=500)
 
     if parsed.path == "/api/neowow/deploy":
@@ -3545,6 +3715,42 @@ def handle_post(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("neowow deploy failed")
             return bad(handler, str(e), status=500)
+
+    if parsed.path == "/api/neowow/cloud-apply":
+        # No body — pulls the active cloud config and writes it into
+        # ~/.hermes/config.yaml. Idempotent: re-running with the same
+        # cloud state produces the same bytes. Safe to call from a
+        # button click and (eventually) from app boot.
+        try:
+            from api.neowow import apply_active_cloud_config
+            return j(handler, apply_active_cloud_config())
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow cloud-apply failed")
+            return bad(handler, str(e), status=500)
+
+    # Sync subscribed skills from the dashboard into
+    # ~/.hermes/skills/_neowow/. Idempotent (re-running after no
+    # cloud changes is a no-op + bookkeeping refresh). Returns a
+    # summary {added: [...], updated: [...], removed: [...], unchanged: int}
+    # the UI uses to render the result.
+    if parsed.path == "/api/neowow/skills/sync":
+        from api.skills import sync_subscribed_skills
+        try:
+            return j(handler, sync_subscribed_skills())
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow skills/sync failed")
+            return bad(handler, str(e), status=500)
+    # ════════════════════════════════════════════════════════════════════
+    # END: Neowow integration — POST routes
+    # ════════════════════════════════════════════════════════════════════
 
     return False  # 404
 

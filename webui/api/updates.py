@@ -369,7 +369,27 @@ def apply_update(target):
 
 
 def _apply_update_inner(target):
-    """Inner implementation of apply_update, called under _apply_lock."""
+    """Inner implementation of apply_update, called under _apply_lock.
+
+    Two strategies, picked automatically by inspecting the repo state:
+
+      1. Fast-forward (`git pull --ff-only`):  used when the local branch
+         has NO commits ahead of the upstream tracking ref.  Most common
+         case; works for vanilla Hermes installs that never modify the
+         agent / webui code.  Uncommitted changes are stash/pop'd around
+         the pull.
+
+      2. Rebase (`git rebase`):  used when the local branch has commits
+         not on upstream — i.e. the user maintains custom commits like
+         a `feifei/neodomain-integration` branch on top of main.  We
+         reapply those commits on top of fresh upstream rather than
+         refusing to update.  If a real conflict arises, abort the
+         rebase cleanly and surface a precise recovery message.
+
+    Strategy is picked from `git rev-list --count <upstream>..HEAD` ==
+    "how many local commits are not on upstream".  Zero → ff-only;
+    nonzero → rebase.
+    """
     if target == 'webui':
         path = REPO_ROOT
     elif target == 'agent':
@@ -389,7 +409,7 @@ def _apply_update_inner(target):
         branch = _detect_default_branch(path)
         compare_ref = f'origin/{branch}'
 
-    # Fetch before attempting pull, so the remote ref is current.
+    # Fetch before any pull/rebase so the remote ref is current.
     _, fetch_ok = _run_git(['fetch', 'origin', '--quiet'], path, timeout=15)
     if not fetch_ok:
         return {
@@ -401,13 +421,13 @@ def _apply_update_inner(target):
         }
 
     # Check for dirty working tree (ignore untracked files — git stash
-    # doesn't include them, so stashing on '??' alone leaves nothing to pop)
+    # doesn't include them, so stashing on '??' alone leaves nothing to pop).
     status_out, status_ok = _run_git(
         ['status', '--porcelain', '--untracked-files=no'], path
     )
     if not status_ok:
         return {'ok': False, 'message': f'Failed to inspect repo status: {status_out[:200]}'}
-    # Fail early on unresolved merge conflicts
+    # Fail early on unresolved merge conflicts — neither strategy can proceed.
     if any(line[:2] in {'DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'}
            for line in status_out.splitlines()):
         return {
@@ -420,6 +440,30 @@ def _apply_update_inner(target):
             ),
             'conflict': True,
         }
+
+    # ── Strategy switch ────────────────────────────────────────────────
+    # `compare_ref..HEAD` counts commits the local branch has that
+    # aren't on upstream. If > 0, fast-forward will fail and we must
+    # rebase to preserve them.
+    ahead_out, ahead_ok = _run_git(['rev-list', '--count', f'{compare_ref}..HEAD'], path)
+    ahead = 0
+    if ahead_ok:
+        try:
+            ahead = int(ahead_out.strip() or '0')
+        except ValueError:
+            ahead = 0
+
+    if ahead > 0:
+        return _apply_via_rebase(target, path, compare_ref, status_out, ahead)
+    return _apply_via_ffonly(target, path, compare_ref, status_out)
+
+
+def _apply_via_ffonly(target, path, compare_ref, status_out):
+    """Original behaviour: stash-if-dirty, pull --ff-only, pop.
+
+    Used when the local branch has no commits ahead of upstream — a
+    fast-forward suffices and is the most conservative move.
+    """
     stashed = False
     if status_out:
         _, ok = _run_git(['stash'], path)
@@ -441,7 +485,11 @@ def _apply_update_inner(target):
         if stashed:
             _run_git(['stash', 'pop'], path)
 
-        # Diagnose the most common failure modes and surface actionable messages.
+        # Diagnose the most common failure modes and surface actionable
+        # messages.  The "diverged / not possible to fast-forward" branch
+        # SHOULDN'T fire here (we'd have routed to _apply_via_rebase),
+        # but we keep it as defense-in-depth in case rev-list lied about
+        # the count (e.g. shallow clones).
         pull_lower = pull_out.lower()
         if 'not possible to fast-forward' in pull_lower or 'diverged' in pull_lower:
             return {
@@ -450,7 +498,7 @@ def _apply_update_inner(target):
                     f'The local {target} repo has commits that are not on the remote '
                     'branch, so a fast-forward update is not possible. '
                     'Run: git -C ' + str(path) + ' fetch origin && '
-                    'git -C ' + str(path) + ' reset --hard ' + compare_ref
+                    'git -C ' + str(path) + ' rebase ' + compare_ref
                 ),
                 'diverged': True,
             }
@@ -476,7 +524,93 @@ def _apply_update_inner(target):
                 'stash_conflict': True,
             }
 
-    # Invalidate cache
+    return _finalize_update_success(target, 'updated successfully (fast-forward)')
+
+
+def _apply_via_rebase(target, path, compare_ref, status_out, ahead):
+    """Rebase the local branch onto fresh upstream, preserving local commits.
+
+    Sequence:
+      1. Stash uncommitted changes if any (so rebase has a clean tree).
+      2. `git rebase <compare_ref>` reapplies HEAD..local-tip onto fresh
+         compare_ref.
+      3. On rebase conflict — abort cleanly, pop the stash if we made
+         one, and surface the conflicted file list to the UI so the
+         user knows where to look.
+      4. On success — pop the stash (its diff was authored against
+         pre-rebase HEAD; if upstream touched the same lines we hit a
+         second conflict here, treat it the same way).
+    """
+    stashed = False
+    if status_out:
+        _, ok = _run_git(['stash', 'push', '-m', 'auto-stash before rebase'], path)
+        if not ok:
+            return {'ok': False, 'message': 'Failed to stash local changes before rebase'}
+        stashed = True
+
+    # Rebase onto compare_ref.  We don't pass `--autostash` because we
+    # already stashed manually above (need control over the recovery
+    # path on failure).
+    rebase_out, rebase_ok = _run_git(['rebase', compare_ref], path, timeout=60)
+    if not rebase_ok:
+        # Capture the conflicted files BEFORE aborting — `git rebase
+        # --abort` clears the in-progress state and the diff goes away.
+        conflicted_out, _ = _run_git(['diff', '--name-only', '--diff-filter=U'], path)
+        conflicted_files = [f for f in conflicted_out.splitlines() if f.strip()]
+        # Abort the rebase to leave the repo in a clean state — user
+        # can retry manually if they want to resolve interactively.
+        _run_git(['rebase', '--abort'], path)
+        if stashed:
+            _run_git(['stash', 'pop'], path)
+        # Build a clear, actionable message — DON'T just show git's
+        # raw error.  Most users won't know what "Could not apply
+        # <sha> ..." means.
+        msg_lines = [
+            f'Rebase failed: your {ahead} local commit(s) conflict with upstream changes.',
+            'Your work is safe (rebase was aborted, no commits lost).',
+        ]
+        if conflicted_files:
+            msg_lines.append(
+                'Conflicting files: ' + ', '.join(conflicted_files[:6]) +
+                ('…' if len(conflicted_files) > 6 else '')
+            )
+        msg_lines.append(
+            'Resolve manually: cd ' + str(path) +
+            ' && git rebase ' + compare_ref +
+            '   (edit conflicting files, then `git add` them and `git rebase --continue`)'
+        )
+        return {
+            'ok': False,
+            'message': '\n'.join(msg_lines),
+            'rebase_conflict': True,
+            'conflicted_files': conflicted_files,
+        }
+
+    # Pop stash — its diff was authored against pre-rebase HEAD; if
+    # upstream changed the same lines that the stash modifies, we'll
+    # see a 3-way merge conflict here and need to surface it.
+    if stashed:
+        _, pop_ok = _run_git(['stash', 'pop'], path)
+        if not pop_ok:
+            return {
+                'ok': False,
+                'message': (
+                    'Rebase succeeded but reapplying your uncommitted changes hit '
+                    'a conflict. Resolve in: cd ' + str(path) +
+                    '   (your changes are in `git stash list` as the most recent entry)'
+                ),
+                'stash_conflict': True,
+            }
+
+    return _finalize_update_success(
+        target,
+        f'updated successfully (rebased {ahead} local commit(s) onto fresh upstream)',
+    )
+
+
+def _finalize_update_success(target, message):
+    """Shared post-success bookkeeping: invalidate cache + schedule restart."""
+    # Invalidate the update-check cache so the UI reflects "now current".
     with _cache_lock:
         _update_cache['checked_at'] = 0
 
@@ -495,7 +629,7 @@ def _apply_update_inner(target):
 
     return {
         'ok': True,
-        'message': f'{target} updated successfully',
+        'message': f'{target} {message}',
         'target': target,
         'restart_scheduled': True,
     }
