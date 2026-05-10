@@ -87,7 +87,12 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # ── Push to ghcr.io ──────────────────────────────────────────────
+      # ── Login to both registries ─────────────────────────────────────
+      # Login to ghcr.io first (always available — uses GITHUB_TOKEN);
+      # then optionally login to Aliyun ACR if credentials are set.
+      # Then a SINGLE build/push step pushes to both — saves ~10 min vs
+      # the previous "build twice" approach.
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -95,7 +100,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push to GHCR
+      - name: Check Aliyun ACR credentials
+        id: check_acr
+        run: |
+          if [[ -n "${{ secrets.ALIYUN_ACR_USERNAME }}" && -n "${{ secrets.ALIYUN_ACR_PASSWORD }}" ]]; then
+            echo "have_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ALIYUN_ACR_* secrets not set; pushing to ghcr.io only. Add ALIYUN_ACR_USERNAME + ALIYUN_ACR_PASSWORD secrets to enable China-friendly mirror."
+          fi
+
+      - name: Login to Aliyun ACR
+        if: steps.check_acr.outputs.have_creds == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: registry.cn-shanghai.aliyuncs.com
+          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+
+      - name: Compose final tag list
+        id: tags
+        run: |
+          # GHCR tags always included; ACR tags only if credentials are set.
+          {
+            echo "all<<EOF"
+            echo "${{ steps.meta.outputs.ghcr_tags }}"
+            if [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
+              echo "${{ steps.meta.outputs.acr_tags }}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push (single build → both registries)
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -108,43 +144,13 @@ jobs:
           # Add `linux/arm64` back here when Phase 2 lands ARM ECS.
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.ghcr_tags }}
-          # Use GHA cache backend — dramatically speeds up re-builds.
-          cache-from: type=gha,scope=ghcr
-          cache-to: type=gha,mode=max,scope=ghcr
+          # Pass the union of GHCR + ACR tags. docker buildx pushes the
+          # SAME built image to all listed tags — single build, multi
+          # destination. ~half the time of "build, push, build, push".
+          tags: ${{ steps.tags.outputs.all }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           provenance: false   # cleaner image; no SBOM/attestation file
-
-      # ── Push to Aliyun ACR (only if credentials set) ─────────────────
-      - name: Check Aliyun ACR credentials
-        id: check_acr
-        run: |
-          if [[ -n "${{ secrets.ALIYUN_ACR_USERNAME }}" && -n "${{ secrets.ALIYUN_ACR_PASSWORD }}" ]]; then
-            echo "have_creds=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "have_creds=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::ALIYUN_ACR_* secrets not set; skipping Aliyun push. Add them in Settings → Secrets to enable China-friendly mirror."
-          fi
-
-      - name: Login to Aliyun ACR
-        if: steps.check_acr.outputs.have_creds == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: registry.cn-shanghai.aliyuncs.com
-          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
-          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
-
-      - name: Build and push to Aliyun ACR
-        if: steps.check_acr.outputs.have_creds == 'true'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile.webui
-          platforms: linux/amd64        # see GHCR step for why no arm64
-          push: true
-          tags: ${{ steps.meta.outputs.acr_tags }}
-          cache-from: type=gha,scope=acr
-          cache-to: type=gha,mode=max,scope=acr
-          provenance: false
 
       # ── Summary ──────────────────────────────────────────────────────
       - name: Summary
