@@ -1,0 +1,45 @@
+# Caddyfile for the docker-compose deployment.
+# ==============================================================================
+# Replaces the bare-metal Caddyfile.template (deleted in this commit).
+# bootstrap-docker.sh sed-substitutes %DOMAIN% before writing this to
+# /opt/hermes-docker/Caddyfile.
+#
+# What's different from the bare-metal version:
+#   - reverse_proxy targets `hermes-webui:7891` (compose service name)
+#     instead of `127.0.0.1:7891` (loopback)
+#   - No need to mention X-Forwarded-Host explicitly — Caddy adds it
+#     by default when proxying. We KEEP the explicit declaration for
+#     clarity; redundant but harmless.
+# ==============================================================================
+
+# Email for Let's Encrypt account registration. Optional but recommended:
+# LE will email you ~30 days before cert expiration if renewal fails. The
+# bootstrap script substitutes a placeholder; users can edit /opt/hermes-
+# docker/Caddyfile to set their real email.
+{
+    email %ACME_EMAIL%
+}
+
+%DOMAIN% {
+    # WebUI service name on the compose internal network. Docker DNS
+    # resolves `hermes-webui` to the container's internal IP.
+    reverse_proxy hermes-webui:7891 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host  {host}
+
+        # SSE / chat streaming uses long-lived connections. Don't time
+        # out idle proxies aggressively.
+        flush_interval -1
+    }
+
+    request_body {
+        max_size 50MB
+    }
+
+    # Production-grade access logs to stdout — collect via
+    # `docker compose logs -f caddy`.
+    log {
+        output stdout
+        format console
+    }
+}

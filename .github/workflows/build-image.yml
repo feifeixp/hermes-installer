@@ -1,0 +1,170 @@
+name: build-image
+
+# Build the cloud-deploy Docker image and push to:
+#   - ghcr.io/feifeixp/hermes-webui (international users)
+#   - registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui (China users — much
+#     faster `docker pull` from Aliyun ECS / Tencent Cloud)
+#
+# Triggers:
+#   - main branch push (only when WebUI / agent code or Dockerfile changed)
+#   - manual workflow_dispatch (for one-off rebuilds without a code change)
+#
+# Tags pushed:
+#   - latest (always)
+#   - main-<sha7> (always — for rollbacks / reproducibility)
+#   - v<version> (only on tag pushes — TODO once we cut releases)
+#
+# Setup required (one-time):
+#   1. Repository → Settings → Secrets and variables → Actions
+#   2. Add ALIYUN_ACR_USERNAME (your Aliyun container-registry username)
+#      and ALIYUN_ACR_PASSWORD (the password for that registry user, NOT
+#      your aliyun account password — see Aliyun ACR console for how to
+#      mint a registry-specific token).
+#   3. Aliyun ACR namespace: create `neowow` namespace + `hermes-webui`
+#      repo in cn-shanghai region (https://cr.console.aliyun.com/).
+#
+# If ALIYUN_ACR_* secrets aren't set, the Aliyun push step is skipped
+# (job still succeeds — ghcr.io push is enough for international use).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Rebuild when image-relevant files change. Keep this list narrow
+      # so doc-only commits don't burn build minutes.
+      - 'docker/Dockerfile.webui'
+      - 'docker/docker-compose.yml.template'
+      - 'docker/Caddyfile.template'
+      - 'webui/**'
+      - 'main.py'
+      - 'app.py'
+      - '.dockerignore'
+      - '.github/workflows/build-image.yml'
+  workflow_dispatch:        # manual trigger from Actions UI
+
+# Single in-flight build per ref — superseded runs cancel automatically.
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      contents: read
+      packages: write    # needed to push to ghcr.io
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up QEMU (for cross-arch build)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          # Newline-separated tag list, used by both push targets.
+          {
+            echo "ghcr_tags<<EOF"
+            echo "ghcr.io/feifeixp/hermes-webui:latest"
+            echo "ghcr.io/feifeixp/hermes-webui:main-${SHORT_SHA}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "acr_tags<<EOF"
+            echo "registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui:latest"
+            echo "registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui:main-${SHORT_SHA}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── Push to ghcr.io ──────────────────────────────────────────────
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.webui
+          # arm64 is for Aliyun ARM-based ECS (gn7 family) and Apple Silicon
+          # local dev. Doubles build time but Buildx caches per-arch so
+          # subsequent builds are mostly cached.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.ghcr_tags }}
+          # Use GHA cache backend — dramatically speeds up re-builds.
+          cache-from: type=gha,scope=ghcr
+          cache-to: type=gha,mode=max,scope=ghcr
+          provenance: false   # cleaner image; no SBOM/attestation file
+
+      # ── Push to Aliyun ACR (only if credentials set) ─────────────────
+      - name: Check Aliyun ACR credentials
+        id: check_acr
+        run: |
+          if [[ -n "${{ secrets.ALIYUN_ACR_USERNAME }}" && -n "${{ secrets.ALIYUN_ACR_PASSWORD }}" ]]; then
+            echo "have_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ALIYUN_ACR_* secrets not set; skipping Aliyun push. Add them in Settings → Secrets to enable China-friendly mirror."
+          fi
+
+      - name: Login to Aliyun ACR
+        if: steps.check_acr.outputs.have_creds == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: registry.cn-shanghai.aliyuncs.com
+          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+
+      - name: Build and push to Aliyun ACR
+        if: steps.check_acr.outputs.have_creds == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.webui
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.acr_tags }}
+          cache-from: type=gha,scope=acr
+          cache-to: type=gha,mode=max,scope=acr
+          provenance: false
+
+      # ── Summary ──────────────────────────────────────────────────────
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "## ✅ Image push complete"
+            echo ""
+            echo "**ghcr.io tags (international):**"
+            echo '```'
+            echo "${{ steps.meta.outputs.ghcr_tags }}"
+            echo '```'
+            if [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
+              echo "**Aliyun ACR tags (China):**"
+              echo '```'
+              echo "${{ steps.meta.outputs.acr_tags }}"
+              echo '```'
+            else
+              echo "_Aliyun ACR push skipped — set \`ALIYUN_ACR_USERNAME\` + \`ALIYUN_ACR_PASSWORD\` secrets to enable._"
+            fi
+            echo ""
+            echo "**Deploy with:**"
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/feifeixp/hermes-installer/main/docker/bootstrap-docker.sh \\\\"
+            echo "  | sudo bash -s -- chat.example.com"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

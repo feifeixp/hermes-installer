@@ -19,35 +19,51 @@ fail()  { echo "  ✗ $*" >&2; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "  ⚠ $*"; }
 info()  { echo "→ $*"; }
 
-# ── 1. Local WebUI process ─────────────────────────────────────────────
-info "Local WebUI process (loopback :7891)"
-if curl -fsS --max-time 5 http://127.0.0.1:7891/health 2>/dev/null | grep -q '"ok":true' \
-   || curl -fsS --max-time 5 http://127.0.0.1:7891/health 2>/dev/null | grep -q 'ok'; then
-    ok "GET /health returned 200"
+# ── 1. Docker compose state ────────────────────────────────────────────
+DEPLOY_DIR="${HERMES_DEPLOY_DIR:-/opt/hermes-docker}"
+if [[ ! -f "$DEPLOY_DIR/docker-compose.yml" ]]; then
+    fail "$DEPLOY_DIR/docker-compose.yml not found — bootstrap-docker.sh hasn't run?"
+    exit 1
+fi
+cd "$DEPLOY_DIR"
+
+info "Docker compose state ($DEPLOY_DIR)"
+if ! command -v docker >/dev/null 2>&1; then
+    fail "docker not installed"
+    exit 1
+fi
+if docker compose ps --format json 2>/dev/null | grep -q '"State":"running"'; then
+    ok "docker compose stack is up"
 else
-    fail "GET http://127.0.0.1:7891/health failed"
-    fail "Check: sudo systemctl status hermes-webui"
+    fail "docker compose stack is NOT running — docker compose ps for detail"
 fi
 
-# ── 2. systemd unit state ──────────────────────────────────────────────
-info "systemd unit state"
-if systemctl is-active --quiet hermes-webui; then
-    ok "hermes-webui is active"
+# ── 2. WebUI container health ──────────────────────────────────────────
+info "WebUI container health"
+if docker compose ps --format json hermes-webui 2>/dev/null | grep -q '"Health":"healthy"'; then
+    ok "hermes-webui is healthy"
+elif docker compose exec -T hermes-webui curl -fsS http://127.0.0.1:7891/health 2>/dev/null | grep -q '"ok"'; then
+    ok "hermes-webui /health returns ok (healthcheck not yet stable but works)"
 else
-    fail "hermes-webui is NOT active — sudo systemctl status hermes-webui"
-fi
-if systemctl is-active --quiet caddy; then
-    ok "caddy is active"
-else
-    fail "caddy is NOT active — sudo systemctl status caddy"
+    fail "hermes-webui health probe failed"
+    fail "Check: docker compose logs hermes-webui --tail 50"
 fi
 
-# ── 3. Auth mode ───────────────────────────────────────────────────────
+# ── 3. Caddy container ─────────────────────────────────────────────────
+info "Caddy container"
+if docker compose ps --format json caddy 2>/dev/null | grep -q '"State":"running"'; then
+    ok "caddy is running"
+else
+    fail "caddy is NOT running — docker compose logs caddy --tail 50"
+fi
+
+# ── 4. Auth mode (neodomain expected for chat.neowow.studio) ───────────
 info "Auth mode (expecting neodomain)"
-AUTH_MODE=$(systemctl show hermes-webui -p Environment --value 2>/dev/null \
-    | tr ' ' '\n' | grep '^HERMES_WEBUI_AUTH_MODE=' | cut -d= -f2)
+AUTH_MODE=$(docker compose exec -T hermes-webui printenv HERMES_WEBUI_AUTH_MODE 2>/dev/null | tr -d '\r\n' || echo "")
 if [[ "$AUTH_MODE" == "neodomain" ]]; then
     ok "HERMES_WEBUI_AUTH_MODE=neodomain"
+elif [[ "$AUTH_MODE" == "none" ]]; then
+    warn "HERMES_WEBUI_AUTH_MODE=none — chat is OPEN, anyone with URL can use it"
 else
     warn "HERMES_WEBUI_AUTH_MODE=$AUTH_MODE (expected: neodomain)"
 fi
@@ -134,9 +150,9 @@ if [[ $ERRORS -eq 0 ]]; then
     3. After login, should land back on https://$DOMAIN/ authenticated
 
   If step 2 or 3 fails, look at:
-    sudo journalctl -u hermes-webui -f  # WebUI side
-    sudo journalctl -u caddy -f         # TLS / proxy side
-    Browser DevTools → Network          # Cookie + redirect chain
+    docker compose -f $DEPLOY_DIR/docker-compose.yml logs -f hermes-webui  # WebUI side
+    docker compose -f $DEPLOY_DIR/docker-compose.yml logs -f caddy         # TLS / proxy side
+    Browser DevTools → Network                                              # Cookie + redirect chain
 EOF
     exit 0
 else
@@ -146,9 +162,10 @@ else
 ════════════════════════════════════════════════════════════════════
 
   Diagnostic commands:
-    sudo systemctl status hermes-webui caddy
-    sudo journalctl -u hermes-webui --no-pager -n 100
-    sudo journalctl -u caddy --no-pager -n 50
+    cd $DEPLOY_DIR
+    docker compose ps
+    docker compose logs hermes-webui --tail 100
+    docker compose logs caddy --tail 50
 EOF
     exit 1
 fi

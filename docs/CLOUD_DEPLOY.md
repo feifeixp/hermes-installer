@@ -7,6 +7,8 @@
 > **本文档面向运维 / 部署人员。** 终端用户怎么使用云端 Hermes 看
 > [REMOTE_DEPLOY.md](./REMOTE_DEPLOY.md)。
 
+---
+
 ## 总体架构
 
 ```
@@ -14,13 +16,14 @@
     │ HTTPS
     ▼
 chat.neowow.studio  (Caddy 反代 + LetsEncrypt 自动证书)
-    │ HTTP loopback
+    │ HTTP，docker compose 内部网络
     ▼
-127.0.0.1:7891  (hermes-installer / WebUI server)
-    │ in-process Python
-    ▼
-Hermes Agent (~/.hermes/...)
+hermes-webui:7891   (hermes-installer image — Hermes Agent + WebUI 同进程)
 ```
+
+整套就是 **2 个 Docker 容器**：Caddy（外）+ hermes-webui（内）。
+镜像里把 Hermes Agent + Python venv + ~700 MB 的 wheels 全烤好了，部署
+**只需要 docker pull + docker compose up**，跳过过去 10-15 分钟的现场安装。
 
 **认证流程**（Neodomain OAuth）：
 1. 用户访问 `https://chat.neowow.studio`
@@ -33,143 +36,139 @@ Hermes Agent (~/.hermes/...)
 
 ## 系统需求
 
-- **Linux** Debian 11+ / Ubuntu 22.04+（其他发行版需手动调整 apt 命令）
-- **2 GB RAM 起步**（系统 ~500 MB + Python venv ~600 MB + Hermes Agent ~500 MB）
+- **Linux** Debian 11+ / Ubuntu 22.04+ / CentOS / Rocky / 几乎任何 Docker 跑得起来的发行版
+- **2 GB RAM 起步**（容器占用 ~1.5 GB；4 GB 富裕）
 - **公网 IP** + 80/443 入站
-- **域名**指向你的服务器（A 记录 / AAAA 记录）
+- **域名**指向你的服务器（A 记录指向 ECS 公网 IP；不能用 Cloudflare 代理 / 橘色云图标）
 
-阿里云 ECS 推荐：**ecs.t6-c1m2.large**（2 vCPU / 4 GB RAM，¥0.10/h 起步价），
-后续根据并发用户数升级。
+阿里云 ECS 推荐：**ecs.t6-c1m2.large**（2 vCPU / 4 GB RAM）或者更高。
 
 ---
 
-## 一键部署（推荐）
+## 一键部署
 
 ```bash
 ssh root@your-ecs
 
-curl -fsSL https://raw.githubusercontent.com/feifeixp/hermes-installer/main/deploy/cloud/bootstrap-cloud.sh \
-  | bash -s -- chat.yourdomain.com
+curl -fsSL https://raw.githubusercontent.com/feifeixp/hermes-installer/main/docker/bootstrap-docker.sh \
+  | sudo bash -s -- chat.yourdomain.com [you@example.com]
 ```
 
-脚本做的事：
-1. 装 Caddy（如果还没装）
-2. 创建 `hermes` 系统用户（在 `/opt/hermes`）
-3. clone hermes-installer 到 `/opt/hermes/hermes-installer`
-4. 跑 `webui/start.sh` 一次装完 Hermes Agent + Python venv
-5. 装 systemd unit
-6. 写 `/etc/caddy/Caddyfile`（替换域名）
-7. 启动两个服务
+第二个参数是 LetsEncrypt 通知邮箱（可选）。
 
-跑完后访问 `https://chat.yourdomain.com` 应该就能看到登录跳转。
+脚本做的事：
+1. 检测/安装 Docker（用 `get.docker.com` 官方一键脚本）
+2. 检测最优镜像源（中国 → Aliyun ACR；海外 → ghcr.io）
+3. 写 `/opt/hermes-docker/docker-compose.yml` + `Caddyfile`，替换好你的域名
+4. `docker compose pull` + `up -d`
+5. 等两个服务都健康
+
+预计 **2-5 分钟**完成（绝大多数时间在拉镜像）。中国 ECS 第一次拉 ~1 GB 镜像，
+平均 3 分钟。
 
 ---
 
-## 手动部署（细节控）
+## 部署前 checklist
 
-如果一键脚本失败、或你要改动配置，看下面的步骤。
+打钩之后再跑 bootstrap，少走弯路：
 
-### 1. 装 Caddy
+- [ ] **DNS 已配好**：`chat.yourdomain.com` A 记录直接指向你 ECS 公网 IP
+- [ ] **Cloudflare 关代理**：如果用 Cloudflare DNS，云图标必须**灰色**（DNS only）；否则 LE 拿不到证书
+- [ ] **AAAA 记录已删除**：除非你真有 IPv6 + 也指向 ECS（绝大多数情况删了它）
+- [ ] **云平台安全组放行**：80 / 443 入方向 0.0.0.0/0 允许
+- [ ] **磁盘 ≥ 20 GB**：镜像 ~1 GB + 系统 + 状态卷
+- [ ] **可访问 Docker 镜像源**：脚本会自动选；中国服务器选 Aliyun ACR
 
+---
+
+## 验收
+
+部署完跑一下：
 ```bash
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update
-sudo apt install -y caddy
+curl -fsSL https://raw.githubusercontent.com/feifeixp/hermes-installer/main/docker/verify-deploy.sh \
+  | sudo bash -s -- chat.yourdomain.com
 ```
 
-### 2. 创建 hermes 用户 + clone 代码
+预期所有项 ✓。如果某项 ✗ 看[故障排查](#故障排查)。
 
+或者手动：
 ```bash
-sudo useradd -r -m -d /opt/hermes -s /bin/bash hermes
-sudo -u hermes git clone https://github.com/feifeixp/hermes-installer.git /opt/hermes/hermes-installer
-```
+# 1. 容器都在跑吗
+cd /opt/hermes-docker
+docker compose ps    # 两个 Up，hermes-webui 是 healthy
 
-### 3. 一次性跑 webui/start.sh 装依赖
+# 2. WebUI 自己活着吗
+docker compose exec hermes-webui curl -fsS http://127.0.0.1:7891/health
+# 期望: {"status":"ok",...}
 
-```bash
-sudo -u hermes bash -c "cd /opt/hermes/hermes-installer && bash webui/start.sh --foreground"
-# 跑到 'Starting Hermes Web UI on http://...' 之后 Ctrl+C 即可
-# 不要让它持续跑，systemd 会接管
-```
+# 3. Caddy 拿到证书了吗
+docker compose logs caddy 2>&1 | grep -E 'obtain|error' | tail -5
+# 期望看到: "successfully obtained certificate"
 
-### 4. 装 systemd unit
-
-```bash
-sudo cp /opt/hermes/hermes-installer/deploy/cloud/hermes-webui.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now hermes-webui
-```
-
-确认起来了：
-```bash
-sudo systemctl status hermes-webui      # active (running)
-curl http://127.0.0.1:7891/health       # {"ok":true}
-```
-
-### 5. 配 Caddy
-
-```bash
-sudo cp /opt/hermes/hermes-installer/deploy/cloud/Caddyfile.template /etc/caddy/Caddyfile
-sudo sed -i "s|chat.neowow.studio|chat.yourdomain.com|g" /etc/caddy/Caddyfile
-sudo systemctl reload caddy
-```
-
-确认 HTTPS 通了：
-```bash
-curl -I https://chat.yourdomain.com    # HTTP/2 302（重定向到 OAuth）
+# 4. 公网能访问吗
+curl -I https://chat.yourdomain.com
+# 期望: HTTP/2 302 (跳到 OAuth 登录)
 ```
 
 ---
 
 ## 常用运维命令
 
-| 操作 | 命令 |
-|------|------|
-| 查日志 | `sudo journalctl -u hermes-webui -f` |
-| 重启 | `sudo systemctl restart hermes-webui` |
-| 查状态 | `sudo systemctl status hermes-webui` |
-| 更新代码 | `cd /opt/hermes/hermes-installer && sudo -u hermes git pull && sudo systemctl restart hermes-webui` |
-| 重新生成证书 | `sudo systemctl reload caddy` |
-| 查 Caddy 日志 | `sudo journalctl -u caddy -f` |
+| 操作 | 命令（在 `/opt/hermes-docker/` 下跑） |
+|------|---|
+| 看服务状态 | `docker compose ps` |
+| 跟 WebUI 日志 | `docker compose logs -f hermes-webui` |
+| 跟 Caddy 日志（TLS / HTTP） | `docker compose logs -f caddy` |
+| 升级到最新镜像 | `docker compose pull && docker compose up -d` |
+| 重启所有服务 | `docker compose restart` |
+| 备份用户状态 | `docker run --rm -v hermes_state:/data -v $PWD:/backup alpine tar czf /backup/state-$(date +%F).tar.gz -C /data .` |
+| **彻底清空**（destructive） | `docker compose down -v` |
+| 进容器调试 | `docker compose exec hermes-webui bash` |
 
 ---
 
-## 配置参考
+## 配置覆盖
 
-### 环境变量（在 `hermes-webui.service` 里改）
+### 改环境变量
+
+编辑 `/opt/hermes-docker/docker-compose.yml`，改 `hermes-webui` 的 `environment:`，
+然后 `docker compose up -d` 重建容器（state volume 会保留）。
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `HERMES_WEBUI_AUTH_MODE` | `neodomain` | `none` / `password` / `neodomain` |
-| `HERMES_WEBUI_PORT` | `7891` | WebUI 监听端口（loopback only） |
-| `HERMES_WEBUI_HOST` | `127.0.0.1` | 监听地址 |
-| `HERMES_WEBUI_FOREGROUND` | `1` | systemd 必须 |
-| `HERMES_WEBUI_STATE_DIR` | `~/.hermes/webui` | 会话 / 配置 / 用户数据存放 |
-| `HERMES_NEODOMAIN_OAUTH_START` | `https://app.neowow.studio/api/oauth/start` | 鉴权入口（覆盖用于自托管 dashboard） |
+| `HERMES_WEBUI_PORT` | `7891` | 内部端口（容器外不直接暴露，Caddy 反代） |
+| `HERMES_WEBUI_STATE_DIR` | `/opt/hermes/.hermes/webui` | 容器内状态目录，挂载在 hermes_state volume |
+| `HERMES_NEODOMAIN_OAUTH_START` | `https://app.neowow.studio/api/oauth/start` | 自托管 dashboard 时改这个 |
 
-### 资源限制
+### 改 Caddyfile（域名 / TLS / 路径）
 
-`hermes-webui.service` 默认配置：
-```
-MemoryMax=4G
-CPUQuota=200%
+编辑 `/opt/hermes-docker/Caddyfile`，然后：
+```bash
+docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
-并发用户多了之后调高，或者升级 ECS。
+不需要重启容器。
+
+### 切换 / 升级镜像版本
+
+`/opt/hermes-docker/.env` 里改：
+```
+HERMES_WEBUI_IMAGE=registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui:main-abc1234
+```
+然后 `docker compose pull && docker compose up -d`。可以钉到具体 commit 实现回滚。
 
 ---
 
-## 多用户共享同一个 Agent — 重要警告
+## ⚠️ 多用户共享同一个 Agent — 重要警告
 
 ⚠️ **当前 Phase 1 部署所有用户共享同一个 `~/.hermes/`**：
 - A 用户的会话历史 B 用户能看到
 - 任何人都能用同一个 LLM API key（在 `~/.hermes/.env`）
 - 用户隔离靠**对你信任的小群体**（朋友、同事、工作室成员）
 
-如果要给陌生人开放，Phase 2 会做"每用户独立 ECS"模式。
-**Phase 1 不要部署给公网随机注册的用户。**
+如果要给陌生人开放，Phase 2 会做"每用户独立 ECS"模式（用同一个 Docker 镜像 +
+ECS-per-user 编排）。**Phase 1 不要部署给公网随机注册的用户。**
 
 ---
 
@@ -177,45 +176,78 @@ CPUQuota=200%
 
 - [ ] HTTPS 证书已自动签发（看 Caddy 日志确认）
 - [ ] `HERMES_WEBUI_AUTH_MODE=neodomain` 已设
-- [ ] `~/.hermes/.env` 文件权限 `0600`
 - [ ] 防火墙只开 80/443
-- [ ] `hermes` 用户没有 sudo 权限
-- [ ] systemd 限制（`PrivateTmp=yes`、`ProtectSystem=strict`）已生效
-- [ ] DNS 反向解析 / SPF 不影响 OAuth 回调
+- [ ] Docker daemon 用 root 跑，但 `hermes-webui` 容器内进程用 hermes 用户（容器内 UID 1500）
+- [ ] state volume 权限锁定（Docker 默认 root:root，容器内 chown 为 hermes）
+- [ ] 升级有节奏：CI 推主分支自动 build；你定期 `docker compose pull && up -d`
 
 ---
 
 ## 故障排查
 
-### Caddy 拿不到证书
+### 容器启不来 / 立即退出
+```bash
+docker compose ps             # 看 State / Status
+docker compose logs hermes-webui --tail 100
 ```
-caddy ssl error: ... TLS-ALPN ... failed
-```
-- 检查 DNS 是否指向本机 IP（`dig +short chat.yourdomain.com`）
-- 80 端口是否能从公网访问（云厂商安全组）
-- 防火墙：`sudo ufw status`
+常见原因：
+- 容器 OOM（4 GB 不够）→ 升级 ECS 或加 swap
+- 状态目录权限错乱 → `docker compose down && docker volume rm hermes_state && docker compose up -d`（**清空用户状态**）
+- 镜像拉不下来 → 检查 `/opt/hermes-docker/.env` 里 image 是否正确
 
-### `chat.yourdomain.com` 一直跳到 dashboard 又跳回来
-- 检查浏览器开发者工具，看 cookie：是否有 `neoToken=...; Domain=.neowow.studio`？
+### Caddy 拿不到 LetsEncrypt 证书
+```bash
+docker compose logs caddy 2>&1 | grep -i acme | tail -20
+```
+常见原因：
+- DNS 没指对 → `dig @8.8.8.8 chat.yourdomain.com A` 看是否是你 ECS IP
+- AAAA 记录还指向 Cloudflare → 删了 AAAA
+- 80 端口没开 → 云控制台改安全组
+- 中间人 / 反代（Cloudflare 橘色云）→ 切灰色
+
+### `chat.yourdomain.com` 一直跳到 dashboard 又跳回来（OAuth 死循环）
+- 检查浏览器开发者工具 → Application → Cookies：是否有 `neoToken=...; Domain=.neowow.studio`？
 - 如果你的域名**不是 `*.neowow.studio` 子域**，cookie 不会跨域 — 要么改域名，要么改 dashboard 的 cookie domain（`COOKIE_DOMAIN` in `dashboard/src/app/api/oauth/callback/route.ts`）
 
-### "Authentication required" 但 cookie 看着是好的
-- 检查 JWT 是否过期：`echo <jwt> | python3 -c "import sys,base64,json; print(json.loads(base64.urlsafe_b64decode(sys.stdin.read().split('.')[1] + '==')))"`
-- 看 `exp` 字段，过期了让用户重新登录
-- 看 webui 日志：`sudo journalctl -u hermes-webui --since '5 min ago'`
+### 升级后状态丢失
+不应该发生 — `hermes_state` volume 是命名 volume，`docker compose up -d` 不会动它。
+如果丢了：
+- 看 `docker volume ls | grep hermes_state` 还在不在
+- 之前是不是跑过 `docker compose down -v`（destructive）
 
-### 503 / 502
-- WebUI 进程挂了 → `sudo systemctl status hermes-webui`，看错误
-- 端口冲突 → `sudo lsof -i :7891`
-- 内存不足（OOM） → `dmesg | grep -i 'killed process'`
+### 想完全重来
+```bash
+cd /opt/hermes-docker
+docker compose down -v        # 清掉 volume — 销毁会话 / 证书
+rm -rf /opt/hermes-docker
+# 然后重跑 bootstrap-docker.sh
+```
 
 ---
 
 ## 升级到 Phase 2（多租户）
 
-当用户量超过你愿意"信任彼此"的范围（一般 10+），开始考虑 Phase 2：
-- 每用户独立 `~/.hermes/<userId>/`
-- 路由层根据 JWT userId 选目录
-- 资源 quota（每用户 CPU/内存上限）
+当用户量超过你愿意"信任彼此"的范围（一般 10+），开始考虑 Phase 2：每用户独立 ECS
+实例。Phase 2 用同一个 Docker 镜像（`hermes-webui:latest`）+ ECS-per-user 编排，
+不需要重新构建镜像。
 
-Phase 2 仍未实现 — 计划在 Phase 1 上线后根据实际反馈安排。
+详见 [`PHASE_2_DESIGN.md`](./PHASE_2_DESIGN.md)。
+
+---
+
+## 自托管你自己的 Docker 镜像
+
+如果你不想依赖 `feifeixp/hermes-webui`（fork 了想用自己的版本）：
+
+1. fork hermes-installer 仓库
+2. 修 `.github/workflows/build-image.yml` 里的镜像名为你的
+3. 在你 fork 的 GitHub Actions 中运行
+4. 部署时用 `HERMES_REGISTRY=your-registry.com/your-namespace` 跑 bootstrap-docker.sh
+
+或者直接在 ECS 上 build：
+```bash
+git clone https://github.com/feifeixp/hermes-installer.git /opt/hermes-installer
+cd /opt/hermes-installer
+docker build -f docker/Dockerfile.webui -t hermes-webui:local .
+# 然后在 docker-compose.yml 里改 image: hermes-webui:local
+```

@@ -1,0 +1,145 @@
+# Hermes WebUI cloud image
+# ==============================================================================
+# Bakes everything Phase 1's bootstrap-cloud.sh used to install at runtime:
+#   - System deps (Python 3, git, build-essential, ripgrep, ffmpeg, node, npm)
+#   - uv (Python package manager)
+#   - Hermes Agent + Python venv + ~700 MB of wheels (the slow step)
+#   - hermes-installer (the WebUI itself)
+#
+# After this image is built, deploying becomes:
+#     docker pull <this image>
+#     docker run -p 7891:7891 <this image>
+#
+# Cold start time: 5-15 sec (just spinning the container) instead of the
+# 10-15 minutes the bash bootstrap took to install everything from scratch.
+#
+# Build:
+#   cd hermes-installer/
+#   docker build -f docker/Dockerfile.webui -t hermes-webui:dev .
+#
+# Run locally:
+#   docker run --rm -it -p 7891:7891 \
+#     -e HERMES_WEBUI_AUTH_MODE=none \
+#     hermes-webui:dev
+#   curl http://localhost:7891/health
+#
+# In production: see docker/docker-compose.yml.template for the full
+# Caddy + WebUI stack.
+# ==============================================================================
+
+FROM ubuntu:24.04 AS base
+
+# ── Locale + Python defaults ─────────────────────────────────────────────────
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    PYTHONIOENCODING=utf-8
+
+# ── System dependencies ──────────────────────────────────────────────────────
+# All OS-level packages Hermes Agent + WebUI need at runtime. ripgrep
+# and ffmpeg are technically "optional" — agent falls back gracefully —
+# but their default-yes prompts in install.sh used to block bash deploys
+# (Phase 1's first-day pain), so we bake them in.
+#
+# build-essential + python3-dev: needed for some Python packages that
+# compile native extensions (notably tiktoken / msgpack on aarch64).
+#
+# nodejs + npm: hermes-agent's installer pulls Playwright / browser
+# tooling via npm during install. Pre-staged here so npm install can
+# happen without internet timeouts later.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        wget \
+        git \
+        locales \
+        python3 \
+        python3-venv \
+        python3-dev \
+        python3-pip \
+        build-essential \
+        nodejs \
+        npm \
+        ripgrep \
+        ffmpeg \
+        sudo \
+    && locale-gen en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Install uv (fast Python package manager) ─────────────────────────────────
+# uv replaces pip+venv for the agent install. The official installer
+# script writes to ~/.local/bin; we then copy to /usr/local/bin so it's
+# on PATH for both root and the unprivileged hermes user.
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && cp /root/.local/bin/uv /usr/local/bin/uv \
+    && cp /root/.local/bin/uvx /usr/local/bin/uvx \
+    && uv --version
+
+# ── Create unprivileged hermes user ──────────────────────────────────────────
+# Same setup as Phase 1's bare-metal deploy: hermes user owns
+# /opt/hermes/, has no shell login privileges except as needed.
+# UID 1500 to avoid clashing with the default ubuntu user (UID 1000)
+# on host volumes.
+RUN useradd -r -m -u 1500 -d /opt/hermes -s /bin/bash hermes \
+    && mkdir -p /opt/hermes/.hermes \
+    && chown -R hermes:hermes /opt/hermes
+
+# ── Copy hermes-installer source ─────────────────────────────────────────────
+# We use COPY (not git clone) so the image build is reproducible from
+# whatever version is in the build context. CI sets context = repo
+# root, so this picks up the current commit. Local dev builds work too.
+#
+# .dockerignore filters out node_modules / .git / __pycache__ etc. so
+# the layer stays small.
+COPY --chown=hermes:hermes . /opt/hermes/hermes-installer/
+
+# ── Install Hermes Agent + Python deps ────────────────────────────────────────
+# This is the SLOW step: ~10 minutes for fresh install (clone agent,
+# create venv, uv pip install -e .[all] downloads ~700 MB of wheels).
+# Baking it into the image means deploys are seconds, not 15 minutes.
+#
+# We invoke bootstrap.py with --install-only — added in this commit
+# alongside the Dockerfile. It runs install_hermes_agent() and
+# ensure_python_has_webui_deps() then returns BEFORE launching the
+# server. Container CMD handles launch at runtime.
+USER hermes
+WORKDIR /opt/hermes/hermes-installer
+
+# install.sh is interactive about ripgrep/ffmpeg — neutralize via setsid
+# (same trick we use in app.py:467 for the Windows / WSL install path).
+# Output goes to stdout so docker build logs show progress.
+RUN python3 webui/bootstrap.py --install-only --no-browser
+
+# ── Runtime ──────────────────────────────────────────────────────────────────
+USER hermes
+WORKDIR /opt/hermes/hermes-installer
+
+# Defaults — overridable via `docker run -e`. The compose file sets
+# HERMES_WEBUI_AUTH_MODE=neodomain for the cloud chat.neowow.studio
+# deployment; leaving it unset here so a bare `docker run` is open
+# (caller must explicitly opt in to auth).
+ENV HERMES_WEBUI_PORT=7891 \
+    HERMES_WEBUI_HOST=0.0.0.0 \
+    HERMES_WEBUI_FOREGROUND=1 \
+    HERMES_WEBUI_STATE_DIR=/opt/hermes/.hermes/webui
+
+EXPOSE 7891
+
+# Persistent state (sessions, configs, agent skills, OAuth tokens) lives
+# under /opt/hermes/.hermes — mount a volume there in production. The
+# build copies an empty .hermes directory; first run fills it in.
+VOLUME ["/opt/hermes/.hermes"]
+
+# Health check — Caddy uses this to gate traffic, and `docker compose
+# up --wait` blocks until healthy. /health returns {"status":"ok"} when
+# the WebUI server has booted.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+    CMD curl -fsS http://127.0.0.1:${HERMES_WEBUI_PORT}/health || exit 1
+
+# bash + start.sh chain: start.sh sources .env, picks Python, then
+# execs bootstrap.py which (with FOREGROUND=1) execs server.py.
+# Three layers but each is a single Python/bash call, no orphaning.
+CMD ["bash", "webui/start.sh"]

@@ -265,6 +265,16 @@ def parse_args() -> argparse.Namespace:
             "supervisor's own KeepAlive / Restart=on-failure handles liveness."
         ),
     )
+    parser.add_argument(
+        "--install-only",
+        action="store_true",
+        help=(
+            "Install Hermes Agent + WebUI deps and EXIT — do not launch "
+            "server.py. Used during Docker image build to bake the slow "
+            "git-clone-and-venv-setup step into the image so first-run "
+            "container start is fast. Implies --no-browser."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -345,6 +355,20 @@ def main() -> int:
         agent_dir = discover_agent_dir()
 
     python_exe = ensure_python_has_webui_deps(discover_launcher_python(agent_dir), agent_dir)
+
+    # --install-only short-circuit. Used during Docker image build to bake
+    # the slow `install_hermes_agent` + `ensure_python_has_webui_deps` work
+    # into a layer so cold-start container deploy is fast (seconds vs the
+    # 10-15 min the install takes from scratch). After this point we return
+    # without spawning server.py — the container's runtime CMD will handle
+    # that. Anything below this line is launch-related and shouldn't run
+    # during build.
+    if args.install_only:
+        info(f"--install-only: install complete; exiting before launch.")
+        info(f"  agent dir : {agent_dir}")
+        info(f"  python exe: {python_exe}")
+        return 0
+
     state_dir = Path(
         os.getenv("HERMES_WEBUI_STATE_DIR", str(Path.home() / ".hermes" / "webui"))
     ).expanduser()
