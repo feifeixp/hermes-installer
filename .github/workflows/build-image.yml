@@ -62,8 +62,9 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Set up QEMU (for cross-arch build)
-        uses: docker/setup-qemu-action@v3
+      # QEMU not needed — amd64 only. Re-add when arm64 returns:
+      #   - name: Set up QEMU
+      #     uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -99,10 +100,13 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.webui
-          # arm64 is for Aliyun ARM-based ECS (gn7 family) and Apple Silicon
-          # local dev. Doubles build time but Buildx caches per-arch so
-          # subsequent builds are mostly cached.
-          platforms: linux/amd64,linux/arm64
+          # amd64 only for now — arm64 builds via QEMU emulation take
+          # 5-10x longer (~30 min vs ~10 min) and we have no Apple
+          # Silicon production users yet. Aliyun / Tencent ECS are all
+          # x86_64. Apple Silicon devs can build amd64 locally via
+          # Rosetta + buildx (`docker build --platform linux/amd64`).
+          # Add `linux/arm64` back here when Phase 2 lands ARM ECS.
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.ghcr_tags }}
           # Use GHA cache backend — dramatically speeds up re-builds.
@@ -135,7 +139,7 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.webui
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64        # see GHCR step for why no arm64
           push: true
           tags: ${{ steps.meta.outputs.acr_tags }}
           cache-from: type=gha,scope=acr
