@@ -100,16 +100,23 @@ fi
 # Aliyun ACR is fastest from China; ghcr.io is fastest internationally.
 # Detect via a TCP connectivity test to ghcr.io with a tight timeout —
 # CN networks usually fail this fast.
-DEFAULT_REGISTRY="ghcr.io/feifeixp"
+#
+# Override via:
+#   HERMES_REGISTRY=<full-path-prefix-without-image-name>
+# e.g. for ACR personal edition:
+#   HERMES_REGISTRY=crpi-XXXXXX.cn-shanghai.personal.cr.aliyuncs.com/neowow
+DEFAULT_GHCR="ghcr.io/feifeixp"
+DEFAULT_ACR="registry.cn-shanghai.aliyuncs.com/neowow"
 if [[ -n "${HERMES_REGISTRY:-}" ]]; then
     REGISTRY="$HERMES_REGISTRY"
     echo "→ Using registry from \$HERMES_REGISTRY: $REGISTRY"
 elif curl -fsS --max-time 5 -o /dev/null https://ghcr.io 2>/dev/null; then
-    REGISTRY="$DEFAULT_REGISTRY"
-    echo "→ Using ghcr.io (international)"
+    REGISTRY="$DEFAULT_GHCR"
+    echo "→ Using ghcr.io (international, reachable)"
 else
-    REGISTRY="registry.cn-shanghai.aliyuncs.com/neowow"
+    REGISTRY="$DEFAULT_ACR"
     echo "→ ghcr.io unreachable, falling back to Aliyun ACR (China)"
+    echo "  (override via HERMES_REGISTRY env var if you need personal-edition URL)"
 fi
 
 IMAGE_TAG="${HERMES_IMAGE_TAG:-latest}"

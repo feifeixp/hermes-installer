@@ -71,6 +71,19 @@ jobs:
 
       - name: Compute image tags
         id: meta
+        env:
+          # Aliyun ACR registry URL. Two formats supported:
+          #   - Enterprise edition: registry.cn-shanghai.aliyuncs.com
+          #   - Personal edition:   crpi-XXXXXXXX.cn-shanghai.personal.cr.aliyuncs.com
+          # User sets ALIYUN_ACR_REGISTRY in repo secrets/variables to
+          # override. Defaults to enterprise-edition URL — change here if
+          # everyone's on personal edition.
+          ACR_REGISTRY: ${{ vars.ALIYUN_ACR_REGISTRY || 'registry.cn-shanghai.aliyuncs.com' }}
+          # The namespace within ACR (= the "组" / group). Personal edition
+          # users: this MUST exist in your ACR console — auto-created
+          # repositories don't materialize the namespace, you have to
+          # create it manually first.
+          ACR_NAMESPACE: ${{ vars.ALIYUN_ACR_NAMESPACE || 'neowow' }}
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           # Newline-separated tag list, used by both push targets.
@@ -82,10 +95,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           {
             echo "acr_tags<<EOF"
-            echo "registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui:latest"
-            echo "registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui:main-${SHORT_SHA}"
+            echo "${ACR_REGISTRY}/${ACR_NAMESPACE}/hermes-webui:latest"
+            echo "${ACR_REGISTRY}/${ACR_NAMESPACE}/hermes-webui:main-${SHORT_SHA}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          # Also export ACR_REGISTRY so the login step can use it.
+          echo "acr_registry=${ACR_REGISTRY}" >> "$GITHUB_OUTPUT"
 
       # ── Login to both registries ─────────────────────────────────────
       # Login to ghcr.io first (always available — uses GITHUB_TOKEN);
@@ -114,7 +129,10 @@ jobs:
         if: steps.check_acr.outputs.have_creds == 'true'
         uses: docker/login-action@v3
         with:
-          registry: registry.cn-shanghai.aliyuncs.com
+          # Resolved earlier in the meta step. Personal edition users
+          # need to set the vars.ALIYUN_ACR_REGISTRY repo variable to
+          # their crpi-XXXXXX.cn-shanghai.personal.cr.aliyuncs.com URL.
+          registry: ${{ steps.meta.outputs.acr_registry }}
           username: ${{ secrets.ALIYUN_ACR_USERNAME }}
           password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
 
