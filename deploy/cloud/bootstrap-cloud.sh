@@ -310,11 +310,15 @@ for i in {1..90}; do
         echo "  ✓ WebUI is up!"
         break
     fi
-    # Every 30 s, peek at the journal so the user sees something
-    # is actually happening (vs. silent hang).
+    # Every 30 s, peek at the journal so the user sees something is
+    # actually happening (vs. silent hang). Show the latest 3 lines
+    # regardless of when they were logged — the install steps log
+    # at irregular intervals (some take minutes between prints, like
+    # `uv pip install`), so a tight time window misses most lines.
     if (( i % 3 == 0 )); then
-        echo "  ... still installing (${i}0 s elapsed); recent log:"
-        journalctl -u hermes-webui --no-pager -n 1 --since "5 sec ago" 2>/dev/null \
+        echo "  ... still installing (${i}0 s elapsed); latest log:"
+        journalctl -u hermes-webui --no-pager -n 3 -o short-iso 2>/dev/null \
+            | tail -3 \
             | sed 's/^/      /' || true
     fi
     sleep 10
