@@ -126,88 +126,85 @@ curl -I https://chat.yourdomain.com
 | **彻底清空**（destructive） | `docker compose down -v` |
 | 进容器调试 | `docker compose exec hermes-webui bash` |
 
-## 自动更新（Watchtower）
+## 自动更新（cron）
 
-部署里默认启用了 **Watchtower** — 它会**每小时**轮询 registry，发现 `hermes-webui:latest` 有新 digest 就**自动 pull + recreate** 容器。
+`bootstrap-docker.sh` 会自动装一个 cron job：
+
+```
+/etc/cron.d/hermes-auto-update:
+  0 * * * * root  cd /opt/hermes-docker
+                  && docker compose pull >> /var/log/hermes-update.log 2>&1
+                  && docker compose up -d >> /var/log/hermes-update.log 2>&1
+```
+
+每小时整点检查 registry，发现新 image digest 就自动 pull + recreate。
 
 ```
 GitHub Actions build 完
    ↓ push image to ghcr.io + Aliyun ACR
-   ↓ ECS 上 watchtower 下次轮询时发现新版本
-   ↓ docker pull
-   ↓ 优雅停 hermes-webui 容器
+   ↓ ECS 上 cron 下一个整点（最多 1 小时）触发
+   ↓ docker compose pull
+   ↓ 优雅停旧容器
    ↓ 启动新容器
    ↓ healthcheck 通过 → 继续服务
-   ↓ 删除旧镜像（节省磁盘）
    
 [期间 5-10 秒 502，绝大多数用户感知不到]
 ```
 
-### 配置（在 `/opt/hermes-docker/.env`）
+> **为什么不用 Watchtower？** 试过了 — `containrrr/watchtower:1.7.1` 镜像里 bundled 的 Docker SDK 太老（默认 API 1.25），现代 Docker daemon（24+ 要求 minimum API 1.40）会直接拒绝连接。即使在容器 env 里设 `DOCKER_API_VERSION=1.45` 也没用，SDK 不读这个 override。cron 简单可靠，没有第三方组件维护风险。
+
+### 看自动更新日志
 
 ```bash
-# 轮询间隔（秒）。默认 3600 = 1 小时。
-WATCHTOWER_POLL_INTERVAL=3600
-
-# 时区，影响日志时间戳
-WATCHTOWER_TZ=Asia/Shanghai
-
-# 通知 URL（可选 — Slack / Telegram / Email / 自定义 webhook）
-# 格式见 https://containrrr.dev/watchtower/notifications/
-# 例子（Slack）: slack://token@channel
-# 例子（Telegram）: telegram://token@telegram?chats=@channel
-# WATCHTOWER_NOTIFICATION_URL=
+sudo tail -50 /var/log/hermes-update.log
+# 每小时会有一段:
+#   === 2026-05-11T18:00:01+08:00 ===
+#   [+] Pulling 2/2
+#    ✔ hermes-webui  ...
+#    ✔ caddy         ...
+#   ...
 ```
 
-改完跑 `docker compose up -d watchtower` 让新配置生效。
+### 改调度间隔
 
-### 私有镜像（ACR / GHCR private）
+编辑 `/etc/cron.d/hermes-auto-update`，把 `0 * * * *`（每小时）改成：
+- `*/5 * * * *` — 每 5 分钟
+- `0 */6 * * *` — 每 6 小时
+- `0 3 * * *` — 每天凌晨 3 点
+- 等
 
-**默认 Watchtower 只能拉公开镜像**（避免无 `docker login` 时挂载报错）。如果你 Aliyun ACR 命名空间设为**私有**：
+改完 cron 自动 reload，不用 restart。
+
+### 立即手动触发
 
 ```bash
-# 1. 先在 ECS 上 docker login（一次性）
+sudo bash -c 'cd /opt/hermes-docker && docker compose pull && docker compose up -d'
+```
+
+### 私有镜像（Aliyun ACR / GHCR private）
+
+cron job 是宿主机 root 跑的，**用宿主机的 docker login**：
+
+```bash
 sudo docker login --username=<你的用户名> registry.cn-shanghai.aliyuncs.com
 # 输入固定密码 → 看到 Login Succeeded
-# 这会创建 /root/.docker/config.json 文件
-
-# 2. 编辑 /opt/hermes-docker/docker-compose.yml，取消注释这行：
-#       - /root/.docker/config.json:/config.json:ro
-#   （在 watchtower 服务的 volumes: 下面）
-
-# 3. 重启 watchtower 应用新挂载
-cd /opt/hermes-docker
-sudo docker compose up -d watchtower
 ```
 
-> 推荐设为**公开** — 你的镜像不包含敏感信息（只有 hermes-installer 代码 + 公开依赖），公开后省去登录维护。
+之后所有 docker 命令（包括 cron 的）都能拉私有镜像。**推荐设为公开**省去维护。
 
 ### 暂时禁用自动更新
 
 ```bash
-cd /opt/hermes-docker
-docker compose stop watchtower
+sudo mv /etc/cron.d/hermes-auto-update /etc/cron.d/hermes-auto-update.disabled
 ```
 
-要恢复就 `docker compose start watchtower`。
+要恢复就 mv 回来。或者直接 `sudo rm /etc/cron.d/hermes-auto-update` 永久禁用。
 
-### 手动触发立即检查
+### Caddy 也会被 cron 更新吗
 
-```bash
-docker compose exec watchtower /watchtower --run-once
-```
+`docker compose up -d` **会检查所有服务**，包括 Caddy。但 Caddy 镜像 pin 到了 `caddy:2.8-alpine` — 这个 tag 不动，digest 不变，所以 `up -d` 是 no-op，Caddy 保持运行。
 
-这条不影响后续轮询，只是马上跑一次。
-
-### 排除某个容器不让自动更新
-
-Watchtower 只更新带 `com.centurylinklabs.watchtower.enable=true` 标签的容器。我们的 compose 文件**只**给 `hermes-webui` 加了这标签。**Caddy 不会被自动更新**（保护 LE 证书 / ACME 状态）。
-
-要更新 Caddy 镜像，手动跑：
-```bash
-docker compose pull caddy
-docker compose up -d caddy
-```
+要升级 Caddy 大版本（比如 2.8 → 2.9），改 `docker-compose.yml` 里的 `image:` tag，然后手动 `docker compose pull caddy && docker compose up -d caddy`。
 
 ---
 

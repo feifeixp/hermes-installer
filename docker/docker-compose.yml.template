@@ -58,12 +58,6 @@ services:
     image: ${HERMES_WEBUI_IMAGE:-registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui:latest}
     container_name: hermes-webui
     restart: unless-stopped
-    # Watchtower opt-in label. Only containers with this label set to
-    # true get auto-updated. Caddy intentionally NOT labeled — its
-    # state (LE certs) is too important to auto-recreate without
-    # explicit operator action.
-    labels:
-      com.centurylinklabs.watchtower.enable: "true"
     environment:
       # Auth: cross-subdomain neoToken cookie via .neowow.studio. Requires
       # the dashboard at app.neowow.studio to be the OAuth issuer (which
@@ -96,85 +90,26 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # ── Watchtower: auto-update hermes-webui when a new image lands ──────────
-  #
-  # Polls the registries every WATCHTOWER_POLL_INTERVAL seconds (default 1h)
-  # and recreates any container labeled `com.centurylinklabs.watchtower.
-  # enable=true` (hermes-webui above) when its image tag has a new digest.
-  #
-  # Why only hermes-webui:
-  #   • Caddy is intentionally excluded — its state (LE cert renewals,
-  #     ACME account, autosave configs) lives in named volumes, but if a
-  #     Caddy major-version bump changes config syntax, auto-recreate
-  #     could break the site between cert checks. Update Caddy manually
-  #     when bumping the pinned tag.
-  #
-  # Registry auth:
-  #   • For PUBLIC images (Aliyun ACR namespace set to "public" + ghcr.io
-  #     packages set to public) — Watchtower pulls anonymously, no setup.
-  #   • For PRIVATE images — run `docker login <registry>` on the host
-  #     ONCE; Watchtower picks up credentials from /root/.docker/config.json
-  #     (mounted below). See docs/CLOUD_DEPLOY.md "Private image registry".
-  #
-  # Notifications (optional):
-  #   • Slack / Telegram / Webhook / Email — set WATCHTOWER_NOTIFICATION_URL
-  #     in your .env. See https://containrrr.dev/watchtower/notifications/
-  #     for the URL format (uses shoutrrr-style URLs).
-  #   • Default: no notifications, just logs to docker compose logs.
-  watchtower:
-    # Pin to 1.7.1 — `:latest` on containrrr/watchtower is unmaintained
-    # and ships with a too-old Docker SDK that modern daemons reject
-    # with "client version 1.25 is too old. Minimum supported API
-    # version is 1.40". 1.7.1 was released 2024 with SDK 1.45+.
-    image: containrrr/watchtower:1.7.1
-    container_name: hermes-watchtower
-    restart: unless-stopped
-    environment:
-      # Force the Docker SDK inside watchtower to use a modern API
-      # version. The 1.7.1 image still defaults to API 1.25, which
-      # Docker daemon 24+ explicitly rejects ("client version 1.25 is
-      # too old. Minimum supported API version is 1.40"). Setting
-      # DOCKER_API_VERSION pins the SDK to negotiate at this version.
-      # 1.45 is safe for any Docker 23.0+ daemon.
-      DOCKER_API_VERSION: "1.45"
-      # Poll every hour by default. Bump down to 300 (5 min) during
-      # active development, up to 86400 (24h) for stable production.
-      WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-3600}
-      # Only update containers with our explicit opt-in label.
-      WATCHTOWER_LABEL_ENABLE: "true"
-      # Remove the old image after update — saves disk space.
-      WATCHTOWER_CLEANUP: "true"
-      # Wait for the new container to be healthy before stopping the
-      # old one, where possible (best with rolling updates; here it
-      # just adds a small grace window).
-      WATCHTOWER_INCLUDE_RESTARTING: "true"
-      # Server time for log timestamps. Pick whatever matches your ECS.
-      TZ: ${WATCHTOWER_TZ:-Asia/Shanghai}
-      # Optional: enable notification by setting WATCHTOWER_NOTIFICATION_URL
-      # in your environment. Empty = silent (rely on docker logs).
-      WATCHTOWER_NOTIFICATION_URL: ${WATCHTOWER_NOTIFICATION_URL:-}
-    volumes:
-      # Required: talk to host Docker daemon to inspect + recreate containers.
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Registry auth for PRIVATE images (Aliyun ACR private namespace,
-      # ghcr.io private package, etc.). For PUBLIC images this isn't
-      # needed — Watchtower pulls anonymously. We intentionally DO NOT
-      # mount /root/.docker/config.json by default because if the host
-      # never ran `docker login`, that path doesn't exist as a file and
-      # Docker bind-mounts it as an empty directory (which Watchtower
-      # then can't read as a JSON config — error "is a directory").
-      #
-      # To enable for private images:
-      #   1. ssh into the host
-      #   2. `docker login <registry>` (writes /root/.docker/config.json)
-      #   3. Uncomment the volume mount below
-      #   4. `docker compose up -d watchtower` to apply
-      #
-      # - /root/.docker/config.json:/config.json:ro
-    # Watchtower talks to Docker via the API socket; doesn't need kernel
-    # caps. cap_drop:ALL stays at minimum-privilege.
-    cap_drop:
-      - ALL
+# ── Auto-update strategy: cron, not watchtower ────────────────────────────────
+#
+# We previously had a `watchtower` service here but it never worked in
+# production because the official containrrr/watchtower:1.7.1 image still
+# bundles a Docker SDK that defaults to API 1.25 — Docker daemon 24+
+# rejects this with "client version 1.25 is too old. Minimum supported
+# API version is 1.40". Forcing DOCKER_API_VERSION=1.45 in the container
+# env didn't help either (the image's bundled SDK apparently ignores
+# that override).
+#
+# bootstrap-docker.sh now installs a /etc/cron.d/hermes-auto-update file
+# that runs `docker compose pull && docker compose up -d` hourly. This is:
+#   • Bulletproof — no third-party container, no SDK compatibility issues
+#   • Trivially debuggable — `tail /var/log/hermes-update.log`
+#   • Equivalent — same "pull new image, recreate container" behavior
+#   • Cheaper — no idle container consuming ~30 MB RAM 24/7
+#
+# To DISABLE auto-update: `sudo rm /etc/cron.d/hermes-auto-update`
+# To CHANGE schedule:    edit `/etc/cron.d/hermes-auto-update` cron expr
+# To FORCE update now:   `cd /opt/hermes-docker && sudo docker compose pull && sudo docker compose up -d`
 
 # ── Volumes ──────────────────────────────────────────────────────────────────
 # Named volumes (managed by Docker daemon) — survive `docker compose down`
