@@ -226,6 +226,11 @@ def _neodomain_jwt_looks_valid(jwt: str) -> bool:
 
     Cached for `_NEODOMAIN_CACHE_TTL` seconds to keep request hot-path
     cheap. The cache is busted automatically on `exp` rollover.
+
+    ALSO enforces HERMES_INSTANCE_OWNER_USERID when set — used by
+    Phase 2 per-user ECS instances to reject other users' valid JWTs.
+    A JWT can be valid (signed, fresh) but for a DIFFERENT user, and
+    on a private instance we want only the owner in.
     """
     cached = _NEODOMAIN_VALID_CACHE.get(jwt)
     now = time.time()
@@ -240,11 +245,13 @@ def _neodomain_jwt_looks_valid(jwt: str) -> bool:
     # Need a non-empty userId / sub / id — Neodomain JWTs carry
     # `userId`. Older issuers might use `sub`. Anything else means we
     # can't identify the caller, treat as invalid.
-    has_id = any(
-        isinstance(payload.get(k), (str, int)) and str(payload.get(k)).strip()
-        for k in ('userId', 'sub', 'id', 'uid')
-    )
-    if not has_id:
+    jwt_user_id = None
+    for k in ('userId', 'sub', 'id', 'uid'):
+        v = payload.get(k)
+        if isinstance(v, (str, int)) and str(v).strip():
+            jwt_user_id = str(v).strip()
+            break
+    if not jwt_user_id:
         _NEODOMAIN_VALID_CACHE[jwt] = (now + 30, False)
         return False
 
@@ -252,6 +259,22 @@ def _neodomain_jwt_looks_valid(jwt: str) -> bool:
     # so a clock drift on either side doesn't reject a barely-fresh token.
     exp = payload.get('exp')
     if isinstance(exp, (int, float)) and now > exp + 60:
+        _NEODOMAIN_VALID_CACHE[jwt] = (now + 30, False)
+        return False
+
+    # ── Per-instance owner gate (Phase 2) ─────────────────────────────
+    # If HERMES_INSTANCE_OWNER_USERID is set, the JWT must belong to
+    # that exact userId. Phase 1 chat.neowow.studio doesn't set this
+    # and is multi-tenant. Phase 2 chat-<userId>.neowow.studio sets it
+    # to the spawning user's id and rejects everyone else.
+    owner = os.getenv('HERMES_INSTANCE_OWNER_USERID', '').strip()
+    if owner and jwt_user_id != owner:
+        logger.info(
+            'neodomain auth: rejecting JWT (jwt_user_id=%s ≠ owner=%s)',
+            jwt_user_id, owner,
+        )
+        # Short-cache the rejection. If the user mis-clicks into someone
+        # else's instance, we want to reject every request fast.
         _NEODOMAIN_VALID_CACHE[jwt] = (now + 30, False)
         return False
 

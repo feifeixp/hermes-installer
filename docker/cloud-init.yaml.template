@@ -1,0 +1,159 @@
+#cloud-config
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2 per-user Hermes ECS cloud-init.
+#
+# The dashboard broker (app.neowow.studio/api/me/instance/start)
+# substitutes the placeholders below before passing this as
+# UserData to the cloud SDK's RunInstances call:
+#
+#   %USER_ID%    user's stable Neodomain userId (e.g. 31046663)
+#   %DOMAIN%     full subdomain (e.g. chat-31046663.neowow.studio)
+#   %ACME_EMAIL% email for LetsEncrypt registration
+#   %IMAGE%      Docker image ref (resolved per registry availability)
+#
+# Boot timeline (first run):
+#   00:00  Cloud-init starts (after kernel + cloud-init framework)
+#   00:05  apt update (cached locally on Ubuntu image — ~10 s)
+#   00:30  docker.io install (~50 s)
+#   01:30  docker pull <IMAGE> (~1-3 min depending on image size + bandwidth)
+#   03:00  docker compose up — Caddy starts requesting LE cert
+#   03:30  LetsEncrypt challenge round-trip (HTTP-01 on :80)
+#   04:00  hermes-webui health check passes — instance ready
+#
+# Total ~3-5 min from RunInstances to "serving traffic".
+#
+# Subsequent boots (after stop/start) skip the install steps because
+# everything's already on disk; total ~30 s to ready.
+# ─────────────────────────────────────────────────────────────────────────────
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+
+write_files:
+  # /opt/hermes-docker/docker-compose.yml — same shape as Phase 1's
+  # chat.neowow.studio. Per-user changes: HERMES_INSTANCE_OWNER_USERID
+  # env var (so WebUI rejects requests from other users' JWTs) +
+  # this instance's subdomain in the Caddyfile.
+  - path: /opt/hermes-docker/docker-compose.yml
+    permissions: '0644'
+    content: |
+      services:
+        caddy:
+          image: caddy:2.8-alpine
+          container_name: hermes-caddy
+          restart: unless-stopped
+          ports:
+            - "80:80"
+            - "443:443"
+            - "443:443/udp"
+          volumes:
+            - ./Caddyfile:/etc/caddy/Caddyfile:ro
+            - caddy_data:/data
+            - caddy_config:/config
+          networks: [hermes]
+          depends_on:
+            hermes-webui:
+              condition: service_healthy
+
+        hermes-webui:
+          image: %IMAGE%
+          container_name: hermes-webui
+          restart: unless-stopped
+          environment:
+            HERMES_WEBUI_AUTH_MODE: neodomain
+            HERMES_WEBUI_HOST: 0.0.0.0
+            HERMES_WEBUI_PORT: 7891
+            HERMES_WEBUI_FOREGROUND: "1"
+            HERMES_WEBUI_STATE_DIR: /opt/hermes/.hermes/webui
+            # Per-instance owner. WebUI's auth.py enforces that the
+            # JWT's userId matches this value — otherwise other users
+            # with valid neoTokens could access THIS user's instance.
+            HERMES_INSTANCE_OWNER_USERID: "%USER_ID%"
+          volumes:
+            - hermes_state:/opt/hermes/.hermes
+          expose: ["7891"]
+          networks: [hermes]
+          healthcheck:
+            test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7891/health"]
+            interval: 10s
+            timeout: 3s
+            start_period: 30s
+            retries: 5
+
+      volumes:
+        caddy_data:   {}
+        caddy_config: {}
+        hermes_state: {}
+
+      networks:
+        hermes:
+          driver: bridge
+
+  - path: /opt/hermes-docker/Caddyfile
+    permissions: '0644'
+    content: |
+      {
+          email %ACME_EMAIL%
+      }
+
+      %DOMAIN% {
+          reverse_proxy hermes-webui:7891 {
+              header_up X-Forwarded-Proto {scheme}
+              header_up X-Forwarded-Host  {host}
+              flush_interval -1
+          }
+          request_body {
+              max_size 50MB
+          }
+          log {
+              output stdout
+              format console
+          }
+      }
+
+  # Hourly auto-update cron — same as Phase 1 chat.neowow.studio.
+  - path: /etc/cron.d/hermes-auto-update
+    permissions: '0644'
+    content: |
+      SHELL=/bin/bash
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+      0 * * * * root cd /opt/hermes-docker && echo "=== $(date -Iseconds) ===" >> /var/log/hermes-update.log && /usr/bin/docker compose pull >> /var/log/hermes-update.log 2>&1 && /usr/bin/docker compose up -d >> /var/log/hermes-update.log 2>&1
+
+runcmd:
+  # ── Install Docker via the official one-liner. Faster than the apt
+  # ── debian-keyring dance + works on any reasonable Linux. ~60s.
+  - [bash, -c, "curl -fsSL https://get.docker.com | sh"]
+  - systemctl enable --now docker
+
+  # ── Pull the Hermes image upfront (faster + clearer error than
+  # ── waiting for compose to do it implicitly). ~1-3 min.
+  - [bash, -c, "docker pull %IMAGE%"]
+
+  # ── Pull Caddy too while we're at it (so first compose up is fast).
+  - [bash, -c, "docker pull caddy:2.8-alpine"]
+
+  # ── Bring the stack up. compose internally waits for hermes-webui
+  # ── to be healthy before starting Caddy (depends_on condition).
+  - [bash, -c, "cd /opt/hermes-docker && docker compose up -d"]
+
+  # ── Reload cron so /etc/cron.d/hermes-auto-update takes effect now
+  # ── (otherwise it'd need a system restart).
+  - systemctl reload cron
+
+  # ── Ping the broker so it knows this instance is ready. The broker
+  # ── will flip state from 'cloud_init' to 'running'. We deliberately
+  # ── don't fail cloud-init if this curl fails — the broker will
+  # ── eventually detect via its own status polling.
+  #
+  # ── The URL + auth token are templated in by the broker (omitted
+  # ── here for M1 simplicity — broker polls instead). Future M2 can
+  # ── add a callback for instant-ready signaling.
+
+# Skip useless legacy cloud-init modules to shave a few seconds off.
+final_message: "Hermes Phase 2 instance ready (%DOMAIN%)"
