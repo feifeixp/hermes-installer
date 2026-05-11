@@ -58,6 +58,12 @@ services:
     image: ${HERMES_WEBUI_IMAGE:-registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui:latest}
     container_name: hermes-webui
     restart: unless-stopped
+    # Watchtower opt-in label. Only containers with this label set to
+    # true get auto-updated. Caddy intentionally NOT labeled — its
+    # state (LE certs) is too important to auto-recreate without
+    # explicit operator action.
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     environment:
       # Auth: cross-subdomain neoToken cookie via .neowow.studio. Requires
       # the dashboard at app.neowow.studio to be the OAuth issuer (which
@@ -89,6 +95,63 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+
+  # ── Watchtower: auto-update hermes-webui when a new image lands ──────────
+  #
+  # Polls the registries every WATCHTOWER_POLL_INTERVAL seconds (default 1h)
+  # and recreates any container labeled `com.centurylinklabs.watchtower.
+  # enable=true` (hermes-webui above) when its image tag has a new digest.
+  #
+  # Why only hermes-webui:
+  #   • Caddy is intentionally excluded — its state (LE cert renewals,
+  #     ACME account, autosave configs) lives in named volumes, but if a
+  #     Caddy major-version bump changes config syntax, auto-recreate
+  #     could break the site between cert checks. Update Caddy manually
+  #     when bumping the pinned tag.
+  #
+  # Registry auth:
+  #   • For PUBLIC images (Aliyun ACR namespace set to "public" + ghcr.io
+  #     packages set to public) — Watchtower pulls anonymously, no setup.
+  #   • For PRIVATE images — run `docker login <registry>` on the host
+  #     ONCE; Watchtower picks up credentials from /root/.docker/config.json
+  #     (mounted below). See docs/CLOUD_DEPLOY.md "Private image registry".
+  #
+  # Notifications (optional):
+  #   • Slack / Telegram / Webhook / Email — set WATCHTOWER_NOTIFICATION_URL
+  #     in your .env. See https://containrrr.dev/watchtower/notifications/
+  #     for the URL format (uses shoutrrr-style URLs).
+  #   • Default: no notifications, just logs to docker compose logs.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: hermes-watchtower
+    restart: unless-stopped
+    environment:
+      # Poll every hour by default. Bump down to 300 (5 min) during
+      # active development, up to 86400 (24h) for stable production.
+      WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-3600}
+      # Only update containers with our explicit opt-in label.
+      WATCHTOWER_LABEL_ENABLE: "true"
+      # Remove the old image after update — saves disk space.
+      WATCHTOWER_CLEANUP: "true"
+      # Wait for the new container to be healthy before stopping the
+      # old one, where possible (best with rolling updates; here it
+      # just adds a small grace window).
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      # Server time for log timestamps. Pick whatever matches your ECS.
+      TZ: ${WATCHTOWER_TZ:-Asia/Shanghai}
+      # Optional: enable notification by setting WATCHTOWER_NOTIFICATION_URL
+      # in your environment. Empty = silent (rely on docker logs).
+      WATCHTOWER_NOTIFICATION_URL: ${WATCHTOWER_NOTIFICATION_URL:-}
+    volumes:
+      # Required: talk to host Docker daemon to inspect + recreate containers.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Optional: registry auth for private images. Watchtower looks here
+      # by default; the host's `docker login` writes to this exact path.
+      - /root/.docker/config.json:/config.json:ro
+    # Watchtower talks to Docker via the API socket; doesn't need kernel
+    # caps. cap_drop:ALL stays at minimum-privilege.
+    cap_drop:
+      - ALL
 
 # ── Volumes ──────────────────────────────────────────────────────────────────
 # Named volumes (managed by Docker daemon) — survive `docker compose down`

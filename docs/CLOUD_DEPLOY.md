@@ -119,11 +119,91 @@ curl -I https://chat.yourdomain.com
 | 看服务状态 | `docker compose ps` |
 | 跟 WebUI 日志 | `docker compose logs -f hermes-webui` |
 | 跟 Caddy 日志（TLS / HTTP） | `docker compose logs -f caddy` |
-| 升级到最新镜像 | `docker compose pull && docker compose up -d` |
+| 跟 Watchtower 日志（自动更新） | `docker compose logs -f watchtower` |
+| **手动**升级到最新镜像 | `docker compose pull && docker compose up -d` |
 | 重启所有服务 | `docker compose restart` |
 | 备份用户状态 | `docker run --rm -v hermes_state:/data -v $PWD:/backup alpine tar czf /backup/state-$(date +%F).tar.gz -C /data .` |
 | **彻底清空**（destructive） | `docker compose down -v` |
 | 进容器调试 | `docker compose exec hermes-webui bash` |
+
+## 自动更新（Watchtower）
+
+部署里默认启用了 **Watchtower** — 它会**每小时**轮询 registry，发现 `hermes-webui:latest` 有新 digest 就**自动 pull + recreate** 容器。
+
+```
+GitHub Actions build 完
+   ↓ push image to ghcr.io + Aliyun ACR
+   ↓ ECS 上 watchtower 下次轮询时发现新版本
+   ↓ docker pull
+   ↓ 优雅停 hermes-webui 容器
+   ↓ 启动新容器
+   ↓ healthcheck 通过 → 继续服务
+   ↓ 删除旧镜像（节省磁盘）
+   
+[期间 5-10 秒 502，绝大多数用户感知不到]
+```
+
+### 配置（在 `/opt/hermes-docker/.env`）
+
+```bash
+# 轮询间隔（秒）。默认 3600 = 1 小时。
+WATCHTOWER_POLL_INTERVAL=3600
+
+# 时区，影响日志时间戳
+WATCHTOWER_TZ=Asia/Shanghai
+
+# 通知 URL（可选 — Slack / Telegram / Email / 自定义 webhook）
+# 格式见 https://containrrr.dev/watchtower/notifications/
+# 例子（Slack）: slack://token@channel
+# 例子（Telegram）: telegram://token@telegram?chats=@channel
+# WATCHTOWER_NOTIFICATION_URL=
+```
+
+改完跑 `docker compose up -d watchtower` 让新配置生效。
+
+### 私有镜像（ACR / GHCR private）
+
+如果你 Aliyun ACR 命名空间设为**私有**，Watchtower 拉镜像需要 docker 登录凭证。在 ECS 上**做一次** docker login：
+
+```bash
+# 阿里云 ACR
+docker login --username=<你的用户名> registry.cn-shanghai.aliyuncs.com
+# 输入固定密码
+
+# 或者 ghcr.io
+echo $GITHUB_TOKEN | docker login ghcr.io -u <github-username> --password-stdin
+```
+
+`/root/.docker/config.json` 会写入凭证，Watchtower 自动用它。
+
+> 推荐设为**公开** — 你的镜像不包含敏感信息（只有 hermes-installer 代码 + 公开依赖），公开后省去登录维护。
+
+### 暂时禁用自动更新
+
+```bash
+cd /opt/hermes-docker
+docker compose stop watchtower
+```
+
+要恢复就 `docker compose start watchtower`。
+
+### 手动触发立即检查
+
+```bash
+docker compose exec watchtower /watchtower --run-once
+```
+
+这条不影响后续轮询，只是马上跑一次。
+
+### 排除某个容器不让自动更新
+
+Watchtower 只更新带 `com.centurylinklabs.watchtower.enable=true` 标签的容器。我们的 compose 文件**只**给 `hermes-webui` 加了这标签。**Caddy 不会被自动更新**（保护 LE 证书 / ACME 状态）。
+
+要更新 Caddy 镜像，手动跑：
+```bash
+docker compose pull caddy
+docker compose up -d caddy
+```
 
 ---
 
