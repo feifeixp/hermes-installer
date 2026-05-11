@@ -1035,6 +1035,105 @@
     }
   };
 
+  // ── Cloud config — push LOCAL → cloud (modal flow) ───────────────────
+  //
+  // Inverse of `neowowCloudSync`: takes the local ~/.hermes/config.yaml
+  // and saves it as a row in the dashboard's hermes-configs table.
+  //
+  // Slug strategy: user-provided, ASCII-slug regex enforced. If the slug
+  // already exists on the dashboard, the server PUTs (update) instead of
+  // POST (create) — surfaces as `mode: 'updated'` in the response.
+  //
+  // What's NOT pushed: API keys from .env. Cloud config schema doesn't
+  // include them, by design. Each machine pulling this config must
+  // configure its own .env. The modal explicitly warns about this so
+  // users don't expect "magic everywhere".
+  window.neowowCloudPushOpen = function () {
+    const modal = $('neowowCloudPushModal');
+    if (!modal) return;
+    modal.style.display = 'block';
+    // Pre-fill slug with a sensible default derived from the hostname
+    // (Mac shows up as e.g. "MacBook-Pro-FF" → "macbook-pro-ff" — clean
+    // enough). Fallback to "default" when navigator can't tell us.
+    const slugInput = $('neowowCloudPushSlug');
+    if (slugInput && !slugInput.value) {
+      const guess = (navigator.userAgent.match(/Mac OS X/) ? 'my-mac'
+                   : navigator.userAgent.match(/Windows/) ? 'my-pc'
+                   : navigator.userAgent.match(/Linux/) ? 'my-linux'
+                   : 'default');
+      slugInput.value = guess;
+    }
+    if (slugInput) slugInput.focus();
+  };
+
+  window.neowowCloudPushClose = function () {
+    const modal = $('neowowCloudPushModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+  };
+
+  window.neowowCloudPushSubmit = async function () {
+    const slug = (($('neowowCloudPushSlug') || {}).value || '').trim().toLowerCase();
+    const name = (($('neowowCloudPushName') || {}).value || '').trim();
+    const desc = (($('neowowCloudPushDesc') || {}).value || '').trim();
+    const out  = $('neowowCloudResult');
+    const btn  = $('neowowCloudPushSubmit');
+
+    if (!slug) {
+      if (out) out.innerHTML = '<span style="color:#ef4444">❌ slug 不能为空</span>';
+      return;
+    }
+    // Mirror the server-side regex so the user sees the constraint
+    // error before the round-trip.
+    if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(slug)) {
+      if (out) out.innerHTML = '<span style="color:#ef4444">❌ slug 格式不对：1-31 字符，小写字母数字和连字符，首字符不能是连字符</span>';
+      return;
+    }
+
+    if (btn) { btn.disabled = true; btn.textContent = '推送中…'; }
+    if (out) out.innerHTML = '<span style="color:var(--muted)">推送中…</span>';
+
+    try {
+      const r = await fetch('/api/neowow/cloud-push', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache:   'no-store',
+        body:    JSON.stringify({ slug, name, description: desc }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+
+      // Success — close modal, show result with link to view in dashboard.
+      window.neowowCloudPushClose();
+      const verb = d.mode === 'updated' ? '已更新' : '已创建';
+      if (out) {
+        out.innerHTML = `
+          <div style="color:var(--accent)">
+            ✓ ${escapeHtml(verb)}云端配置 「${escapeHtml(d.name)}」
+            <span style="color:var(--muted)">（slug: <code>${escapeHtml(d.slug)}</code>， 模型: <code>${escapeHtml(d.modelName)}</code>）</span>
+          </div>
+          <div style="margin-top:6px;color:var(--muted);font-size:11px">
+            其他 Hermes 实例可去
+            <a href="${escapeHtml(d.url)}" target="_blank" rel="noreferrer" style="color:var(--accent)">app.neowow.studio/account/hermes-configs</a>
+            把它设为 active，然后用「🔄 同步激活的云端配置」按钮拉下来。
+            <strong style="color:#e8a030">⚠️ API key 没有上传，需要每台机器自己配 .env。</strong>
+          </div>
+        `;
+      }
+      // Bust the cached cloud-list so next "查看所有云端配置" reflects the change.
+      const listBtn = $('neowowCloudListBtn');
+      const listBox = $('neowowCloudListBox');
+      if (listBox && listBox.style.display === 'block') {
+        listBox.style.display = 'none';
+        if (listBtn) listBtn.textContent = '📋 查看所有云端配置';
+      }
+    } catch (e) {
+      if (out) out.innerHTML = `<span style="color:#ef4444">❌ 推送失败：${escapeHtml(e.message)}</span>`;
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '推送'; }
+    }
+  };
+
   // ── Cloud config — read-only list expansion ──────────────────────────
   // First click pulls + renders the list. Second click hides it.
   // Switching active is intentionally NOT exposed here: the dashboard's

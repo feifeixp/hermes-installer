@@ -1069,12 +1069,48 @@
               <div style="display:flex;gap:8px;flex-wrap:wrap">
                 <button class="btn-tiny" id="neowowCloudSyncBtn" onclick="neowowCloudSync()">🔄 同步激活的云端配置</button>
                 <button class="btn-tiny" id="neowowCloudListBtn" onclick="neowowCloudList()">📋 查看所有云端配置</button>
+                <!-- Local → Cloud push. Inverse of the sync button above —
+                     takes the current local config.yaml and saves it as a
+                     dashboard config row. See neowow.js:neowowCloudPushOpen
+                     for the modal flow. -->
+                <button class="btn-tiny" id="neowowCloudPushBtn" onclick="neowowCloudPushOpen()" style="background:linear-gradient(135deg,rgba(99,102,241,0.18),rgba(139,92,246,0.18));border-color:rgba(139,92,246,0.4)">📤 把本地配置推到云端</button>
               </div>
 
               <div id="neowowCloudResult" style="font-size:12px;margin-top:10px;line-height:1.6"></div>
 
               <!-- Lazily populated by neowowCloudList() — read-only -->
               <div id="neowowCloudListBox" style="display:none;margin-top:10px;padding:10px;background:var(--code-bg);border:1px solid var(--border2);border-radius:6px"></div>
+
+              <!-- Local → cloud push modal. Hidden by default; opened by
+                   neowowCloudPushOpen(), closed by neowowCloudPushClose()
+                   or after a successful push. -->
+              <div id="neowowCloudPushModal" style="display:none;margin-top:12px;padding:12px;background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.3);border-radius:8px">
+                <div style="font-weight:600;margin-bottom:8px;color:var(--text)">把本地配置推到云端</div>
+                <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.55">
+                  把当前 <code>~/.hermes/config.yaml</code> 保存到 app.neowow.studio 作为一份云端配置。<br>
+                  之后任何 Hermes 实例（包括桌面端、chat.neowow.studio、Phase 2 的私有 ECS）都能一键拉这份配置。<br>
+                  <strong style="color:#e8a030">⚠️ API key 不会上传</strong>（云端配置 schema 不带这个字段；每台机器仍需配自己的 .env）。
+                </div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <div>
+                    <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:3px">配置标识 (slug) <span style="color:#ef4444">*</span></label>
+                    <input type="text" id="neowowCloudPushSlug" placeholder="my-mac" maxlength="31" pattern="[a-z0-9][a-z0-9-]*" style="width:100%;padding:6px 8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:4px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+                    <div style="font-size:10px;color:var(--muted);margin-top:2px">小写字母、数字、连字符；1-31 字符；以字母数字开头</div>
+                  </div>
+                  <div>
+                    <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:3px">显示名称（可选）</label>
+                    <input type="text" id="neowowCloudPushName" placeholder="例：我的 Mac 配置" maxlength="60" style="width:100%;padding:6px 8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:4px;font-size:12px">
+                  </div>
+                  <div>
+                    <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:3px">描述（可选）</label>
+                    <input type="text" id="neowowCloudPushDesc" placeholder="例：日常开发用，DeepSeek + 启用 git" maxlength="200" style="width:100%;padding:6px 8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:4px;font-size:12px">
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px">
+                  <button class="btn-tiny" onclick="neowowCloudPushClose()">取消</button>
+                  <button class="btn-tiny" id="neowowCloudPushSubmit" onclick="neowowCloudPushSubmit()" style="background:var(--accent);color:#fff;border:none">推送</button>
+                </div>
+              </div>
             </div>
 
             <!-- ── Skills sync ─────────────────────────────────── -->

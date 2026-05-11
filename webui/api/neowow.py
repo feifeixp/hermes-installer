@@ -771,6 +771,211 @@ def apply_active_cloud_config() -> dict:
     }
 
 
+# ── Local → Cloud config push ────────────────────────────────────────────────
+#
+# Inverse of `apply_active_cloud_config`. Reads ~/.hermes/config.yaml,
+# maps it to the dashboard's ConfigBlob shape, and creates / updates
+# the matching config row via the dashboard API.
+#
+# What this DOES push:
+#   • model.default → ConfigBlob.model.name
+#   • agent.system_prompt → ConfigBlob.systemPrompt
+#
+# What this does NOT push (and why):
+#   • API keys from ~/.hermes/.env — ConfigBlob has no slot for them, by
+#     design. Each machine's API keys are local. Pulling this config on
+#     a different machine still requires that machine to configure its
+#     own .env (or use the Neodomain platform's bundled credentials).
+#   • Tools enabled/disabled — ConfigBlob has slots but local config.yaml
+#     doesn't have a 1:1 mapping yet. Sent as defaults.
+#   • Skills — managed via the separate skills-sync flow.
+#
+# Auth: uses the saved nws_dt_ deploy token. Token must have the
+# `configs:write` scope (or be a legacy `*`-scope token).
+#
+# Slug collision handling: GET the slug first to see if it exists. If
+# yes → PUT (update). If no → POST (create). Avoids the dashboard's
+# create endpoint failing with 500 on duplicate slugs (which it does
+# in this codebase — see hermes-configs/route.ts:upsertConfig 'create').
+
+def push_local_config_to_cloud(
+    *,
+    slug:        str,
+    name:        str = "",
+    description: str = "",
+) -> dict:
+    """Push the local ~/.hermes/config.yaml to the dashboard as a cloud config.
+
+    Returns:
+      {ok, mode: 'created'|'updated', slug, name, modelName, url}
+
+    Raises:
+      ValueError    — bad input (empty slug, no local config, no token)
+                       or yaml unavailable / parse error
+      RuntimeError  — dashboard HTTP / network error (caller picks 502)
+    """
+    if yaml is None:
+        raise RuntimeError(
+            "PyYAML not installed — Hermes config.yaml reads are unavailable. "
+            "Run `pip install pyyaml` and retry."
+        )
+
+    # ── Validate inputs ──────────────────────────────────────────────
+    slug = (slug or "").strip().lower()
+    if not slug:
+        raise ValueError("slug is required (e.g. 'my-mac' or 'default')")
+    # Dashboard regex: [a-z0-9][a-z0-9-]{0,30}. Validate client-side
+    # so we don't waste a round-trip on obvious errors.
+    if not re.match(r"^[a-z0-9][a-z0-9-]{0,30}$", slug):
+        raise ValueError(
+            "slug must be 1-31 chars, [a-z0-9-], start with [a-z0-9]"
+        )
+
+    # ── Auth ─────────────────────────────────────────────────────────
+    state = _read_state()
+    token = (state.get("token") or "").strip()
+    if not token:
+        raise ValueError(
+            "No deploy token saved. Paste one in the Token field first, "
+            "or click 'Login Neodomain' on the rail avatar to grant access."
+        )
+
+    # ── Read local config.yaml ──────────────────────────────────────
+    config_path = _hermes_config_path()
+    if not config_path.exists():
+        raise ValueError(
+            f"No Hermes config at {config_path}. Configure a model "
+            f"first (Settings → Providers → pick one)."
+        )
+
+    try:
+        local = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        raise ValueError(f"Local config.yaml is not valid YAML: {e}")
+
+    # ── Map local → ConfigBlob ──────────────────────────────────────
+    model_default = str(((local.get("model") or {}).get("default") or "")).strip()
+    if not model_default:
+        raise ValueError(
+            "Local config.yaml has no model.default — pick a model "
+            "(Settings → Providers) before pushing."
+        )
+
+    # provider field: best-effort guess from the model name prefix.
+    # Falls back to 'neodomain' (the platform default) for unknown.
+    model_lower = model_default.lower()
+    if   model_lower.startswith(("claude", "sonnet", "haiku", "opus")):  provider = "anthropic"
+    elif model_lower.startswith(("gpt", "o1", "o3", "o4")):              provider = "openai"
+    elif model_lower.startswith("deepseek"):                              provider = "deepseek"
+    elif model_lower.startswith("gemini"):                                provider = "gemini"
+    elif model_lower.startswith(("glm", "z.ai")):                         provider = "zai"
+    elif model_lower.startswith("grok"):                                  provider = "xai"
+    elif model_lower.startswith("mistral"):                               provider = "mistral"
+    else:                                                                 provider = "neodomain"
+
+    system_prompt = str(((local.get("agent") or {}).get("system_prompt") or "")).strip()
+
+    config_blob = {
+        "schemaVersion": 1,
+        "model":         {"provider": provider, "name": model_default},
+        "systemPrompt":  system_prompt,
+        # Tools / skills / mcp left as defaults — we don't have a clean
+        # 1:1 mapping from local config.yaml's tool config yet. The
+        # dashboard's apply-back path also doesn't act on these, so
+        # round-tripping is lossless for the fields that matter.
+        "tools": {
+            "shell":   {"enabled": True,  "blocklist": []},
+            "git":     {"enabled": True,  "allowPush": False},
+            "browser": {"enabled": False},
+            "mcp":     [],
+        },
+        "skills":   [],
+        "metadata": {},
+    }
+
+    body = {
+        "slug":        slug,
+        "name":        (name.strip() or slug)[:60],
+        "description": description.strip()[:200],
+        "configJson":  config_blob,
+    }
+    body_bytes = json.dumps(body).encode("utf-8")
+
+    # ── Existence check: pick POST or PUT ─────────────────────────────
+    base = _NEOWOW_BASE.rstrip("/")
+    check_url = f"{base}/api/me/hermes-configs/{slug}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept":        "application/json",
+        "User-Agent":    "Hermes/neowow-cloud-push",
+    }
+
+    exists = False
+    try:
+        check_req = urllib.request.Request(check_url, headers=headers, method="GET")
+        with urllib.request.urlopen(check_req, timeout=15) as resp:
+            if resp.status == 200:
+                exists = True
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            exists = False
+        else:
+            err = _read_dashboard_err(e)
+            raise RuntimeError(f"Pre-flight check failed (HTTP {e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach app.neowow.studio: {e.reason}")
+
+    # ── Create or update ─────────────────────────────────────────────
+    if exists:
+        target_url = check_url
+        method     = "PUT"
+        mode       = "updated"
+    else:
+        target_url = f"{base}/api/me/hermes-configs"
+        method     = "POST"
+        mode       = "created"
+
+    req = urllib.request.Request(
+        target_url,
+        headers={**headers, "Content-Type": "application/json"},
+        method=method,
+        data=body_bytes,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            # We don't really need the response body (dashboard returns
+            # {ok: true}), but reading it ensures the connection closes
+            # cleanly before we return.
+            resp.read()
+    except urllib.error.HTTPError as e:
+        err = _read_dashboard_err(e)
+        raise RuntimeError(f"{method} failed (HTTP {e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach app.neowow.studio: {e.reason}")
+
+    return {
+        "ok":        True,
+        "mode":      mode,             # 'created' or 'updated'
+        "slug":      slug,
+        "name":      body["name"],
+        "modelName": model_default,
+        "provider":  provider,
+        "url":       f"{base}/account/hermes-configs",
+    }
+
+
+def _read_dashboard_err(http_err) -> str:
+    """Pull the user-readable error message out of a dashboard HTTPError.
+    Dashboards generally return {"error": "..."} JSON for 4xx/5xx; fall
+    back to the raw body for non-JSON responses."""
+    body = ""
+    try:
+        body = http_err.read().decode("utf-8")
+        return json.loads(body).get("error") or body
+    except Exception:
+        return body or str(http_err)
+
+
 def get_whoami() -> dict:
     """Identity-only proxy of dashboard's /api/me/whoami.
 

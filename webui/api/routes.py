@@ -3773,6 +3773,30 @@ def handle_post(handler, parsed) -> bool:
             logger.exception("neowow cloud-apply failed")
             return bad(handler, str(e), status=500)
 
+    if parsed.path == "/api/neowow/cloud-push":
+        # Inverse of cloud-apply — pushes the LOCAL config.yaml up to
+        # the dashboard as a new (or updated) cloud config. Body:
+        #   { slug: 'my-mac', name?: 'My Mac', description?: '...' }
+        # Slug is required; name defaults to the slug; description
+        # optional. Returns {ok, mode: 'created'|'updated', slug, name,
+        # modelName, url} so the UI can build a "view in dashboard"
+        # link after success.
+        try:
+            from api.neowow import push_local_config_to_cloud
+            slug        = (body or {}).get("slug", "")
+            name        = (body or {}).get("name", "")
+            description = (body or {}).get("description", "")
+            return j(handler, push_local_config_to_cloud(
+                slug=slug, name=name, description=description,
+            ))
+        except ValueError as e:
+            return bad(handler, str(e))                     # 400 — user error
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)         # upstream
+        except Exception as e:
+            logger.exception("neowow cloud-push failed")
+            return bad(handler, str(e), status=500)
+
     # Sync subscribed skills from the dashboard into
     # ~/.hermes/skills/_neowow/. Idempotent (re-running after no
     # cloud changes is a no-op + bookkeeping refresh). Returns a
