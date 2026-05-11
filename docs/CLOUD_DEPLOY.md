@@ -163,18 +163,22 @@ WATCHTOWER_TZ=Asia/Shanghai
 
 ### 私有镜像（ACR / GHCR private）
 
-如果你 Aliyun ACR 命名空间设为**私有**，Watchtower 拉镜像需要 docker 登录凭证。在 ECS 上**做一次** docker login：
+**默认 Watchtower 只能拉公开镜像**（避免无 `docker login` 时挂载报错）。如果你 Aliyun ACR 命名空间设为**私有**：
 
 ```bash
-# 阿里云 ACR
-docker login --username=<你的用户名> registry.cn-shanghai.aliyuncs.com
-# 输入固定密码
+# 1. 先在 ECS 上 docker login（一次性）
+sudo docker login --username=<你的用户名> registry.cn-shanghai.aliyuncs.com
+# 输入固定密码 → 看到 Login Succeeded
+# 这会创建 /root/.docker/config.json 文件
 
-# 或者 ghcr.io
-echo $GITHUB_TOKEN | docker login ghcr.io -u <github-username> --password-stdin
+# 2. 编辑 /opt/hermes-docker/docker-compose.yml，取消注释这行：
+#       - /root/.docker/config.json:/config.json:ro
+#   （在 watchtower 服务的 volumes: 下面）
+
+# 3. 重启 watchtower 应用新挂载
+cd /opt/hermes-docker
+sudo docker compose up -d watchtower
 ```
-
-`/root/.docker/config.json` 会写入凭证，Watchtower 自动用它。
 
 > 推荐设为**公开** — 你的镜像不包含敏感信息（只有 hermes-installer 代码 + 公开依赖），公开后省去登录维护。
 

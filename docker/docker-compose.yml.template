@@ -122,7 +122,11 @@ services:
   #     for the URL format (uses shoutrrr-style URLs).
   #   • Default: no notifications, just logs to docker compose logs.
   watchtower:
-    image: containrrr/watchtower:latest
+    # Pin to 1.7.1 — `:latest` on containrrr/watchtower is unmaintained
+    # and ships with a too-old Docker SDK that modern daemons reject
+    # with "client version 1.25 is too old. Minimum supported API
+    # version is 1.40". 1.7.1 was released 2024 with SDK 1.45+.
+    image: containrrr/watchtower:1.7.1
     container_name: hermes-watchtower
     restart: unless-stopped
     environment:
@@ -145,9 +149,21 @@ services:
     volumes:
       # Required: talk to host Docker daemon to inspect + recreate containers.
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Optional: registry auth for private images. Watchtower looks here
-      # by default; the host's `docker login` writes to this exact path.
-      - /root/.docker/config.json:/config.json:ro
+      # Registry auth for PRIVATE images (Aliyun ACR private namespace,
+      # ghcr.io private package, etc.). For PUBLIC images this isn't
+      # needed — Watchtower pulls anonymously. We intentionally DO NOT
+      # mount /root/.docker/config.json by default because if the host
+      # never ran `docker login`, that path doesn't exist as a file and
+      # Docker bind-mounts it as an empty directory (which Watchtower
+      # then can't read as a JSON config — error "is a directory").
+      #
+      # To enable for private images:
+      #   1. ssh into the host
+      #   2. `docker login <registry>` (writes /root/.docker/config.json)
+      #   3. Uncomment the volume mount below
+      #   4. `docker compose up -d watchtower` to apply
+      #
+      # - /root/.docker/config.json:/config.json:ro
     # Watchtower talks to Docker via the API socket; doesn't need kernel
     # caps. cap_drop:ALL stays at minimum-privilege.
     cap_drop:
