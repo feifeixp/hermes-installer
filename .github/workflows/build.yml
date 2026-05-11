@@ -15,11 +15,14 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      # v5 is current as of mid-2026; ships with Node 22 (post-deprecation
+      # of Node 20). v4 still works but emits the deprecation warning the
+      # user reported.
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -55,7 +58,7 @@ jobs:
           echo "✓ .dmg: $(du -sh dist/Hermes-Installer-macOS.dmg | cut -f1)"
 
       - name: Upload .dmg artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Hermes-Installer-macOS
           path: dist/Hermes-Installer-macOS.dmg
@@ -72,13 +75,21 @@ jobs:
   # Windows — .exe + .zip
   # ═══════════════════════════════════════════════════════════════════════
   windows:
-    runs-on: windows-latest
+    # Pin to windows-2022 to dodge the windows-2025 → windows-2025-vs2026
+    # migration GitHub announced (May 12, 2026 deadline). The new image
+    # ships VS2026 build tools which can break PyInstaller's
+    # binary-collection hooks for older C extension wheels until they
+    # catch up. Bump to windows-2025-vs2026 after testing once it stabilizes.
+    runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      # v5 is current as of mid-2026; ships with Node 22 (post-deprecation
+      # of Node 20). v4 still works but emits the deprecation warning the
+      # user reported.
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -108,7 +119,7 @@ jobs:
           Write-Host "✓ .zip created"
 
       - name: Upload .exe + .zip artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Hermes-Installer-Windows
           path: |
