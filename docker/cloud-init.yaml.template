@@ -6,24 +6,31 @@
 # substitutes the placeholders below before passing this as
 # UserData to the cloud SDK's RunInstances call:
 #
-#   %USER_ID%    user's stable Neodomain userId (e.g. 31046663)
-#   %DOMAIN%     full subdomain (e.g. chat-31046663.neowow.studio)
-#   %ACME_EMAIL% email for LetsEncrypt registration
-#   %IMAGE%      Docker image ref (resolved per registry availability)
+#   %USER_ID%               user's stable Neodomain userId (e.g. 31046663)
+#   %DOMAIN%                full subdomain (e.g. chat-31046663.neowow.studio)
+#   %ACME_EMAIL%            email for LetsEncrypt registration
+#   %IMAGE%                 Docker image ref (resolved per registry availability)
+#   %OSS_ACCESS_KEY_ID%     Aliyun OSS AK for state sync (M2)
+#   %OSS_ACCESS_KEY_SECRET% companion secret (M2)
+#   %OSS_ENDPOINT%          e.g. oss-cn-hangzhou.aliyuncs.com (M2)
+#   %OSS_BUCKET%            usually neowow-hermes-state (M2)
 #
 # Boot timeline (first run):
 #   00:00  Cloud-init starts (after kernel + cloud-init framework)
 #   00:05  apt update (cached locally on Ubuntu image — ~10 s)
 #   00:30  docker.io install (~50 s)
-#   01:30  docker pull <IMAGE> (~1-3 min depending on image size + bandwidth)
-#   03:00  docker compose up — Caddy starts requesting LE cert
-#   03:30  LetsEncrypt challenge round-trip (HTTP-01 on :80)
-#   04:00  hermes-webui health check passes — instance ready
+#   01:30  install ossutil + pull sessions from OSS (~30 s)
+#   02:00  docker pull <IMAGE> (~1-3 min depending on image size + bandwidth)
+#   03:30  docker compose up — Caddy starts requesting LE cert
+#   04:00  LetsEncrypt challenge round-trip (HTTP-01 on :80)
+#   04:30  hermes-webui health check passes — instance ready
 #
-# Total ~3-5 min from RunInstances to "serving traffic".
+# Total ~4-5 min from RunInstances to "serving traffic".
 #
 # Subsequent boots (after stop/start) skip the install steps because
-# everything's already on disk; total ~30 s to ready.
+# everything's already on disk; total ~30 s to ready. OSS pull still
+# runs to catch up any state pushed from another instance (e.g. user
+# spawned, stopped, then spawned again on a different ECS).
 # ─────────────────────────────────────────────────────────────────────────────
 
 package_update: true
@@ -74,8 +81,13 @@ write_files:
             # JWT's userId matches this value — otherwise other users
             # with valid neoTokens could access THIS user's instance.
             HERMES_INSTANCE_OWNER_USERID: "%USER_ID%"
+          # M2: bind-mount (NOT named volume) so oss-sync.sh on the host
+          # can read/write the same bytes the WebUI sees. Named volumes
+          # live inside the Docker overlay storage and can't be ergonomically
+          # rsync'd. /var/lib/hermes-state is created by cloud-init's
+          # runcmd before this container starts.
           volumes:
-            - hermes_state:/opt/hermes/.hermes
+            - /var/lib/hermes-state:/opt/hermes/.hermes
           expose: ["7891"]
           networks: [hermes]
           healthcheck:
@@ -88,7 +100,6 @@ write_files:
       volumes:
         caddy_data:   {}
         caddy_config: {}
-        hermes_state: {}
 
       networks:
         hermes:
@@ -125,11 +136,81 @@ write_files:
 
       0 * * * * root cd /opt/hermes-docker && echo "=== $(date -Iseconds) ===" >> /var/log/hermes-update.log && /usr/bin/docker compose pull >> /var/log/hermes-update.log 2>&1 && /usr/bin/docker compose up -d >> /var/log/hermes-update.log 2>&1
 
+  # ── M2: OSS state sync configuration ─────────────────────────────────
+  # Read by /opt/hermes-docker/oss-sync.sh. Cred values substituted by
+  # the broker so they never live in any source tree. Permissions 0600
+  # so even other users on the same VM (if any) can't read.
+  - path: /etc/default/hermes-oss-sync
+    permissions: '0600'
+    owner: root:root
+    content: |
+      OSS_ACCESS_KEY_ID="%OSS_ACCESS_KEY_ID%"
+      OSS_ACCESS_KEY_SECRET="%OSS_ACCESS_KEY_SECRET%"
+      OSS_ENDPOINT="%OSS_ENDPOINT%"
+      OSS_BUCKET="%OSS_BUCKET%"
+      OSS_PREFIX="users/%USER_ID%/hermes"
+      LOCAL_PATH="/var/lib/hermes-state"
+      OSSUTIL="/usr/local/bin/ossutil"
+
+  # ── M2: 5-minute push cron ──────────────────────────────────────────
+  # Every 5 min, push any new chat-session writes to OSS. Failures are
+  # tolerated (next cron tick retries); we don't want the sync to take
+  # the instance down.
+  - path: /etc/cron.d/hermes-oss-sync
+    permissions: '0644'
+    content: |
+      SHELL=/bin/bash
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+      */5 * * * * root /opt/hermes-docker/oss-sync.sh push > /dev/null 2>&1 || true
+
+  # ── M2: shutdown hook — push state one last time before halt ─────────
+  # ExecStop runs synchronously during shutdown. We give it 60s; the
+  # rsync of a typical sessions DB (few hundred KB) takes < 2s, so this
+  # is just paranoia.
+  - path: /etc/systemd/system/hermes-oss-shutdown.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Push Hermes state to OSS before shutdown
+      DefaultDependencies=no
+      Before=shutdown.target poweroff.target halt.target reboot.target
+      RequiresMountsFor=/var/lib/hermes-state
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      # No-op start — the work happens in ExecStop, which runs when the
+      # unit is stopped (i.e. on system shutdown).
+      ExecStart=/bin/true
+      ExecStop=/opt/hermes-docker/oss-sync.sh push
+      TimeoutStopSec=60s
+
+      [Install]
+      WantedBy=shutdown.target
+
 runcmd:
   # ── Install Docker via the official one-liner. Faster than the apt
   # ── debian-keyring dance + works on any reasonable Linux. ~60s.
   - [bash, -c, "curl -fsSL https://get.docker.com | sh"]
   - systemctl enable --now docker
+
+  # ── M2: download ossutil + the oss-sync.sh script.
+  # ── ossutil is a single Go binary; ~20 MB; we host on Aliyun CDN.
+  - [bash, -c, "curl -fsSL --retry 3 https://gosspublic.alicdn.com/ossutil/v2/2.0.5/ossutil-2.0.5-linux-amd64.zip -o /tmp/ossutil.zip && cd /tmp && unzip -o ossutil.zip && mv -f ossutil-*/ossutil /usr/local/bin/ossutil && chmod +x /usr/local/bin/ossutil"]
+  - [bash, -c, "curl -fsSL --retry 3 https://raw.githubusercontent.com/feifeixp/hermes-installer/main/docker/oss-sync.sh -o /opt/hermes-docker/oss-sync.sh && chmod +x /opt/hermes-docker/oss-sync.sh"]
+
+  # ── M2: probe OSS access (fail-fast if creds wrong) + pull existing state.
+  # ── If verify fails we still proceed — better to run with no remote
+  # ── backup than to fail the entire spawn. Logs go to journal.
+  - [bash, -c, "/opt/hermes-docker/oss-sync.sh verify || echo 'WARNING: OSS not accessible; sessions WILL NOT persist across destroy'"]
+
+  # ── The hermes_state docker volume mounts at a host path; we point
+  # ── oss-sync at that path so sync targets the live data, not container
+  # ── ephemeral storage. Volume bind: /var/lib/hermes-state → container
+  # ── /opt/hermes/.hermes
+  - [bash, -c, "mkdir -p /var/lib/hermes-state"]
+  - [bash, -c, "/opt/hermes-docker/oss-sync.sh pull"]
 
   # ── Pull the Hermes image upfront (faster + clearer error than
   # ── waiting for compose to do it implicitly). ~1-3 min.
@@ -142,9 +223,14 @@ runcmd:
   # ── to be healthy before starting Caddy (depends_on condition).
   - [bash, -c, "cd /opt/hermes-docker && docker compose up -d"]
 
-  # ── Reload cron so /etc/cron.d/hermes-auto-update takes effect now
-  # ── (otherwise it'd need a system restart).
+  # ── Reload cron so /etc/cron.d/hermes-{auto-update,oss-sync} take
+  # ── effect now (otherwise they'd need a system restart).
   - systemctl reload cron
+
+  # ── Enable the shutdown hook so OSS gets a final push on poweroff.
+  - systemctl daemon-reload
+  - systemctl enable hermes-oss-shutdown.service
+  - systemctl start hermes-oss-shutdown.service
 
   # ── Ping the broker so it knows this instance is ready. The broker
   # ── will flip state from 'cloud_init' to 'running'. We deliberately

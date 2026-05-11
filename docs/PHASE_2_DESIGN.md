@@ -297,29 +297,23 @@ runcmd:
 
 ## 5. 实施顺序（推荐）
 
-### M1 — 镜像构建（1 周）
-- Packer 配置 + Aliyun ECS provisioner
-- 三个 shell provisioner: install-base / install-hermes / configure-systemd
-- 在 cn-shanghai 跑通一次出第一版镜像
-- GitHub Actions 自动化镜像构建（hermes-installer main 推送触发）
+### M1.0 ✅ DONE — 镜像 + Broker + Cloud-init + UI（结合到一起）
+原计划 M1+M2+M3 拆分，实际因为 Phase 1.5 已经做好 Docker 镜像 + cron 自动更新，M1 不需要 Packer。三件事一起做：
 
-**完工标志**: 用阿里云控制台从镜像启一台实例，30 秒内 `https://<ip>:7891/health` 返回 200。
+**已完成（3 个 commit）**：
+- `dccf979` 云端 provider 抽象 + Tencent HK 实现（aliyun-supa）
+- `111a25d` Broker routes + UI（aliyun-supa）
+- `bedc99a` cloud-init template + 实例 owner JWT 检查（hermes-installer）
 
-### M2 — Broker API（1 周）
-- `dashboard/src/app/api/me/instance/{start,stop,status,heartbeat}/route.ts`
-- 集成阿里云 ECS SDK + DNS SDK + OSS SDK
-- TableStore `inst_<userId>` schema + CRUD
-- 单元测试 + 模拟阿里云 API 的 fakes
+**完工标志**: 通过 `app.neowow.studio/account` 点"开启私有 Session" → 3-5 分钟后能在 `chat-<userId>.neowow.studio` 用上私有 Hermes。
 
-**完工标志**: 通过 dashboard 的 API 能拉起 / 停掉一台真实 ECS，DNS 自动设置 + 拆除。
+### M2 ✅ DONE — OSS 会话历史同步
+- `oss-sync.sh`: bash + ossutil，pull/push/verify 三个子命令
+- cloud-init：下载 ossutil + pull-on-start + 5 分钟 cron + shutdown systemd hook
+- bind-mount `/var/lib/hermes-state` 替代 named volume（让 host oss-sync 能读写同一份数据）
+- broker 把 OSS AK/SK 通过 cloud-init substitution 传给新 ECS
 
-### M3 — Cloud-init + State sync（1 周）
-- 写 `/etc/cloud-init.d/hermes-bootstrap.sh`
-- ossutil 集成（pull on start, push on stop）
-- KMS 加密 `.env`（每用户独立 key）
-- Sync 测试：故意 dirty state，spin-down + spin-up，验证恢复
-
-**完工标志**: 实例 reboot 后用户的会话历史完整恢复。
+**完工标志**: 用户 destroy 实例后再 spawn，`~/.hermes/sessions/` 完整恢复。
 
 ### M4 — Dashboard UI（3-5 天）
 - `/account` 加「开始 Session」按钮
