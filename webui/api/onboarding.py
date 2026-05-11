@@ -35,6 +35,30 @@ logger = logging.getLogger(__name__)
 
 _SUPPORTED_PROVIDER_SETUPS = {
     # ── Easy start ──────────────────────────────────────────────────────
+    # ── Neodomain Gateway (ga.neodomain.cn) ───────────────────────────
+    # OpenAI-compatible gateway run by the Neodomain platform that powers
+    # app.neowow.studio. Same Bearer-auth scheme as OpenAI; users get a
+    # key from their Neodomain console. The agent points its
+    # OpenAI-compatible client at ga.neodomain.cn/v1 and everything
+    # else (chat completions, streaming, tool use) just works.
+    #
+    # Why "easy_start" + "quick": this is the recommended provider for
+    # users coming in through neowow.studio — it's the one their points
+    # / membership / billing already sits behind.
+    "neodomain": {
+        "label": "Neodomain (官方网关 / ga.neodomain.cn)",
+        "env_var": "NEODOMAIN_API_KEY",
+        "default_model": "claude-sonnet-4.5",
+        "default_base_url": "https://ga.neodomain.cn/v1",
+        # We DON'T mark requires_base_url=True so the wizard pre-fills
+        # the base URL and hides the input by default. Users on a custom
+        # Neodomain deployment can still override via the advanced
+        # section, but the typical case is one-click.
+        "requires_base_url": False,
+        "models": list(_PROVIDER_MODELS.get("neodomain", [])),
+        "category": "easy_start",
+        "quick": True,
+    },
     "openrouter": {
         "label": "OpenRouter",
         "env_var": "OPENROUTER_API_KEY",

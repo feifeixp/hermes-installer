@@ -548,6 +548,7 @@ _FALLBACK_MODELS = [
 
 # Provider display names for known Hermes provider IDs
 _PROVIDER_DISPLAY = {
+    "neodomain": "Neodomain (ga.neodomain.cn)",
     "nous": "Nous Portal",
     "openrouter": "OpenRouter",
     "anthropic": "Anthropic",
@@ -697,6 +698,31 @@ def _canonicalise_provider_id(name: object) -> str:
 
 # Well-known models per provider (used to populate dropdown for direct API providers)
 _PROVIDER_MODELS = {
+    # Neodomain official gateway — OpenAI-compatible (base
+    # https://ga.neodomain.cn/v1). Hosts Anthropic + Google + DeepSeek
+    # models under their canonical IDs (no provider/ prefix). New users
+    # of neowow.studio should start here — their points / membership
+    # already cover usage through this gateway.
+    "neodomain": [
+        # Anthropic (most common pick — chat.neowow.studio's default)
+        {"id": "claude-sonnet-4.5",  "label": "Claude Sonnet 4.5"},
+        {"id": "claude-opus-4.7",    "label": "Claude Opus 4.7"},
+        {"id": "claude-opus-4.6",    "label": "Claude Opus 4.6"},
+        {"id": "claude-sonnet-4.6",  "label": "Claude Sonnet 4.6"},
+        {"id": "claude-haiku-4.5",   "label": "Claude Haiku 4.5"},
+        # Google
+        {"id": "gemini-3.1-pro-preview",   "label": "Gemini 3.1 Pro Preview"},
+        {"id": "gemini-3-flash-preview",   "label": "Gemini 3 Flash Preview"},
+        {"id": "gemini-2.5-pro",           "label": "Gemini 2.5 Pro"},
+        {"id": "gemini-2.5-flash",         "label": "Gemini 2.5 Flash"},
+        # OpenAI
+        {"id": "gpt-5.5",        "label": "GPT-5.5"},
+        {"id": "gpt-5.5-mini",   "label": "GPT-5.5 Mini"},
+        {"id": "gpt-5.4",        "label": "GPT-5.4"},
+        # DeepSeek
+        {"id": "deepseek-v4-flash",  "label": "DeepSeek V4 Flash"},
+        {"id": "deepseek-v4-pro",    "label": "DeepSeek V4 Pro"},
+    ],
     "anthropic": [
         {"id": "claude-opus-4.7", "label": "Claude Opus 4.7"},
         {"id": "claude-opus-4.6", "label": "Claude Opus 4.6"},
