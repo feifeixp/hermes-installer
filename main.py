@@ -114,7 +114,22 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 os.environ["HERMES_INSTALLER_BASE_DIR"] = str(BASE_DIR)
-log.info("BASE_DIR=%s", BASE_DIR)
+
+# ── Neowow distribution defaults ──────────────────────────────────────────
+# This installer IS the Neowow-flavored Hermes build. Default the WebUI
+# into Coding-Plan-only mode (hides openai / anthropic / openrouter /
+# ollama / custom / neodomain from the onboarding wizard) so every chat
+# routes through app.neowow.studio/api/me/chat/completions and bills
+# the user's Coding Plan credits.
+#
+# Upstream community Hermes uses its own entry-point and never sets this.
+# Power users who want BYO provider on the Neowow build can explicitly
+# set HERMES_NEOWOW_ONLY=0 in their environment to opt out — `setdefault`
+# preserves any value the operator already chose.
+os.environ.setdefault("HERMES_NEOWOW_ONLY", "1")
+
+log.info("BASE_DIR=%s  HERMES_NEOWOW_ONLY=%s",
+         BASE_DIR, os.environ.get("HERMES_NEOWOW_ONLY"))
 
 WEBUI_DIR = BASE_DIR / "webui"
 BOOTSTRAP_PY = WEBUI_DIR / "bootstrap.py"
