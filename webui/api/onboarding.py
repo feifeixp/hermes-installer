@@ -80,11 +80,12 @@ _NEOWOW_CODING_PLAN_PROVIDER_ID = "neowow-coding-plan"
 def _neowow_coding_plan_default_models() -> list[dict]:
     """Last-resort fallback model list when the dashboard's /api/me/plan
     is unreachable AND the user hasn't picked a plan yet. Kept tiny on
-    purpose — Trial users only get deepseek-chat anyway, so a wider list
-    would just confuse new users."""
+    purpose — Trial users only get deepseek-v4-flash + gpt-4o-mini, so
+    a wider list would just confuse new users. These two are the
+    cheapest chat models on ga.neodomain.cn as of Phase ε."""
     return [
-        {"id": "deepseek-chat",  "label": "DeepSeek Chat (trial 默认)"},
-        {"id": "gpt-4o-mini",    "label": "GPT-4o Mini"},
+        {"id": "deepseek-v4-flash",  "label": "DeepSeek V4 Flash (trial 默认)"},
+        {"id": "gpt-4o-mini",        "label": "GPT-4o Mini"},
     ]
 
 
@@ -99,9 +100,9 @@ _SUPPORTED_PROVIDER_SETUPS = {
         # bridge in providers.py rewrites it on the fly.
         "env_var": "NEOWOW_TOKEN",
         # Default model is decided dynamically (from /api/me/plan). When
-        # the plan endpoint is unreachable, fall back to deepseek-chat
-        # which every tier (incl. trial) can access.
-        "default_model": "deepseek-chat",
+        # the plan endpoint is unreachable, fall back to deepseek-v4-flash
+        # which every tier (incl. trial) can access on ga.neodomain.cn.
+        "default_model": "deepseek-v4-flash",
         # base_url here is what `model.base_url` gets set to in
         # config.yaml. The OpenAI-compatible SDK in the agent runtime
         # appends `/chat/completions` to it, so the final POST target
@@ -853,7 +854,7 @@ def _fetch_neowow_plan_models() -> tuple[list[dict], str | None]:
                 if not mid:
                     continue
                 shaped.append({"id": mid, "label": mid})
-            default_model = str(data.get("models", ["deepseek-chat"])[0]) if models else None
+            default_model = str(data.get("models", ["deepseek-v4-flash"])[0]) if models else None
             return shaped or _neowow_coding_plan_default_models(), default_model
     except (urllib.error.URLError, socket.timeout, json.JSONDecodeError, KeyError, ValueError):
         logger.debug("Falling back to static neowow-coding-plan model list", exc_info=True)
@@ -1074,10 +1075,11 @@ def get_onboarding_status() -> dict:
                 _provider_meta = _SUPPORTED_PROVIDER_SETUPS[_NEOWOW_CODING_PLAN_PROVIDER_ID]
                 # Pick a sane default model. Live plan data, if reachable,
                 # has the user-specific whitelist; otherwise fall back to
-                # deepseek-chat (every tier — including trial — allows it).
+                # deepseek-v4-flash (every tier — including trial — allows
+                # it on ga.neodomain.cn).
                 _models, _default = _fetch_neowow_plan_models()
                 _chosen_model = (_default
-                                 or (_models[0]["id"] if _models else "deepseek-chat"))
+                                 or (_models[0]["id"] if _models else "deepseek-v4-flash"))
 
                 _config_path = _get_config_path()
                 _env_path    = _get_active_hermes_home() / ".env"

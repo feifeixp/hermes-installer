@@ -709,25 +709,36 @@ _PROVIDER_MODELS = {
     # models under their canonical IDs (no provider/ prefix). New users
     # of neowow.studio should start here — their points / membership
     # already cover usage through this gateway.
+    # Live catalog from `curl https://ga.neodomain.cn/v1/models` snapshot
+    # 2026-05-13. Image / video / music / speech models filtered out —
+    # this list is consumed by the chat-completion model picker only.
+    # When ga.neodomain.cn adds a chat model, mirror it here AND in
+    # dashboard's lib/billing-math.DEFAULT_PRICES (or admin's
+    # cfg_model_prices row); otherwise pricing falls through to
+    # _default and the model dropdown won't show it.
     "neodomain": [
-        # Anthropic (most common pick — chat.neowow.studio's default)
-        {"id": "claude-sonnet-4.5",  "label": "Claude Sonnet 4.5"},
-        {"id": "claude-opus-4.7",    "label": "Claude Opus 4.7"},
-        {"id": "claude-opus-4.6",    "label": "Claude Opus 4.6"},
-        {"id": "claude-sonnet-4.6",  "label": "Claude Sonnet 4.6"},
-        {"id": "claude-haiku-4.5",   "label": "Claude Haiku 4.5"},
-        # Google
-        {"id": "gemini-3.1-pro-preview",   "label": "Gemini 3.1 Pro Preview"},
-        {"id": "gemini-3-flash-preview",   "label": "Gemini 3 Flash Preview"},
-        {"id": "gemini-2.5-pro",           "label": "Gemini 2.5 Pro"},
-        {"id": "gemini-2.5-flash",         "label": "Gemini 2.5 Flash"},
-        # OpenAI
-        {"id": "gpt-5.5",        "label": "GPT-5.5"},
-        {"id": "gpt-5.5-mini",   "label": "GPT-5.5 Mini"},
-        {"id": "gpt-5.4",        "label": "GPT-5.4"},
         # DeepSeek
-        {"id": "deepseek-v4-flash",  "label": "DeepSeek V4 Flash"},
-        {"id": "deepseek-v4-pro",    "label": "DeepSeek V4 Pro"},
+        {"id": "deepseek-v4-pro",                 "label": "DeepSeek V4 Pro"},
+        {"id": "deepseek-v4-flash",               "label": "DeepSeek V4 Flash"},
+        # OpenAI
+        {"id": "gpt-5.5",                         "label": "GPT-5.5"},
+        {"id": "gpt-5.4",                         "label": "GPT-5.4"},
+        {"id": "gpt-5.4-mini",                    "label": "GPT-5.4 Mini"},
+        {"id": "gpt-4o",                          "label": "GPT-4o"},
+        {"id": "gpt-4o-mini",                     "label": "GPT-4o Mini"},
+        # Google Gemini
+        {"id": "gemini-3.1-pro-preview",          "label": "Gemini 3.1 Pro (Preview)"},
+        {"id": "gemini-3.1-flash-lite-preview",   "label": "Gemini 3.1 Flash Lite (Preview)"},
+        {"id": "gemini-3-pro-preview",            "label": "Gemini 3 Pro (Preview)"},
+        {"id": "gemini-3-flash-preview",          "label": "Gemini 3 Flash (Preview)"},
+        {"id": "gemini-2.5-flash",                "label": "Gemini 2.5 Flash"},
+        {"id": "gemini-2.5-flash-lite",           "label": "Gemini 2.5 Flash Lite"},
+        # Zhipu / Moonshot / MiniMax / Qwen
+        {"id": "glm-5",                           "label": "GLM-5"},
+        {"id": "kimi-k2.6",                       "label": "Kimi K2.6"},
+        {"id": "kimi-k2.5",                       "label": "Kimi K2.5"},
+        {"id": "MiniMax-M2.5",                    "label": "MiniMax M2.5"},
+        {"id": "qwen3.5-plus",                    "label": "Qwen 3.5 Plus"},
     ],
     "anthropic": [
         {"id": "claude-opus-4.7", "label": "Claude Opus 4.7"},

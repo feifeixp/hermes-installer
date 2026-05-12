@@ -68,7 +68,9 @@ class TestNeowowOnlyCatalog:
         assert p["env_var"] == "NEOWOW_TOKEN"
         assert p["quick"] is True
         # Static fallback list when /api/me/plan is unreachable.
-        assert any(m["id"] == "deepseek-chat" for m in p["models"])
+        # Phase ε swapped the bake-in defaults to the actual chat models
+        # on ga.neodomain.cn (deepseek-v4-flash + gpt-4o-mini).
+        assert any(m["id"] == "deepseek-v4-flash" for m in p["models"])
 
     def test_catalog_current_provider_pinned_to_neowow_when_flag_set(self, monkeypatch):
         """Even if a previous wizard run wrote model.provider=openrouter
