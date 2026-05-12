@@ -33,7 +33,94 @@ from api.workspace import get_last_workspace, load_workspaces
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Neowow Coding Plan mode (Phase β)
+#
+# When HERMES_NEOWOW_ONLY=1 is set on the WebUI server, the onboarding
+# wizard hides every other provider and shows only the "Neowow Coding
+# Plan" card — a fully managed entry-point where:
+#
+#   • base_url   → https://app.neowow.studio/api/me   (no /v1 suffix;
+#                  the dashboard's /api/me/chat/completions route is
+#                  the OpenAI-compatible target the agent's SDK hits)
+#   • api_key    → the user's Neodomain JWT, stored locally via
+#                  api/neowow.save_jwt(). On chat-*.neowow.studio
+#                  (cloud) the cookie auto-fills this; on desktop the
+#                  user runs the OAuth flow once.
+#   • models     → fetched live from https://app.neowow.studio/api/me/plan
+#                  so the dropdown only shows what the user's plan
+#                  actually grants. Wildcards (claude-*) expanded
+#                  server-side, so we just render the array.
+#
+# The flag is set in:
+#   • The docker image's environment (cloud-init.yaml.template)
+#   • The desktop installer's start script (so Neowow-distribution
+#     users never see a "use OpenAI directly?" choice that would
+#     bypass the credit accounting)
+#
+# When the flag is unset, the existing multi-provider wizard renders
+# unchanged — community / self-hosted users keep their full flexibility.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _neowow_only_enabled() -> bool:
+    """True iff this WebUI build forces all chat through the Neowow
+    Coding Plan proxy. Checked from _build_setup_catalog +
+    apply_onboarding_setup; nothing else should branch on it directly."""
+    return os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _neowow_dashboard_base() -> str:
+    """Dashboard URL — overridable for staging deployments."""
+    return os.getenv("HERMES_NEOWOW_DASHBOARD", "https://app.neowow.studio").rstrip("/")
+
+
+_NEOWOW_CODING_PLAN_PROVIDER_ID = "neowow-coding-plan"
+
+
+def _neowow_coding_plan_default_models() -> list[dict]:
+    """Last-resort fallback model list when the dashboard's /api/me/plan
+    is unreachable AND the user hasn't picked a plan yet. Kept tiny on
+    purpose — Trial users only get deepseek-chat anyway, so a wider list
+    would just confuse new users."""
+    return [
+        {"id": "deepseek-chat",  "label": "DeepSeek Chat (trial 默认)"},
+        {"id": "gpt-4o-mini",    "label": "GPT-4o Mini"},
+    ]
+
+
 _SUPPORTED_PROVIDER_SETUPS = {
+    # ── Neowow Coding Plan (the Phase β default for managed deployments) ──
+    # Catalogued FIRST so it shows up first in the wizard when not gated.
+    _NEOWOW_CODING_PLAN_PROVIDER_ID: {
+        "label": "Neowow Coding Plan (推荐 · 自动按套餐计费)",
+        # JWT stored via api/neowow.save_jwt(); we don't write it into
+        # .env so it can't leak to other processes. The env_var below is
+        # kept for parity with the wizard's other entries — the runtime
+        # bridge in providers.py rewrites it on the fly.
+        "env_var": "NEOWOW_TOKEN",
+        # Default model is decided dynamically (from /api/me/plan). When
+        # the plan endpoint is unreachable, fall back to deepseek-chat
+        # which every tier (incl. trial) can access.
+        "default_model": "deepseek-chat",
+        # base_url here is what `model.base_url` gets set to in
+        # config.yaml. The OpenAI-compatible SDK in the agent runtime
+        # appends `/chat/completions` to it, so the final POST target
+        # is https://app.neowow.studio/api/me/chat/completions — the
+        # Phase α billed proxy.
+        "default_base_url": "https://app.neowow.studio/api/me",
+        "requires_base_url": False,
+        # Filled in dynamically by _build_setup_catalog when the
+        # dashboard is reachable.
+        "models": _neowow_coding_plan_default_models(),
+        "category": "easy_start",
+        "quick": True,
+        # On the WebUI side we accept an empty api_key field — the
+        # actual JWT comes from api/neowow.get_jwt() (set via OAuth or
+        # cookie hand-off). The wizard surfaces a "Login to Neowow"
+        # button in place of the api-key input when this provider is
+        # selected, but the underlying validator must allow no-key.
+        "key_optional": True,
+    },
     # ── Easy start ──────────────────────────────────────────────────────
     # ── Neodomain Gateway (ga.neodomain.cn) ───────────────────────────
     # OpenAI-compatible gateway run by the Neodomain platform that powers
@@ -731,26 +818,106 @@ def _status_from_runtime(cfg: dict, imports_ok: bool) -> dict:
     }
 
 
+def _fetch_neowow_plan_models() -> tuple[list[dict], str | None]:
+    """Hit the dashboard's /api/me/plan and return (models, default_model).
+    Falls back to the static neowow-coding-plan model list on any error —
+    onboarding mustn't block when the user is offline. The JWT is read
+    via api/neowow.get_jwt(); on cloud (chat-*.neowow.studio) the cookie
+    has already been turned into a saved JWT by /api/neowow/oauth-callback.
+    """
+    try:
+        from api.neowow import get_jwt  # local import — avoid circular at module load
+    except Exception:
+        return _neowow_coding_plan_default_models(), None
+    jwt = get_jwt()
+    if not jwt:
+        return _neowow_coding_plan_default_models(), None
+    url = f"{_neowow_dashboard_base()}/api/me/plan"
+    try:
+        req = urllib.request.Request(url, method="GET", headers={
+            "Authorization": f"Bearer {jwt}",
+            "Accept":        "application/json",
+        })
+        # 3s is enough for a CF Workers round-trip from any region; if it's
+        # really down, the user gets the static fallback list and a probe
+        # error on first chat.
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            body = resp.read().decode("utf-8", "replace")
+            data = json.loads(body)
+            models = data.get("models") or []
+            if not isinstance(models, list):
+                return _neowow_coding_plan_default_models(), None
+            shaped: list[dict] = []
+            for m in models:
+                mid = str(m).strip()
+                if not mid:
+                    continue
+                shaped.append({"id": mid, "label": mid})
+            default_model = str(data.get("models", ["deepseek-chat"])[0]) if models else None
+            return shaped or _neowow_coding_plan_default_models(), default_model
+    except (urllib.error.URLError, socket.timeout, json.JSONDecodeError, KeyError, ValueError):
+        logger.debug("Falling back to static neowow-coding-plan model list", exc_info=True)
+        return _neowow_coding_plan_default_models(), None
+
+
 def _build_setup_catalog(cfg: dict) -> dict:
     current_provider = _extract_current_provider(cfg) or "openrouter"
     current_model = _extract_current_model(cfg)
     current_base_url = _extract_current_base_url(cfg)
 
+    # When neowow-only is forced, swap the default current_provider so the
+    # wizard pre-selects the right card. Without this the catalog would
+    # still mark "openrouter" as current and the user sees a confusing
+    # "Your current provider is hidden" state.
+    neowow_only = _neowow_only_enabled()
+    if neowow_only and current_provider not in _SUPPORTED_PROVIDER_SETUPS:
+        current_provider = _NEOWOW_CODING_PLAN_PROVIDER_ID
+    elif neowow_only and current_provider != _NEOWOW_CODING_PLAN_PROVIDER_ID:
+        # In neowow-only mode, if user previously configured a different
+        # provider (e.g. they ran the wizard once with the flag off), we
+        # still surface neowow-coding-plan as the "current" target so the
+        # wizard re-runs cleanly. The old provider entry stays in
+        # config.yaml until they confirm overwrite.
+        current_provider = _NEOWOW_CODING_PLAN_PROVIDER_ID
+
+    # Dynamic model list for the neowow-coding-plan card — replaces the
+    # static placeholder at catalog-build time. Cheap (1 HTTP round-trip,
+    # 3s budget) so we do it inline; if you find this dominating wizard
+    # latency, hoist to a TTL'd cache (TTLCache from api/helpers).
+    neowow_models: list[dict] | None = None
+    neowow_default_model: str | None = None
+    if _NEOWOW_CODING_PLAN_PROVIDER_ID in _SUPPORTED_PROVIDER_SETUPS:
+        neowow_models, neowow_default_model = _fetch_neowow_plan_models()
+
     providers = []
     for provider_id, meta in _SUPPORTED_PROVIDER_SETUPS.items():
+        # Phase β: hide everything except the Coding Plan when the flag
+        # is set. This is the *single* enforcement point; the wizard UI
+        # doesn't render anything we don't list here, so users can't
+        # bypass by URL hackery on the WebUI page itself. (Server-side
+        # apply_onboarding_setup also re-checks the flag — see below.)
+        if neowow_only and provider_id != _NEOWOW_CODING_PLAN_PROVIDER_ID:
+            continue
+        # Substitute the dynamic model list for neowow-coding-plan.
+        models = list(meta.get("models", []))
+        default_model = meta["default_model"]
+        if provider_id == _NEOWOW_CODING_PLAN_PROVIDER_ID and neowow_models:
+            models = neowow_models
+            if neowow_default_model:
+                default_model = neowow_default_model
         providers.append(
             {
                 "id": provider_id,
                 "label": meta["label"],
                 "env_var": meta["env_var"],
-                "default_model": meta["default_model"],
+                "default_model": default_model,
                 "default_base_url": meta.get("default_base_url") or "",
                 "requires_base_url": bool(meta.get("requires_base_url")),
                 # #1499 (third sub-bug from #1420) — providers that may run
                 # keyless (lmstudio, ollama, custom).  Frontend uses this to
                 # show a "(optional)" hint and allow Continue without a key.
                 "key_optional": bool(meta.get("key_optional")),
-                "models": list(meta.get("models", [])),
+                "models": models,
                 "category": meta.get("category", "easy_start"),
                 "quick": meta.get("quick", False),
             }
@@ -900,6 +1067,32 @@ def apply_onboarding_setup(body: dict) -> dict:
     model = str(body.get("model") or "").strip()
     api_key = str(body.get("api_key") or "").strip()
     base_url = _normalize_base_url(str(body.get("base_url") or ""))
+
+    # ── Phase β: HERMES_NEOWOW_ONLY enforcement ─────────────────────────
+    # Even if a curious user POSTs a hand-crafted body with provider=openai,
+    # reject it server-side when the flag is set. The wizard's UI already
+    # filters the list down, so this is belt-and-suspenders.
+    if _neowow_only_enabled() and provider != _NEOWOW_CODING_PLAN_PROVIDER_ID:
+        raise ValueError(
+            "This Hermes build is locked to the Neowow Coding Plan. "
+            "Set up via the 'Neowow Coding Plan' card."
+        )
+
+    # ── Neowow Coding Plan: auto-fill JWT from local store ──────────────
+    # The user never types their JWT into the wizard's api_key field —
+    # instead they click "Login to Neowow" which OAuths and calls
+    # /api/neowow/jwt to save it locally. By the time apply_onboarding_setup
+    # runs, the JWT is already available via api.neowow.get_jwt(). Pull
+    # it here so the rest of the flow looks like any other key-bearing
+    # provider.
+    if provider == _NEOWOW_CODING_PLAN_PROVIDER_ID and not api_key:
+        try:
+            from api.neowow import get_jwt
+            stored = get_jwt()
+            if stored:
+                api_key = stored
+        except Exception:
+            logger.debug("Could not import api.neowow.get_jwt", exc_info=True)
 
     if provider not in _SUPPORTED_PROVIDER_SETUPS:
         # Unsupported providers (openai-codex, copilot, nous, etc.) are already

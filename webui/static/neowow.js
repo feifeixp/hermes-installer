@@ -132,13 +132,19 @@
     popover.style.display = 'block';
 
     try {
-      const r = await fetch('/api/neowow/points', { cache: 'no-store' });
-      const d = await r.json();
-      if (!r.ok) {
-        // Most likely cause: JWT expired (Neodomain ~30-day TTL) or the
-        // user invalidated the session elsewhere. Offer re-login + logout.
+      // Fetch points + coding-plan in parallel. The Coding Plan call
+      // (Phase β /api/neowow/coding-plan) is best-effort — if it errors
+      // we still render the points panel, just without the plan banner.
+      const [pointsRes, planRes] = await Promise.allSettled([
+        fetch('/api/neowow/points',       { cache: 'no-store' }).then(r => r.json().then(d => ({ ok: r.ok, status: r.status, d }))),
+        fetch('/api/neowow/coding-plan',  { cache: 'no-store' }).then(r => r.json().then(d => ({ ok: r.ok, status: r.status, d }))),
+      ]);
+      const p = pointsRes.status === 'fulfilled' ? pointsRes.value : null;
+      const cp = planRes.status === 'fulfilled' && planRes.value.ok ? planRes.value.d : null;
+      if (!p || !p.ok) {
+        const d = p?.d || {};
         body.innerHTML = `
-          <div style="color:#e8a030;line-height:1.6">⚠️ ${escapeHtml(d.error || ('HTTP '+r.status))}</div>
+          <div style="color:#e8a030;line-height:1.6">⚠️ ${escapeHtml(d.error || ('HTTP '+(p?.status ?? '???')))}</div>
           <div style="display:flex;gap:6px;margin-top:8px">
             <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none;flex:1">🔑 重新登录</button>
             <button class="btn-tiny" onclick="neowowClearJwt()" style="flex:1">退出</button>
@@ -146,16 +152,57 @@
         `;
         return;
       }
-      renderPopoverBody(body, d, nickname);
+      renderPopoverBody(body, p.d, nickname, cp);
     } catch (e) {
       body.innerHTML = `<div style="color:#ef4444">加载失败：${escapeHtml(e.message || 'unknown')}</div>`;
     }
   };
 
-  function renderPopoverBody(el, points, nickname) {
+  function renderPopoverBody(el, points, nickname, codingPlan) {
     const total = points.totalAvailablePoints || 0;
     const m = points.membershipInfo || {};
     const initial = (nickname && nickname[0] || '?').toUpperCase();
+    // Phase β: Coding Plan banner (above points, since it's what gates
+    // chat). Omitted entirely when the user isn't subscribed yet AND
+    // hasn't been issued a trial row — keeps the popover tidy.
+    let codingPlanBlock = '';
+    if (codingPlan && (codingPlan.planId || codingPlan.creditsLimit)) {
+      const pct = codingPlan.creditsLimit > 0
+        ? Math.min(100, Math.max(0, (codingPlan.creditsUsed / codingPlan.creditsLimit) * 100))
+        : 0;
+      const remaining = (codingPlan.creditsRemaining ?? 0).toFixed(
+        codingPlan.creditsRemaining >= 100 ? 0 : 1,
+      );
+      const limit = (codingPlan.creditsLimit ?? 0).toLocaleString();
+      const planChipBg = codingPlan.planId === 'max'   ? 'linear-gradient(135deg,#f59e0b,#ef4444)'
+                       : codingPlan.planId === 'pro'   ? 'linear-gradient(135deg,#8b5cf6,#7c3aed)'
+                       : codingPlan.planId === 'basic' ? 'linear-gradient(135deg,#3b82f6,#2563eb)'
+                       :                                 'linear-gradient(135deg,#94a3b8,#64748b)';
+      // Bar color tracks utilization — gives a visual cue to upgrade
+      // before the next call hits limit-mode.
+      const barColor = pct >= 100 ? 'linear-gradient(90deg,#ef4444,#dc2626)'
+                     : pct >= 80  ? 'linear-gradient(90deg,#f59e0b,#d97706)'
+                     :              'linear-gradient(90deg,#10b981,#059669)';
+      const rateLimitedFlag = codingPlan.rateLimited
+        ? `<span style="margin-left:auto;padding:1px 6px;background:rgba(239,68,68,0.18);color:#fca5a5;font-size:10px;font-weight:600;border-radius:4px">限流中</span>`
+        : '';
+      codingPlanBlock = `
+        <div style="padding:8px 0 10px;border-bottom:1px solid rgba(255,255,255,0.06)">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+            <span style="padding:1px 8px;background:${planChipBg};color:#fff;font-size:10px;font-weight:700;border-radius:5px;letter-spacing:0.3px">${escapeHtml(codingPlan.planName || codingPlan.planId || 'Trial')} Plan</span>
+            <span style="font-size:11px;color:var(--muted,#94a3b8)">Coding 套餐</span>
+            ${rateLimitedFlag}
+          </div>
+          <div style="display:flex;align-items:baseline;gap:6px;font-variant-numeric:tabular-nums">
+            <span style="font-size:18px;font-weight:700;color:#c7d2fe">${remaining}</span>
+            <span style="font-size:11px;color:var(--muted,#94a3b8)">/ ${limit} credits 剩余</span>
+          </div>
+          <div style="height:5px;border-radius:3px;background:rgba(255,255,255,0.08);overflow:hidden;margin-top:4px">
+            <div style="width:${pct}%;height:100%;background:${barColor};transition:width 0.4s ease"></div>
+          </div>
+        </div>
+      `;
+    }
     const memBadge = m.levelCode && m.levelCode !== 'FREE'
       ? `<span style="display:inline-block;padding:1px 8px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;font-size:10px;font-weight:700;border-radius:6px;letter-spacing:0.3px;margin-left:6px">${escapeHtml(m.levelCode)}</span>`
       : '';
@@ -179,6 +226,7 @@
           ${memLine}
         </div>
       </div>
+      ${codingPlanBlock}
       <div style="display:flex;align-items:baseline;justify-content:space-between;padding:8px 0">
         <span style="font-size:11px;color:var(--muted,#94a3b8);text-transform:uppercase;letter-spacing:0.4px">总可用积分</span>
         <span style="font-weight:700;font-size:20px;color:#c7d2fe;font-variant-numeric:tabular-nums">💎 ${total.toLocaleString()}</span>

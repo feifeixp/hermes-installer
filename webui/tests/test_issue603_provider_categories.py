@@ -188,11 +188,21 @@ class TestBuildSetupCatalog:
         assert orow["quick"] is True
 
     def test_catalog_no_quick_flag_on_others(self):
+        # The set of providers flagged as "quick start" has grown over time
+        # — originally only openrouter, later we added neodomain (the
+        # ga.neodomain.cn gateway) and neowow-coding-plan (Phase β's
+        # managed Coding-Plan entry point). This test guards against
+        # accidentally promoting *more* providers without thinking; if
+        # you genuinely want a new quick:True, update this allowlist
+        # in the same commit so reviewers see the change.
         cfg = {"model": {"provider": "openrouter", "default": "anthropic/claude-sonnet-4.6"}}
         catalog = _build_setup_catalog(cfg)
+        expected_quick = {"openrouter", "neodomain", "neowow-coding-plan"}
         for p in catalog["providers"]:
-            if p["id"] != "openrouter":
-                assert p["quick"] is False
+            if p["id"] in expected_quick:
+                assert p["quick"] is True, f'{p["id"]} should be quick'
+            else:
+                assert p["quick"] is False, f'{p["id"]} unexpectedly quick'
 
 
 # ── Backend: apply_onboarding_setup base_url handling ───────────────────

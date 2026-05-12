@@ -1055,6 +1055,76 @@ def _neodomain_get(path: str) -> dict:
         raise RuntimeError(f"Cannot reach Neodomain: {e.reason}")
 
 
+# ── Phase β: Coding Plan proxy ──────────────────────────────────────────────
+#
+# Mirror of get_points_info() but pointed at the dashboard's
+# /api/me/plan endpoint (which is Phase α's source of truth for
+# tiers + credits, separate from the Neodomain points pool — Coding
+# Plan is OUR billing layer on top of Neodomain's tokens).
+#
+# Used by:
+#   • Onboarding wizard — populates the model dropdown when the user
+#     selects the Neowow Coding Plan card (see _fetch_neowow_plan_models
+#     in onboarding.py — that's the inline copy of this fetch; we keep
+#     two because the onboarding side runs BEFORE the API surface is
+#     wired up, and inlining there keeps it independent).
+#   • Chat UI top-bar chip — shows "Pro · 2342 credits left"
+#   • /api/neowow/coding-plan endpoint (wired in routes.py) — exposes
+#     it to the static JS as a clean local call.
+def _dashboard_get_with_jwt(path: str) -> dict:
+    """GET <_NEOWOW_BASE><path> using the saved JWT as Bearer.
+    Same error shape as _neodomain_get for callers' uniform handling."""
+    jwt = get_jwt()
+    if not jwt:
+        raise ValueError(
+            "未登录 Neowow。点击下方「登录 Neowow」按钮先完成授权。"
+        )
+    url = _NEOWOW_BASE + path
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {jwt}",
+            "Accept":        "application/json",
+            "User-Agent":    "Hermes/coding-plan-proxy",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")
+            err  = (json.loads(body) or {}).get("error") or body
+        except Exception:
+            err = body or str(e)
+        if e.code in (401, 403):
+            raise RuntimeError(
+                f"Neowow Coding Plan 拒绝访问 ({e.code})：{err}。"
+                "可能 JWT 已过期，请重新登录。"
+            )
+        raise RuntimeError(f"Neowow Coding Plan API error ({e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach Neowow dashboard: {e.reason}")
+
+
+def get_coding_plan() -> dict:
+    """Return the user's Coding Plan summary as a flat dict the UI can
+    render directly:
+
+      {
+        planId, planName, creditsLimit, creditsUsed, creditsRemaining,
+        cycleEndAt, models: [...], rps, concurrent,
+        isTrial, rateLimited
+      }
+
+    No transformation needed — dashboard's /api/me/plan response shape
+    is already the one the WebUI expects. We just forward it.
+    """
+    return _dashboard_get_with_jwt("/api/me/plan")
+
+
 def get_points_info() -> dict:
     """Proxy GET /agent/user/points/info — returns the structured
     points + membership response shape documented in

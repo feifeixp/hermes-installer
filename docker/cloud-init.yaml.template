@@ -81,6 +81,14 @@ write_files:
             # JWT's userId matches this value — otherwise other users
             # with valid neoTokens could access THIS user's instance.
             HERMES_INSTANCE_OWNER_USERID: "%USER_ID%"
+            # Phase β: lock the onboarding wizard to the Neowow Coding
+            # Plan card only. Hides openai / anthropic / openrouter /
+            # ollama / custom from the dropdown so spawned cloud
+            # instances always bill through our /api/me/chat proxy
+            # (= credits + plan enforcement = revenue). Desktop builds
+            # may flip this off if the user explicitly wants to BYO
+            # provider, but cloud is hard-locked.
+            HERMES_NEOWOW_ONLY: "1"
           # M2: bind-mount (NOT named volume) so oss-sync.sh on the host
           # can read/write the same bytes the WebUI sees. Named volumes
           # live inside the Docker overlay storage and can't be ergonomically

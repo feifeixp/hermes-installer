@@ -2154,6 +2154,23 @@ def handle_get(handler, parsed) -> bool:
             logger.exception("neowow points failed")
             return bad(handler, str(e), status=500)
 
+    # Phase β: Coding Plan summary (plan id + remaining credits + model
+    # whitelist). Drives the onboarding wizard's model dropdown when
+    # neowow-coding-plan is selected, and the chat-UI top bar's plan
+    # chip. Cached on the dashboard side (read from TableStore) so a
+    # poll-every-30s pattern is fine.
+    if parsed.path == "/api/neowow/coding-plan":
+        from api.neowow import get_coding_plan
+        try:
+            return j(handler, get_coding_plan())
+        except ValueError as e:
+            return bad(handler, str(e))                     # no JWT saved
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)         # dashboard rejected / unreachable
+        except Exception as e:
+            logger.exception("neowow coding-plan failed")
+            return bad(handler, str(e), status=500)
+
     # Identity chip — proxies /api/me/whoami so the WebUI can render
     # "Logged in as <nickname> · ENTERPRISE" without exposing the
     # token to the browser. Cheap (one network call + one TableStore
