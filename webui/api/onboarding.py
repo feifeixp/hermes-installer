@@ -1038,6 +1038,11 @@ def get_onboarding_status() -> dict:
     # neowow-only mode, the wizard already shows a single "登录 Neowow"
     # card (see _build_setup_catalog), so the user just clicks that and
     # bounces through OAuth back into this same auto-complete path.
+    #
+    # IMPORTANT — DO NOT call apply_onboarding_setup() here. That helper
+    # ends with `return get_onboarding_status()`, which would recurse
+    # back into this branch and infinite-loop. Inline the file writes
+    # instead (same logic, just no terminal recursion).
     neowow_auto_completed = False
     if _neowow_only_enabled() and not settings.get("onboarding_completed"):
         try:
@@ -1047,18 +1052,40 @@ def get_onboarding_status() -> dict:
             _jwt = ""
         if _jwt:
             try:
+                _provider_meta = _SUPPORTED_PROVIDER_SETUPS[_NEOWOW_CODING_PLAN_PROVIDER_ID]
                 # Pick a sane default model. Live plan data, if reachable,
                 # has the user-specific whitelist; otherwise fall back to
                 # deepseek-chat (every tier — including trial — allows it).
                 _models, _default = _fetch_neowow_plan_models()
                 _chosen_model = (_default
                                  or (_models[0]["id"] if _models else "deepseek-chat"))
-                apply_onboarding_setup({
-                    "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
-                    "model":    _chosen_model,
-                    "api_key":  _jwt,
-                    "confirm_overwrite": True,   # silent — operator chose this build
-                })
+
+                _config_path = _get_config_path()
+                _env_path    = _get_active_hermes_home() / ".env"
+                _cfg         = _load_yaml_config(Path(_config_path))
+                _model_cfg   = _cfg.get("model", {})
+                if not isinstance(_model_cfg, dict):
+                    _model_cfg = {}
+                _model_cfg["provider"] = _NEOWOW_CODING_PLAN_PROVIDER_ID
+                _model_cfg["default"]  = _chosen_model
+                _model_cfg["base_url"] = _provider_meta["default_base_url"]
+                _cfg["model"] = _model_cfg
+                _save_yaml_config(Path(_config_path), _cfg)
+                _write_env_file(_env_path, {_provider_meta["env_var"]: _jwt})
+                os.environ[_provider_meta["env_var"]] = _jwt
+
+                # Reload the agent runtime so the next chat picks up the
+                # new key without a server restart. Best-effort.
+                try:
+                    from api.profiles import _reload_dotenv
+                    _reload_dotenv(_get_active_hermes_home())
+                except Exception:
+                    logger.debug("_reload_dotenv failed during auto-onboard", exc_info=True)
+                try:
+                    reload_config()
+                except Exception:
+                    logger.debug("reload_config failed during auto-onboard", exc_info=True)
+
                 save_settings({"onboarding_completed": True})
                 settings["onboarding_completed"] = True
                 neowow_auto_completed = True
