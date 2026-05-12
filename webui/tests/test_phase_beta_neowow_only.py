@@ -136,3 +136,83 @@ def apply_onboarding_setup_safely(ob_mod, body):
     Wraps the call so the test reads naturally (avoid inline import +
     monkeypatch shenanigans in the assertion line)."""
     return ob_mod.apply_onboarding_setup(body)
+
+
+# ─── Auto-onboard when flag-on + JWT present (Phase β.10) ───────────────────
+
+class TestNeowowAutoOnboard:
+    """The flag-on + JWT-present combination should skip the wizard
+    entirely — get_onboarding_status returns completed=True so the SPA
+    boots straight into chat. No human in the loop; both fields the
+    wizard would ask for (provider + key) are uniquely determined by
+    the build flag and the saved JWT."""
+
+    def _stub_writes(self, monkeypatch, tmp_path):
+        """Common setup — point all file writes at tmp_path and stub
+        the dashboard fetch (otherwise we'd hang on real network).
+        Also force load_settings/save_settings to a fresh in-memory dict
+        so test ordering doesn't matter: STATE_DIR is resolved at
+        api.config import time and can't be re-pointed via monkeypatch
+        of HERMES_WEBUI_STATE_DIR, so without this stub a previous
+        test's save_settings would leak into the next test."""
+        from api import onboarding as ob_mod
+        monkeypatch.setattr(ob_mod, "_get_config_path",        lambda: tmp_path / "config.yaml")
+        monkeypatch.setattr(ob_mod, "_get_active_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(ob_mod, "_load_yaml_config",       lambda p: {})
+        monkeypatch.setattr(ob_mod, "_load_env_file",          lambda p: {})
+        monkeypatch.setattr(ob_mod, "_save_yaml_config",       lambda p, c: None)
+        monkeypatch.setattr(ob_mod, "_write_env_file",         lambda p, d: None)
+        monkeypatch.setattr(ob_mod, "reload_config",           lambda: None)
+        monkeypatch.setattr(
+            ob_mod,
+            "_fetch_neowow_plan_models",
+            lambda: ([{"id": "deepseek-chat", "label": "DeepSeek Chat"}], "deepseek-chat"),
+        )
+        # Fresh in-memory settings store. save_settings writes back into
+        # this dict so the test can still observe the side effect; the
+        # next test gets a brand-new dict via tmp_path-scoped closure.
+        _settings: dict = {}
+        monkeypatch.setattr(ob_mod, "load_settings", lambda: dict(_settings))
+        monkeypatch.setattr(
+            ob_mod,
+            "save_settings",
+            lambda patch: _settings.update(patch) or dict(_settings),
+        )
+        return ob_mod
+
+    def test_flag_on_with_jwt_auto_completes(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_NEOWOW_ONLY", "1")
+        monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
+        ob_mod = self._stub_writes(monkeypatch, tmp_path)
+        import api.neowow as nw
+        monkeypatch.setattr(nw, "get_jwt", lambda: "eyJfake.payload.sig")
+        status = ob_mod.get_onboarding_status()
+        assert status["completed"] is True
+
+    def test_flag_on_without_jwt_falls_through_to_wizard(self, monkeypatch, tmp_path):
+        # Without a JWT the wizard is the only path to acquire one —
+        # don't silently auto-complete with a bogus key.
+        monkeypatch.setenv("HERMES_NEOWOW_ONLY", "1")
+        monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
+        ob_mod = self._stub_writes(monkeypatch, tmp_path)
+        import api.neowow as nw
+        monkeypatch.setattr(nw, "get_jwt", lambda: "")
+        status = ob_mod.get_onboarding_status()
+        assert status["completed"] is False
+        # Wizard still renders, single card.
+        assert [p["id"] for p in status["setup"]["providers"]] == ["neowow-coding-plan"]
+
+    def test_flag_off_with_jwt_does_not_auto_complete(self, monkeypatch, tmp_path):
+        # Auto-onboard only triggers when the build is locked. Without
+        # the flag, a stored JWT shouldn't force-pick neowow-coding-plan
+        # over whatever the user might want to configure.
+        monkeypatch.delenv("HERMES_NEOWOW_ONLY", raising=False)
+        monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
+        ob_mod = self._stub_writes(monkeypatch, tmp_path)
+        import api.neowow as nw
+        monkeypatch.setattr(nw, "get_jwt", lambda: "eyJfake.payload.sig")
+        status = ob_mod.get_onboarding_status()
+        # Falls through to the normal "config_auto_completed" gate,
+        # which itself requires config.yaml to exist — it doesn't, so
+        # completed should be False here too.
+        assert status["completed"] is False

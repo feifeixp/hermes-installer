@@ -1025,8 +1025,52 @@ def get_onboarding_status() -> dict:
         except Exception:
             logger.debug("Failed to persist onboarding_completed", exc_info=True)
 
+    # ── Phase β.10: Neowow auto-onboard ─────────────────────────────────
+    # When the build is locked to Coding Plan (HERMES_NEOWOW_ONLY=1) AND
+    # the user has already done the Neowow OAuth flow (JWT saved in
+    # ~/.hermes/webui/state.json via api.neowow.save_jwt), there's nothing
+    # for the user to choose — both fields the wizard exists to collect
+    # (provider + api_key) are uniquely determined by the build flag.
+    # Skip the wizard entirely, autowrite config.yaml + .env, and return
+    # completed=True so the SPA boots straight into chat.
+    #
+    # If JWT is missing, fall through to the normal wizard path — but in
+    # neowow-only mode, the wizard already shows a single "登录 Neowow"
+    # card (see _build_setup_catalog), so the user just clicks that and
+    # bounces through OAuth back into this same auto-complete path.
+    neowow_auto_completed = False
+    if _neowow_only_enabled() and not settings.get("onboarding_completed"):
+        try:
+            from api.neowow import get_jwt as _get_jwt
+            _jwt = (_get_jwt() or "").strip()
+        except Exception:
+            _jwt = ""
+        if _jwt:
+            try:
+                # Pick a sane default model. Live plan data, if reachable,
+                # has the user-specific whitelist; otherwise fall back to
+                # deepseek-chat (every tier — including trial — allows it).
+                _models, _default = _fetch_neowow_plan_models()
+                _chosen_model = (_default
+                                 or (_models[0]["id"] if _models else "deepseek-chat"))
+                apply_onboarding_setup({
+                    "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
+                    "model":    _chosen_model,
+                    "api_key":  _jwt,
+                    "confirm_overwrite": True,   # silent — operator chose this build
+                })
+                save_settings({"onboarding_completed": True})
+                settings["onboarding_completed"] = True
+                neowow_auto_completed = True
+            except Exception:
+                logger.debug("Neowow auto-onboard failed; falling through to wizard",
+                             exc_info=True)
+
     return {
-        "completed": bool(settings.get("onboarding_completed")) or auto_completed or config_auto_completed,
+        "completed": (bool(settings.get("onboarding_completed"))
+                      or auto_completed
+                      or config_auto_completed
+                      or neowow_auto_completed),
         "settings": {
             "default_model": settings.get("default_model") or DEFAULT_MODEL,
             "default_workspace": settings.get("default_workspace")
