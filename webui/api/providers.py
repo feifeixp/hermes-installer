@@ -64,6 +64,12 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
     # flip to "no key" after upgrading.
     "lmstudio": "LM_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
+    # Phase β: Neowow Coding Plan — the "key" is the Neodomain JWT stored
+    # locally via api.neowow.save_jwt(). NEOWOW_TOKEN is the .env var the
+    # auto-onboard flow writes; _provider_has_key inspects it like any
+    # other API-key provider so the Settings panel can show "已配置" /
+    # "未配置" without a separate code path for OAuth.
+    "neowow-coding-plan": "NEOWOW_TOKEN",
 }
 
 # Read-only legacy env-var aliases.  When `_provider_has_key(pid)` looks up its
@@ -493,6 +499,24 @@ def get_providers() -> dict[str, Any]:
     model_cfg = cfg.get("model", {})
     if isinstance(model_cfg, dict):
         active_provider = model_cfg.get("provider")
+
+    # ── Phase β.11: HERMES_NEOWOW_ONLY enforcement ──────────────────────
+    # The onboarding wizard already filters its provider grid via the
+    # same flag (see api.onboarding._neowow_only_enabled). The Settings
+    # → Providers tab uses a SEPARATE source — this function — so it
+    # was still leaking openai / anthropic / openrouter / kimi / etc.
+    # rows even on a Coding-Plan-locked build. Filter here too.
+    #
+    # We keep neowow-coding-plan + the currently-active provider (so a
+    # legacy config that points at e.g. anthropic doesn't visually
+    # vanish from the panel — users need to see "you have this old
+    # config; switch to Coding Plan to enable chat"). Everything else
+    # is dropped.
+    if os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}:
+        _keep = {"neowow-coding-plan"}
+        if active_provider:
+            _keep.add(active_provider)
+        providers = [p for p in providers if p["id"] in _keep]
 
     return {
         "providers": providers,

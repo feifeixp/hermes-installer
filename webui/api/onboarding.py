@@ -1043,8 +1043,27 @@ def get_onboarding_status() -> dict:
     # ends with `return get_onboarding_status()`, which would recurse
     # back into this branch and infinite-loop. Inline the file writes
     # instead (same logic, just no terminal recursion).
+    # Phase β.11 widening: also overwrite when an EXISTING config picked a
+    # different provider before the build was locked. Without this, a user
+    # who had model.provider=anthropic from a pre-NEOWOW_ONLY install
+    # would stay on anthropic — the Settings panel filter drops every
+    # other provider card, leaving the user staring at an anthropic row
+    # they can't actually use (no key). Re-running auto-onboard rewrites
+    # config.yaml in that case.
+    _existing_provider = str(
+        (cfg.get("model", {}) or {}).get("provider", "")
+            if isinstance(cfg.get("model"), dict) else ""
+    ).strip().lower()
+    _needs_neowow_overwrite = (
+        _neowow_only_enabled()
+        and _existing_provider
+        and _existing_provider != _NEOWOW_CODING_PLAN_PROVIDER_ID
+    )
+
     neowow_auto_completed = False
-    if _neowow_only_enabled() and not settings.get("onboarding_completed"):
+    if _neowow_only_enabled() and (
+        not settings.get("onboarding_completed") or _needs_neowow_overwrite
+    ):
         try:
             from api.neowow import get_jwt as _get_jwt
             _jwt = (_get_jwt() or "").strip()

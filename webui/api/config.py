@@ -548,6 +548,12 @@ _FALLBACK_MODELS = [
 
 # Provider display names for known Hermes provider IDs
 _PROVIDER_DISPLAY = {
+    # Phase β: the Neowow-flavoured entry point. Renders in:
+    #   - onboarding wizard (when HERMES_NEOWOW_ONLY=1, the only card)
+    #   - Settings → Providers panel (when HERMES_NEOWOW_ONLY=1, the only row)
+    # base_url points at the dashboard's Coding-Plan-billed proxy; the
+    # "key" is the user's Neodomain JWT stored locally.
+    "neowow-coding-plan": "Neowow Coding Plan",
     "neodomain": "Neodomain (ga.neodomain.cn)",
     "nous": "Nous Portal",
     "openrouter": "OpenRouter",
