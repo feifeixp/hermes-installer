@@ -141,6 +141,31 @@
       ]);
       const p = pointsRes.status === 'fulfilled' ? pointsRes.value : null;
       const cp = planRes.status === 'fulfilled' && planRes.value.ok ? planRes.value.d : null;
+
+      // Phase β.13: structured revocation signal. EITHER endpoint may
+      // detect a revoked / expired JWT (the Python helper auto-cleared
+      // it) and respond with `requireRelogin: true`. We treat both
+      // identically — render a focused "登录已失效，重新登录" card
+      // instead of the generic ⚠️ blob the user might miss.
+      const pointsRevoked = p && !p.ok && p.d && p.d.requireRelogin === true;
+      const planRevoked   = planRes.status === 'fulfilled'
+                          && !planRes.value.ok
+                          && planRes.value.d
+                          && planRes.value.d.requireRelogin === true;
+      if (pointsRevoked || planRevoked) {
+        const msg = (p?.d?.error || planRes.value?.d?.error
+                  || '登录凭据已失效，已自动清除本地状态。请点下方按钮重新登录。');
+        body.innerHTML = `
+          <div style="padding:14px 0;text-align:center">
+            <div style="font-size:24px;margin-bottom:8px">🔒</div>
+            <div style="font-weight:600;font-size:14px;margin-bottom:4px">登录已失效</div>
+            <div style="color:var(--muted,#94a3b8);font-size:12px;line-height:1.6;margin-bottom:14px">${escapeHtml(msg)}</div>
+            <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none;width:100%;padding:8px 12px;font-weight:600">🔑 重新登录 Neowow</button>
+          </div>
+        `;
+        return;
+      }
+
       if (!p || !p.ok) {
         const d = p?.d || {};
         body.innerHTML = `

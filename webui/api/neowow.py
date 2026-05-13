@@ -1010,13 +1010,64 @@ def get_whoami() -> dict:
 _NEODOMAIN_BASE = "https://neowow.neodomain.cn"
 
 
+# ── JWT lifecycle helpers (Phase β.13) ──────────────────────────────────────
+#
+# Neodomain enforces single-active-session — when the user logs in on
+# another device, prior JWTs are server-side revoked. The old code would
+# surface "Token has been revoked" forever because the dead JWT stayed in
+# state.json and every subsequent request re-sent it.
+#
+# Auto-clear strategy: when a request returns 401/403 AND the error body
+# mentions "revoked"/"expired"/"invalid", we delete the stored JWT
+# AND raise JwtRevokedError. Route handlers map this to a structured
+# 401 response so the UI can show "Re-login" instead of a generic blob.
+
+class JwtRevokedError(RuntimeError):
+    """Raised when Neodomain/dashboard rejects the stored JWT and we've
+    already cleared it. UI should prompt re-login, not retry."""
+    def __init__(self, msg: str, upstream_code: int):
+        super().__init__(msg)
+        self.upstream_code = upstream_code
+
+
+_REVOKED_HINTS = ("revoked", "expired", "invalid token", "已过期", "已失效", "已撤销")
+
+
+def _looks_like_revocation(body: str, err: str) -> bool:
+    """Heuristic — does this 401/403 actually mean the JWT is dead?
+    We can't auto-clear on every 401 because some endpoints return 401
+    for unrelated reasons (e.g. missing scope on a deploy_token). So we
+    only clear when the body explicitly says "revoked" / "expired" /
+    similar."""
+    text = (body + " " + err).lower()
+    return any(h in text for h in _REVOKED_HINTS)
+
+
+def _auto_clear_revoked(body: str, err: str, code: int):
+    """When 401/403 + revocation hint detected, clear local JWT so the
+    next request shows the logged-out state. Raises JwtRevokedError to
+    short-circuit the route handler."""
+    if _looks_like_revocation(body, err):
+        try:
+            clear_jwt()
+        except Exception:
+            logger.debug("clear_jwt during auto-revoke failed", exc_info=True)
+        raise JwtRevokedError(
+            f"Neowow 登录已失效（{code}）：{err.strip() or '可能在另一台设备重新登录过'}。"
+            "已自动清除本地凭据，请点「重新登录 Neowow」。",
+            upstream_code=code,
+        )
+
+
 def _neodomain_get(path: str) -> dict:
     """GET <NEODOMAIN_BASE><path> with the saved JWT.
 
     Surfaces the same exceptions the cloud-config proxy does so route
     handlers can map them uniformly:
-      ValueError   → no JWT saved (UI tells user to log in)
-      RuntimeError → HTTP / transport error
+      ValueError       → no JWT saved (UI tells user to log in)
+      JwtRevokedError  → JWT was rejected as revoked / expired, we
+                         already cleared it (UI shows re-login button)
+      RuntimeError     → other HTTP / transport error
     """
     jwt = get_jwt()
     if not jwt:
@@ -1044,9 +1095,14 @@ def _neodomain_get(path: str) -> dict:
         except Exception:
             err = body or str(e)
         # 401 / 403 → JWT likely expired (Neodomain JWTs ~30 days).
-        # Tell the caller so the UI can prompt for re-login instead
-        # of showing a generic error.
+        # If the body explicitly mentions revocation/expiry, auto-clear
+        # the local JWT + raise JwtRevokedError (route handler maps to
+        # structured re-login prompt). Otherwise fall through to a
+        # generic 502 — JWT stays in state.json on the assumption that
+        # the 401 was caused by something else (server hiccup, scope
+        # mismatch, etc.).
         if e.code in (401, 403):
+            _auto_clear_revoked(body, err, e.code)
             raise RuntimeError(
                 f"Neodomain 拒绝访问 ({e.code})：{err}。可能 JWT 已过期，请重新登录。"
             )
@@ -1100,6 +1156,11 @@ def _dashboard_get_with_jwt(path: str) -> dict:
         except Exception:
             err = body or str(e)
         if e.code in (401, 403):
+            # Phase β.13: same auto-clear-on-revoke heuristic as
+            # _neodomain_get. Dashboard's /api/me/* responses include
+            # the original Neodomain "Token has been revoked" text
+            # pass-through, so the same hint scan catches both rails.
+            _auto_clear_revoked(body, err, e.code)
             raise RuntimeError(
                 f"Neowow Coding Plan 拒绝访问 ({e.code})：{err}。"
                 "可能 JWT 已过期，请重新登录。"

@@ -2142,12 +2142,32 @@ def handle_get(handler, parsed) -> bool:
     # /agent/user/points/info via the saved JWT. Returns the platform's
     # data verbatim (totalAvailablePoints, pointsDetails, membershipInfo)
     # so the UI can mirror what the dashboard's UserPoints chip shows.
+    # ── Phase β.13: structured revocation response ────────────────────
+    # When the JWT helpers in api.neowow auto-clear a revoked token,
+    # they raise JwtRevokedError (a RuntimeError subclass). The catch
+    # order matters — JwtRevokedError MUST sit ABOVE the generic
+    # RuntimeError handler in each try block below. We return 401 +
+    # `requireRelogin: true` so neowow.js's popover swaps to the
+    # "Re-login Neowow" button instead of dumping a raw error blob.
+    def _maybe_revoked(handler_, e):
+        from api.neowow import JwtRevokedError
+        if isinstance(e, JwtRevokedError):
+            return j(handler_, {
+                "error":          str(e),
+                "code":           "jwt_revoked",
+                "requireRelogin": True,
+                "upstreamCode":   getattr(e, "upstream_code", 401),
+            }, status=401)
+        return None
+
     if parsed.path == "/api/neowow/points":
-        from api.neowow import get_points_info
+        from api.neowow import get_points_info, JwtRevokedError
         try:
             return j(handler, get_points_info())
         except ValueError as e:
             return bad(handler, str(e))            # no JWT saved
+        except JwtRevokedError as e:
+            return _maybe_revoked(handler, e)      # JWT auto-cleared; UI re-logins
         except RuntimeError as e:
             return bad(handler, str(e), status=502)  # Neodomain rejected / unreachable
         except Exception as e:
@@ -2160,11 +2180,13 @@ def handle_get(handler, parsed) -> bool:
     # chip. Cached on the dashboard side (read from TableStore) so a
     # poll-every-30s pattern is fine.
     if parsed.path == "/api/neowow/coding-plan":
-        from api.neowow import get_coding_plan
+        from api.neowow import get_coding_plan, JwtRevokedError
         try:
             return j(handler, get_coding_plan())
         except ValueError as e:
             return bad(handler, str(e))                     # no JWT saved
+        except JwtRevokedError as e:
+            return _maybe_revoked(handler, e)
         except RuntimeError as e:
             return bad(handler, str(e), status=502)         # dashboard rejected / unreachable
         except Exception as e:
@@ -2176,11 +2198,13 @@ def handle_get(handler, parsed) -> bool:
     # token to the browser. Cheap (one network call + one TableStore
     # getRow on the dashboard side) so safe to refresh on panel-open.
     if parsed.path == "/api/neowow/whoami":
-        from api.neowow import get_whoami
+        from api.neowow import get_whoami, JwtRevokedError
         try:
             return j(handler, get_whoami())
         except ValueError as e:
             return bad(handler, str(e))                    # missing token
+        except JwtRevokedError as e:
+            return _maybe_revoked(handler, e)
         except RuntimeError as e:
             return bad(handler, str(e), status=502)        # upstream
         except Exception as e:
