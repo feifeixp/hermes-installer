@@ -65,7 +65,12 @@ class TestNeowowOnlyCatalog:
         assert p["id"] == "neowow-coding-plan"
         assert p["default_base_url"] == "https://app.neowow.studio/api/me"
         assert p["key_optional"] is True            # JWT comes from local store
-        assert p["env_var"] == "NEOWOW_TOKEN"
+        # Phase β.14: env_var is OPENAI_API_KEY (not NEOWOW_TOKEN) because
+        # the auto-onboard now writes config.yaml's provider=openai (the
+        # agent CLI doesn't know "neowow-coding-plan" — it's a UI label).
+        # Agent CLI auto-derives env-var-name from provider, so the lookup
+        # is `OPENAI_API_KEY` regardless of what label the UI shows.
+        assert p["env_var"] == "OPENAI_API_KEY"
         assert p["quick"] is True
         # Static fallback list when /api/me/plan is unreachable.
         # Phase ε swapped the bake-in defaults to the actual chat models
@@ -190,6 +195,75 @@ class TestNeowowAutoOnboard:
         monkeypatch.setattr(nw, "get_jwt", lambda: "eyJfake.payload.sig")
         status = ob_mod.get_onboarding_status()
         assert status["completed"] is True
+
+    def test_auto_onboard_writes_openai_runtime_provider(self, monkeypatch, tmp_path):
+        """Phase β.14: auto-onboard must write provider='openai' (not the
+        UI label 'neowow-coding-plan') so the agent CLI's openai-compatible
+        path handles dispatch. Likewise env var is OPENAI_API_KEY, the
+        name agent CLI auto-derives from the provider field."""
+        monkeypatch.setenv("HERMES_NEOWOW_ONLY", "1")
+        monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
+        ob_mod = self._stub_writes(monkeypatch, tmp_path)
+        import api.neowow as nw
+
+        # Capture every write
+        written_cfg: dict = {}
+        written_env: dict = {}
+        monkeypatch.setattr(ob_mod, "_save_yaml_config", lambda p, c: written_cfg.update(c))
+        monkeypatch.setattr(ob_mod, "_write_env_file",   lambda p, d: written_env.update(d))
+        monkeypatch.setattr(nw, "get_jwt", lambda: "eyJfake.payload.sig")
+
+        status = ob_mod.get_onboarding_status()
+        assert status["completed"] is True
+        # config.yaml has the AGENT-RECOGNIZED provider name + our proxy URL
+        assert written_cfg.get("model", {}).get("provider") == "openai"
+        assert written_cfg.get("model", {}).get("base_url") == "https://app.neowow.studio/api/me"
+        # .env has the JWT under the name the agent CLI looks up
+        assert written_env.get("OPENAI_API_KEY") == "eyJfake.payload.sig"
+        # And NOT under the old broken name
+        assert "NEOWOW_TOKEN" not in written_env
+
+    def test_auto_fix_bogus_neowow_provider_in_existing_config(self, monkeypatch, tmp_path):
+        """When config.yaml has the pre-fix Phase-β.10 literal
+        provider='neowow-coding-plan' (which the agent CLI can't dispatch),
+        get_onboarding_status must trigger re-onboard to rewrite it as
+        provider='openai'. Loop-breaker: once rewritten to canonical, the
+        next status check sees the canonical shape + doesn't re-trigger."""
+        monkeypatch.setenv("HERMES_NEOWOW_ONLY", "1")
+        monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
+        ob_mod = self._stub_writes(monkeypatch, tmp_path)
+        import api.neowow as nw
+
+        # Simulate existing config.yaml with the bogus value. Note —
+        # get_onboarding_status reads via get_config() (cached), NOT
+        # _load_yaml_config — so we patch the cached-getter directly.
+        # _load_yaml_config is used by the auto-onboard branch's OWN
+        # read so we also patch it (returns the same bogus shape).
+        _bogus_cfg = {
+            "model": {
+                "provider": "neowow-coding-plan",        # bogus
+                "base_url": "https://app.neowow.studio/api/me",
+                "default": "deepseek-v4-flash",
+            }
+        }
+        monkeypatch.setattr(ob_mod, "get_config",        lambda: _bogus_cfg)
+        monkeypatch.setattr(ob_mod, "_load_yaml_config", lambda p: _bogus_cfg)
+        # Pretend onboarding was already marked complete by pre-fix code
+        _settings: dict = {"onboarding_completed": True}
+        monkeypatch.setattr(ob_mod, "load_settings", lambda: dict(_settings))
+        monkeypatch.setattr(
+            ob_mod, "save_settings",
+            lambda patch: _settings.update(patch) or dict(_settings),
+        )
+
+        written_cfg: dict = {}
+        monkeypatch.setattr(ob_mod, "_save_yaml_config", lambda p, c: written_cfg.update(c))
+        monkeypatch.setattr(ob_mod, "_write_env_file",   lambda p, d: None)
+        monkeypatch.setattr(nw, "get_jwt", lambda: "eyJfake.payload.sig")
+
+        ob_mod.get_onboarding_status()
+        # Was auto-rewritten — provider field now uses the agent name.
+        assert written_cfg.get("model", {}).get("provider") == "openai"
 
     def test_flag_on_without_jwt_falls_through_to_wizard(self, monkeypatch, tmp_path):
         # Without a JWT the wizard is the only path to acquire one —

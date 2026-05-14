@@ -76,6 +76,15 @@ def _neowow_dashboard_base() -> str:
 
 _NEOWOW_CODING_PLAN_PROVIDER_ID = "neowow-coding-plan"
 
+# The provider id we ACTUALLY write to config.yaml's model.provider
+# field. Hermes agent CLI uses this to dispatch the call — it must be
+# a name the CLI recognizes. "openai" works because the CLI treats it
+# as "OpenAI-compatible endpoint" and reads OPENAI_API_KEY + base_url.
+# We separately keep _NEOWOW_CODING_PLAN_PROVIDER_ID as the UI-level
+# label so the wizard / settings panel show "Neowow Coding Plan" even
+# though the underlying runtime calls go through the openai provider.
+_NEOWOW_RUNTIME_PROVIDER = "openai"
+
 
 def _neowow_coding_plan_default_models() -> list[dict]:
     """Last-resort fallback model list when the dashboard's /api/me/plan
@@ -94,11 +103,19 @@ _SUPPORTED_PROVIDER_SETUPS = {
     # Catalogued FIRST so it shows up first in the wizard when not gated.
     _NEOWOW_CODING_PLAN_PROVIDER_ID: {
         "label": "Neowow Coding Plan (推荐 · 自动按套餐计费)",
-        # JWT stored via api/neowow.save_jwt(); we don't write it into
-        # .env so it can't leak to other processes. The env_var below is
-        # kept for parity with the wizard's other entries — the runtime
-        # bridge in providers.py rewrites it on the fly.
-        "env_var": "NEOWOW_TOKEN",
+        # IMPORTANT — env_var MUST be OPENAI_API_KEY because at write
+        # time we ALSO rewrite config.yaml's model.provider to "openai"
+        # (see _NEOWOW_RUNTIME_PROVIDER below). The agent CLI auto-
+        # derives the env var name from the provider field:
+        #   provider: "openai"  →  reads OPENAI_API_KEY
+        # We can't use a Neowow-specific name like NEOWOW_TOKEN here
+        # because the agent CLI doesn't know what "neowow-coding-plan"
+        # is — it's a UI-level id only. Hermes/v0.50.x lookup:
+        #   `${provider.upper()}_API_KEY` (preserves dashes), so a
+        # provider literal of "neowow-coding-plan" would generate
+        # `NEOWOW-CODING-PLAN_API_KEY` — unfriendly and not what we
+        # write. Cleaner to ride openai-compatible provider routing.
+        "env_var": "OPENAI_API_KEY",
         # Default model is decided dynamically (from /api/me/plan). When
         # the plan endpoint is unreachable, fall back to deepseek-v4-flash
         # which every tier (incl. trial) can access on ga.neodomain.cn.
@@ -1055,10 +1072,31 @@ def get_onboarding_status() -> dict:
         (cfg.get("model", {}) or {}).get("provider", "")
             if isinstance(cfg.get("model"), dict) else ""
     ).strip().lower()
+    # Canonical Coding Plan config shape (post-fix):
+    #   model.provider = "openai"
+    #   model.base_url = "https://app.neowow.studio/api/me"
+    # When in HERMES_NEOWOW_ONLY mode and existing config.yaml DOESN'T
+    # match that shape, force re-onboard to rewrite it. This catches:
+    #   (a) Bogus pre-fix Phase β.10 builds that wrote provider literal
+    #       "neowow-coding-plan" — agent CLI rejects with
+    #       NEOWOW-CODING-PLAN_API_KEY env var error.
+    #   (b) User configured BYO openai pointing at api.openai.com (not
+    #       our proxy) — coding plan won't bill correctly.
+    #   (c) Any other provider (anthropic, deepseek) configured pre-β.
+    # The base_url check is the loop-breaker — once we've rewritten to
+    # canonical, _existing_provider == _NEOWOW_RUNTIME_PROVIDER AND
+    # base_url matches, so the trigger goes false and we don't re-onboard.
+    _model_cfg_existing = cfg.get("model", {}) if isinstance(cfg.get("model"), dict) else {}
+    _existing_base_url = str(_model_cfg_existing.get("base_url", "") or "").strip()
+    _neowow_proxy_base = "https://app.neowow.studio/api/me"
+    _is_canonical_coding_plan = (
+        _existing_provider == _NEOWOW_RUNTIME_PROVIDER
+        and _existing_base_url == _neowow_proxy_base
+    )
     _needs_neowow_overwrite = (
         _neowow_only_enabled()
         and _existing_provider
-        and _existing_provider != _NEOWOW_CODING_PLAN_PROVIDER_ID
+        and not _is_canonical_coding_plan
     )
 
     neowow_auto_completed = False
@@ -1087,7 +1125,12 @@ def get_onboarding_status() -> dict:
                 _model_cfg   = _cfg.get("model", {})
                 if not isinstance(_model_cfg, dict):
                     _model_cfg = {}
-                _model_cfg["provider"] = _NEOWOW_CODING_PLAN_PROVIDER_ID
+                # Write the agent-recognized runtime provider name, NOT
+                # the UI label. agent CLI reads model.provider to pick
+                # the routing strategy; "openai" + base_url = call our
+                # /api/me/chat/completions proxy. See
+                # _NEOWOW_RUNTIME_PROVIDER comment above.
+                _model_cfg["provider"] = _NEOWOW_RUNTIME_PROVIDER
                 _model_cfg["default"]  = _chosen_model
                 _model_cfg["base_url"] = _provider_meta["default_base_url"]
                 _cfg["model"] = _model_cfg
@@ -1235,8 +1278,17 @@ def apply_onboarding_setup(body: dict) -> dict:
     if not isinstance(model_cfg, dict):
         model_cfg = {}
 
-    model_cfg["provider"] = provider
-    model_cfg["default"] = _normalize_model_for_provider(provider, model)
+    # When the UI submits "neowow-coding-plan", remap to the agent-
+    # recognized runtime provider name. The UI keeps the friendly
+    # label everywhere — the rewrite happens only at the config.yaml
+    # write boundary. See _NEOWOW_RUNTIME_PROVIDER comment above.
+    runtime_provider = (
+        _NEOWOW_RUNTIME_PROVIDER
+        if provider == _NEOWOW_CODING_PLAN_PROVIDER_ID
+        else provider
+    )
+    model_cfg["provider"] = runtime_provider
+    model_cfg["default"] = _normalize_model_for_provider(runtime_provider, model)
 
     if provider_meta.get("requires_base_url"):
         model_cfg["base_url"] = base_url
