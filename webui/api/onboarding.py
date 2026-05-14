@@ -78,12 +78,23 @@ _NEOWOW_CODING_PLAN_PROVIDER_ID = "neowow-coding-plan"
 
 # The provider id we ACTUALLY write to config.yaml's model.provider
 # field. Hermes agent CLI uses this to dispatch the call — it must be
-# a name the CLI recognizes. "openai" works because the CLI treats it
-# as "OpenAI-compatible endpoint" and reads OPENAI_API_KEY + base_url.
+# a name the CLI recognizes via PROVIDER_REGISTRY.
+#
+# We use "custom" (NOT "openai") because that's the canonical
+# OpenAI-compat fall-through name in hermes-agent's PROVIDER_REGISTRY.
+# Confirmed empirically: "openai" exists as a KEY in PROVIDER_REGISTRY
+# but maps to {} — meaning agent CLI's resolve_runtime_provider raises
+# AuthError("Unknown provider 'openai'") even when OPENAI_API_KEY is
+# set in env. "custom" is the registered alias that:
+#   - Reads OPENAI_API_KEY from env (same env var we write)
+#   - Honors model.base_url (so the call routes to our proxy)
+#   - Is documented in api.config._SUPPORTED_PROVIDER_SETUPS["custom"]
+#     with `"env_var": "OPENAI_API_KEY"`
+#
 # We separately keep _NEOWOW_CODING_PLAN_PROVIDER_ID as the UI-level
 # label so the wizard / settings panel show "Neowow Coding Plan" even
-# though the underlying runtime calls go through the openai provider.
-_NEOWOW_RUNTIME_PROVIDER = "openai"
+# though the underlying runtime calls go through the custom provider.
+_NEOWOW_RUNTIME_PROVIDER = "custom"
 
 
 def _neowow_coding_plan_default_models() -> list[dict]:

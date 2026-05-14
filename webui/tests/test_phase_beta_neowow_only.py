@@ -65,11 +65,12 @@ class TestNeowowOnlyCatalog:
         assert p["id"] == "neowow-coding-plan"
         assert p["default_base_url"] == "https://app.neowow.studio/api/me"
         assert p["key_optional"] is True            # JWT comes from local store
-        # Phase β.14: env_var is OPENAI_API_KEY (not NEOWOW_TOKEN) because
-        # the auto-onboard now writes config.yaml's provider=openai (the
-        # agent CLI doesn't know "neowow-coding-plan" — it's a UI label).
-        # Agent CLI auto-derives env-var-name from provider, so the lookup
-        # is `OPENAI_API_KEY` regardless of what label the UI shows.
+        # Phase β.14+.16: env_var is OPENAI_API_KEY (not NEOWOW_TOKEN)
+        # because the auto-onboard writes config.yaml's provider='custom'
+        # (the agent CLI doesn't know "neowow-coding-plan" — it's a UI
+        # label — and 'openai' exists in PROVIDER_REGISTRY but maps to {}
+        # so it errors with "Unknown provider 'openai'". 'custom' is the
+        # canonical OpenAI-compat fall-through that reads OPENAI_API_KEY).
         assert p["env_var"] == "OPENAI_API_KEY"
         assert p["quick"] is True
         # Static fallback list when /api/me/plan is unreachable.
@@ -197,7 +198,7 @@ class TestNeowowAutoOnboard:
         assert status["completed"] is True
 
     def test_auto_onboard_writes_openai_runtime_provider(self, monkeypatch, tmp_path):
-        """Phase β.14: auto-onboard must write provider='openai' (not the
+        """Phase β.14: auto-onboard must write provider='custom' (not the
         UI label 'neowow-coding-plan') so the agent CLI's openai-compatible
         path handles dispatch. Likewise env var is OPENAI_API_KEY, the
         name agent CLI auto-derives from the provider field."""
@@ -216,7 +217,7 @@ class TestNeowowAutoOnboard:
         status = ob_mod.get_onboarding_status()
         assert status["completed"] is True
         # config.yaml has the AGENT-RECOGNIZED provider name + our proxy URL
-        assert written_cfg.get("model", {}).get("provider") == "openai"
+        assert written_cfg.get("model", {}).get("provider") == "custom"
         assert written_cfg.get("model", {}).get("base_url") == "https://app.neowow.studio/api/me"
         # .env has the JWT under the name the agent CLI looks up
         assert written_env.get("OPENAI_API_KEY") == "eyJfake.payload.sig"
@@ -227,7 +228,7 @@ class TestNeowowAutoOnboard:
         """When config.yaml has the pre-fix Phase-β.10 literal
         provider='neowow-coding-plan' (which the agent CLI can't dispatch),
         get_onboarding_status must trigger re-onboard to rewrite it as
-        provider='openai'. Loop-breaker: once rewritten to canonical, the
+        provider='custom'. Loop-breaker: once rewritten to canonical, the
         next status check sees the canonical shape + doesn't re-trigger."""
         monkeypatch.setenv("HERMES_NEOWOW_ONLY", "1")
         monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
@@ -263,7 +264,7 @@ class TestNeowowAutoOnboard:
 
         ob_mod.get_onboarding_status()
         # Was auto-rewritten — provider field now uses the agent name.
-        assert written_cfg.get("model", {}).get("provider") == "openai"
+        assert written_cfg.get("model", {}).get("provider") == "custom"
 
     def test_flag_on_without_jwt_falls_through_to_wizard(self, monkeypatch, tmp_path):
         # Without a JWT the wizard is the only path to acquire one —
