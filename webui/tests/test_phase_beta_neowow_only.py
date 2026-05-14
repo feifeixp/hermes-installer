@@ -66,12 +66,12 @@ class TestNeowowOnlyCatalog:
         assert p["default_base_url"] == "https://app.neowow.studio/api/me"
         assert p["key_optional"] is True            # JWT comes from local store
         # Phase β.14+.16: env_var is OPENAI_API_KEY (not NEOWOW_TOKEN)
-        # because the auto-onboard writes config.yaml's provider='custom'
+        # because the auto-onboard writes config.yaml's provider='neowow-coding-plan'
         # (the agent CLI doesn't know "neowow-coding-plan" — it's a UI
         # label — and 'openai' exists in PROVIDER_REGISTRY but maps to {}
         # so it errors with "Unknown provider 'openai'". 'custom' is the
         # canonical OpenAI-compat fall-through that reads OPENAI_API_KEY).
-        assert p["env_var"] == "OPENAI_API_KEY"
+        assert p["env_var"] == "NEOWOW_CODING_PLAN_API_KEY"
         assert p["quick"] is True
         # Static fallback list when /api/me/plan is unreachable.
         # Phase ε swapped the bake-in defaults to the actual chat models
@@ -197,11 +197,14 @@ class TestNeowowAutoOnboard:
         status = ob_mod.get_onboarding_status()
         assert status["completed"] is True
 
-    def test_auto_onboard_writes_openai_runtime_provider(self, monkeypatch, tmp_path):
-        """Phase β.14: auto-onboard must write provider='custom' (not the
-        UI label 'neowow-coding-plan') so the agent CLI's openai-compatible
-        path handles dispatch. Likewise env var is OPENAI_API_KEY, the
-        name agent CLI auto-derives from the provider field."""
+    def test_auto_onboard_writes_canonical_runtime_provider(self, monkeypatch, tmp_path):
+        """Phase ζ: auto-onboard writes provider='neowow-coding-plan' to
+        config.yaml. This name is now a real entry in hermes_cli's
+        PROVIDER_REGISTRY (injected at install time by
+        docker/patch_hermes_agent.py), so the agent CLI can dispatch it
+        natively without going through openai-compat aliases. Env var
+        is NEOWOW_CODING_PLAN_API_KEY (canonical), with OPENAI_API_KEY
+        accepted as a fallback for backward-compat with β.14/.16."""
         monkeypatch.setenv("HERMES_NEOWOW_ONLY", "1")
         monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
         ob_mod = self._stub_writes(monkeypatch, tmp_path)
@@ -216,33 +219,36 @@ class TestNeowowAutoOnboard:
 
         status = ob_mod.get_onboarding_status()
         assert status["completed"] is True
-        # config.yaml has the AGENT-RECOGNIZED provider name + our proxy URL
-        assert written_cfg.get("model", {}).get("provider") == "custom"
+        # config.yaml has the canonical provider name + our proxy URL
+        assert written_cfg.get("model", {}).get("provider") == "neowow-coding-plan"
         assert written_cfg.get("model", {}).get("base_url") == "https://app.neowow.studio/api/me"
-        # .env has the JWT under the name the agent CLI looks up
-        assert written_env.get("OPENAI_API_KEY") == "eyJfake.payload.sig"
-        # And NOT under the old broken name
+        # .env has the JWT under the canonical name
+        assert written_env.get("NEOWOW_CODING_PLAN_API_KEY") == "eyJfake.payload.sig"
+        # And NOT under either of the old broken names
         assert "NEOWOW_TOKEN" not in written_env
 
     def test_auto_fix_bogus_neowow_provider_in_existing_config(self, monkeypatch, tmp_path):
-        """When config.yaml has the pre-fix Phase-β.10 literal
-        provider='neowow-coding-plan' (which the agent CLI can't dispatch),
-        get_onboarding_status must trigger re-onboard to rewrite it as
-        provider='custom'. Loop-breaker: once rewritten to canonical, the
-        next status check sees the canonical shape + doesn't re-trigger."""
+        """When config.yaml has a non-canonical provider value (e.g. the
+        intermediate Phase β.14 'openai' or β.16 'custom' attempts that
+        agent CLI couldn't dispatch), get_onboarding_status must trigger
+        re-onboard to rewrite it as the Phase ζ canonical
+        'neowow-coding-plan' (now registered in PROVIDER_REGISTRY via
+        patch_hermes_agent.py). Loop-breaker: once rewritten, the next
+        status check sees provider == canonical name + base_url match
+        and doesn't re-trigger."""
         monkeypatch.setenv("HERMES_NEOWOW_ONLY", "1")
         monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
         ob_mod = self._stub_writes(monkeypatch, tmp_path)
         import api.neowow as nw
 
-        # Simulate existing config.yaml with the bogus value. Note —
+        # Simulate existing config.yaml with the bogus β.16-era value.
         # get_onboarding_status reads via get_config() (cached), NOT
         # _load_yaml_config — so we patch the cached-getter directly.
         # _load_yaml_config is used by the auto-onboard branch's OWN
         # read so we also patch it (returns the same bogus shape).
         _bogus_cfg = {
             "model": {
-                "provider": "neowow-coding-plan",        # bogus
+                "provider": "custom",                    # β.16 attempt, not canonical anymore
                 "base_url": "https://app.neowow.studio/api/me",
                 "default": "deepseek-v4-flash",
             }
@@ -264,7 +270,7 @@ class TestNeowowAutoOnboard:
 
         ob_mod.get_onboarding_status()
         # Was auto-rewritten — provider field now uses the agent name.
-        assert written_cfg.get("model", {}).get("provider") == "custom"
+        assert written_cfg.get("model", {}).get("provider") == "neowow-coding-plan"
 
     def test_flag_on_without_jwt_falls_through_to_wizard(self, monkeypatch, tmp_path):
         # Without a JWT the wizard is the only path to acquire one —

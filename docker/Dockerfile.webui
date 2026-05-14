@@ -113,6 +113,15 @@ WORKDIR /opt/hermes/hermes-installer
 # Output goes to stdout so docker build logs show progress.
 RUN python3 webui/bootstrap.py --install-only --no-browser
 
+# Post-install patch: inject the `neowow-coding-plan` provider into
+# the upstream hermes-agent that bootstrap.py just cloned. Without
+# this, hermes_cli's PROVIDER_REGISTRY has no entry for the id we
+# write into config.yaml and every chat call errors with
+# "Unknown provider 'neowow-coding-plan'". Idempotent — re-running
+# is a no-op once the provider is registered.
+RUN python3 /opt/hermes/hermes-installer/docker/patch_hermes_agent.py \
+        --agent-dir /opt/hermes/.hermes/hermes-agent
+
 # ── Runtime ──────────────────────────────────────────────────────────────────
 USER hermes
 WORKDIR /opt/hermes/hermes-installer

@@ -80,21 +80,20 @@ _NEOWOW_CODING_PLAN_PROVIDER_ID = "neowow-coding-plan"
 # field. Hermes agent CLI uses this to dispatch the call — it must be
 # a name the CLI recognizes via PROVIDER_REGISTRY.
 #
-# We use "custom" (NOT "openai") because that's the canonical
-# OpenAI-compat fall-through name in hermes-agent's PROVIDER_REGISTRY.
-# Confirmed empirically: "openai" exists as a KEY in PROVIDER_REGISTRY
-# but maps to {} — meaning agent CLI's resolve_runtime_provider raises
-# AuthError("Unknown provider 'openai'") even when OPENAI_API_KEY is
-# set in env. "custom" is the registered alias that:
-#   - Reads OPENAI_API_KEY from env (same env var we write)
-#   - Honors model.base_url (so the call routes to our proxy)
-#   - Is documented in api.config._SUPPORTED_PROVIDER_SETUPS["custom"]
-#     with `"env_var": "OPENAI_API_KEY"`
+# As of Phase ζ this matches the UI label: we register
+# `neowow-coding-plan` directly in upstream hermes-agent via the
+# post-install patch script (docker/patch_hermes_agent.py). The
+# Dockerfile runs the script after bootstrap.py installs hermes-agent
+# from upstream, so by the time the container starts, PROVIDER_REGISTRY
+# has the entry that maps `neowow-coding-plan` → our proxy base URL +
+# NEOWOW_CODING_PLAN_API_KEY env var.
 #
-# We separately keep _NEOWOW_CODING_PLAN_PROVIDER_ID as the UI-level
-# label so the wizard / settings panel show "Neowow Coding Plan" even
-# though the underlying runtime calls go through the custom provider.
-_NEOWOW_RUNTIME_PROVIDER = "custom"
+# Earlier phases tried "openai" (β.14) and "custom" (β.16) thinking
+# hermes_cli had a generic OpenAI-compat fall-through. Both failed:
+# "openai" maps to {} in PROVIDER_REGISTRY (raises Unknown provider)
+# and "custom" isn't registered at all. Patching the agent + using a
+# Neowow-specific name is the cleanest semantic.
+_NEOWOW_RUNTIME_PROVIDER = "neowow-coding-plan"
 
 
 def _neowow_coding_plan_default_models() -> list[dict]:
@@ -114,19 +113,14 @@ _SUPPORTED_PROVIDER_SETUPS = {
     # Catalogued FIRST so it shows up first in the wizard when not gated.
     _NEOWOW_CODING_PLAN_PROVIDER_ID: {
         "label": "Neowow Coding Plan (推荐 · 自动按套餐计费)",
-        # IMPORTANT — env_var MUST be OPENAI_API_KEY because at write
-        # time we ALSO rewrite config.yaml's model.provider to "openai"
-        # (see _NEOWOW_RUNTIME_PROVIDER below). The agent CLI auto-
-        # derives the env var name from the provider field:
-        #   provider: "openai"  →  reads OPENAI_API_KEY
-        # We can't use a Neowow-specific name like NEOWOW_TOKEN here
-        # because the agent CLI doesn't know what "neowow-coding-plan"
-        # is — it's a UI-level id only. Hermes/v0.50.x lookup:
-        #   `${provider.upper()}_API_KEY` (preserves dashes), so a
-        # provider literal of "neowow-coding-plan" would generate
-        # `NEOWOW-CODING-PLAN_API_KEY` — unfriendly and not what we
-        # write. Cleaner to ride openai-compatible provider routing.
-        "env_var": "OPENAI_API_KEY",
+        # Canonical env var name for the registered provider. After
+        # docker/patch_hermes_agent.py injects the ProviderConfig into
+        # PROVIDER_REGISTRY, hermes_cli looks up the JWT under either
+        # NEOWOW_CODING_PLAN_API_KEY (primary) or OPENAI_API_KEY
+        # (fallback, for backward compat with the β.14/.16 attempts
+        # that wrote OPENAI_API_KEY). We write under the canonical
+        # name from now on.
+        "env_var": "NEOWOW_CODING_PLAN_API_KEY",
         # Default model is decided dynamically (from /api/me/plan). When
         # the plan endpoint is unreachable, fall back to deepseek-v4-flash
         # which every tier (incl. trial) can access on ga.neodomain.cn.
