@@ -203,6 +203,14 @@ def main() -> None:
     except Exception as e:
         print(f'[!!] WARNING: Gateway watcher failed to start: {e}', flush=True)
 
+    # Phase ζ.5 — surface config mismatches in container logs at boot
+    # instead of waiting for users to hit cryptic chat-time errors.
+    try:
+        from api.startup_check import run_startup_checks
+        run_startup_checks()
+    except Exception as e:
+        print(f'[!!] WARNING: startup self-checks raised: {e}', flush=True)
+
     httpd = QuietHTTPServer((HOST, PORT), Handler)
 
     # ── TLS/HTTPS setup (optional) ─────────────────────────────────────────

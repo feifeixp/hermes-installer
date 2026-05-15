@@ -216,11 +216,98 @@ def _patch_providers_py(agent_dir: Path) -> bool:
 
 # ─── Entry ──────────────────────────────────────────────────────────────────
 
+def _verify_provider_registered(agent_dir: Path) -> tuple[bool, str]:
+    """Post-patch sanity check — read the source files BACK and confirm
+    our markers are present. Returns (ok, reason).
+
+    Why we re-read instead of trusting the inject functions: if the
+    file got rewritten between patch + verify (rare but possible during
+    parallel CI runs), we want to catch it. Also catches the case
+    where the inject finds the dict but the source file we wrote is
+    syntactically broken (e.g. mismatched braces upstream changed) —
+    Python won't import → import_check below will fail.
+    """
+    auth_f = agent_dir / "hermes_cli" / "auth.py"
+    providers_f = agent_dir / "hermes_cli" / "providers.py"
+    if not auth_f.exists():
+        return False, f"auth.py missing at {auth_f}"
+    if not providers_f.exists():
+        return False, f"providers.py missing at {providers_f}"
+    if _AUTH_PY_MARKER not in auth_f.read_text(encoding="utf-8"):
+        return False, f"auth.py marker '{_AUTH_PY_MARKER[:40]}...' not present after patch"
+    if _PROVIDERS_PY_MARKER not in providers_f.read_text(encoding="utf-8"):
+        return False, f"providers.py marker '{_PROVIDERS_PY_MARKER[:40]}...' not present after patch"
+    return True, "ok"
+
+
+def _verify_provider_imports(agent_dir: Path) -> tuple[bool, str]:
+    """Boot-time import test — actually import hermes_cli.auth and
+    check PROVIDER_REGISTRY has the entry. Catches the case where the
+    .py file looks right but Python rejects the syntax (e.g. an
+    upstream upgrade renamed ProviderConfig field names).
+
+    This is the ULTIMATE acceptance test. If this passes, chat
+    dispatch will work. If it fails, the image build SHOULD abort
+    rather than ship a container that boots fine but errors on every
+    chat request.
+
+    Runs in a subprocess so we don't fight with sys.modules state in
+    the caller (mid-import deletion of hermes_cli modules used to
+    crash dependent modules already cached). The subprocess gets a
+    fresh Python with the agent_dir prepended to sys.path."""
+    import subprocess
+    import textwrap
+
+    probe = textwrap.dedent(f"""
+        import sys
+        sys.path.insert(0, {str(agent_dir)!r})
+        try:
+            from hermes_cli.auth import PROVIDER_REGISTRY
+        except Exception as e:
+            print(f"FAIL: import failed: {{type(e).__name__}}: {{e}}")
+            raise SystemExit(2)
+        if 'neowow-coding-plan' not in PROVIDER_REGISTRY:
+            print("FAIL: PROVIDER_REGISTRY missing 'neowow-coding-plan' "
+                  "(upstream may have moved the dict / renamed the const)")
+            raise SystemExit(3)
+        entry = PROVIDER_REGISTRY['neowow-coding-plan']
+        if not hasattr(entry, 'inference_base_url'):
+            print(f"FAIL: entry has unexpected shape: {{type(entry).__name__}}")
+            raise SystemExit(4)
+        print(f"OK base_url={{entry.inference_base_url}}")
+    """).strip()
+
+    # Use the agent's own venv python if available so the import
+    # sees its real third-party deps (httpx, pydantic, etc.). Falls
+    # back to the parent interpreter if not (--skip-import-verify is
+    # the escape hatch for that case).
+    venv_py = agent_dir / "venv" / "bin" / "python"
+    py = str(venv_py) if venv_py.exists() else sys.executable
+
+    try:
+        out = subprocess.run(
+            [py, "-c", probe],
+            capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "import probe timed out after 30s"
+    except Exception as e:
+        return False, f"subprocess failed: {type(e).__name__}: {e}"
+
+    msg = (out.stdout + out.stderr).strip()
+    if out.returncode != 0:
+        return False, msg or f"exit code {out.returncode}"
+    return True, msg or "ok"
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--agent-dir", help="Override hermes-agent install dir")
     p.add_argument("--check", action="store_true",
                    help="Print which patches are needed without applying")
+    p.add_argument("--skip-import-verify", action="store_true",
+                   help="Skip the import-time verification (useful when the "
+                        "agent venv isn't on PATH yet, e.g. mid-Dockerfile)")
     args = p.parse_args(argv)
 
     try:
@@ -245,10 +332,46 @@ def main(argv: list[str] | None = None) -> int:
 
     changed_auth = _patch_auth_py(agent_dir)
     changed_prov = _patch_providers_py(agent_dir)
+
+    # ── FAIL-HARD post-patch verification ───────────────────────────────
+    # Previously this script returned 0 even when individual injects
+    # failed silently — the Dockerfile RUN step passed, the image was
+    # built, deployed, and the container booted "healthy" but every
+    # chat call errored "Unknown provider 'neowow-coding-plan'". Caught
+    # the user in the Phase β.10 → ζ debugging tail-spin.
+    #
+    # Strict mode now: if the file-content markers aren't present
+    # after the run, OR if importing hermes_cli.auth shows the entry
+    # is still missing, exit non-zero so the Dockerfile RUN aborts.
+    # Image builds fail loudly instead of producing a broken artifact.
+
+    ok_files, why_files = _verify_provider_registered(agent_dir)
+    if not ok_files:
+        print(f"[patch] ❌ POST-PATCH VERIFY FAILED (files): {why_files}",
+              file=sys.stderr)
+        print("[patch] Did upstream hermes-agent refactor PROVIDER_REGISTRY?",
+              file=sys.stderr)
+        print("[patch] Check docs/CODING_PLAN_PROVIDER.md for the manual recipe.",
+              file=sys.stderr)
+        return 2
+
+    if not args.skip_import_verify:
+        ok_imp, why_imp = _verify_provider_imports(agent_dir)
+        if not ok_imp:
+            print(f"[patch] ❌ POST-PATCH VERIFY FAILED (import): {why_imp}",
+                  file=sys.stderr)
+            print("[patch] The .py was patched but Python can't import it cleanly.",
+                  file=sys.stderr)
+            print("[patch] Most likely an upstream rename or struct change.",
+                  file=sys.stderr)
+            print("[patch] Check docs/CODING_PLAN_PROVIDER.md.", file=sys.stderr)
+            return 3
+        print(f"[patch] ✓ POST-PATCH VERIFY OK (import): {why_imp}")
+
     if not (changed_auth or changed_prov):
         print("[patch] No changes needed (provider already registered).")
         return 0
-    print("[patch] Patches applied. hermes_cli will resolve "
+    print("[patch] ✓ Patches applied + verified. hermes_cli resolves "
           "'neowow-coding-plan' on next import.")
     return 0
 

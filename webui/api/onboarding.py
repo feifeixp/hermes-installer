@@ -96,6 +96,50 @@ _NEOWOW_CODING_PLAN_PROVIDER_ID = "neowow-coding-plan"
 _NEOWOW_RUNTIME_PROVIDER = "neowow-coding-plan"
 
 
+def _agent_recognizes_provider(provider_id: str) -> tuple[bool, str]:
+    """Verify the agent CLI's PROVIDER_REGISTRY actually has an entry
+    for `provider_id` with a non-empty config. Returns (ok, reason).
+
+    Used as a SAFETY GATE before any write to config.yaml's model
+    .provider field — catches the Phase β.10/β.14/β.16 class of bug
+    where the WebUI cheerfully wrote a provider name that hermes_cli
+    later couldn't dispatch ("Unknown provider 'foo'" at chat time).
+
+    Note: dict.get(name, {}) returns the default {} for BOTH "key not
+    present" and (theoretically) "key present but empty dict". The
+    agent has historical entries that map to {} as placeholders —
+    those are NOT real providers. We treat them as missing.
+    """
+    try:
+        from hermes_cli.auth import PROVIDER_REGISTRY
+    except ImportError as e:
+        # The agent CLI isn't installed in this Python environment (common
+        # in CI / unit-test runs where hermes-agent isn't on sys.path).
+        # We can't verify, but writing config.yaml is harmless in that
+        # case — there's no agent process to dispatch chat through anyway.
+        # Treat as "deferred" rather than "fail" so we don't block the
+        # WebUI from completing onboarding on a host where the agent will
+        # be installed later. The runtime startup_check (api/startup_check.py)
+        # re-runs this verification when the agent IS importable and logs
+        # loudly there.
+        logger.warning(
+            "agent_recognizes_provider: cannot verify %r — hermes_cli "
+            "not importable here (%s). Skipping gate; runtime startup_check "
+            "will catch a mismatch at agent-boot time.",
+            provider_id, e,
+        )
+        return True, f"hermes_cli not importable in this env (deferred): {e}"
+    entry = PROVIDER_REGISTRY.get(provider_id)
+    if entry is None:
+        return False, f"'{provider_id}' not in PROVIDER_REGISTRY"
+    # ProviderConfig has __dict__; an empty placeholder dict won't
+    if not hasattr(entry, "inference_base_url") and not (
+        isinstance(entry, dict) and entry
+    ):
+        return False, f"'{provider_id}' present but empty (placeholder entry)"
+    return True, "ok"
+
+
 def _neowow_coding_plan_default_models() -> list[dict]:
     """Last-resort fallback model list when the dashboard's /api/me/plan
     is unreachable AND the user hasn't picked a plan yet. Kept tiny on
@@ -1105,9 +1149,27 @@ def get_onboarding_status() -> dict:
     )
 
     neowow_auto_completed = False
-    if _neowow_only_enabled() and (
+    _should_auto_onboard = _neowow_only_enabled() and (
         not settings.get("onboarding_completed") or _needs_neowow_overwrite
-    ):
+    )
+    if _should_auto_onboard:
+        # ── Phase ζ.5 safety gate: bail BEFORE writing config.yaml if
+        # hermes_cli won't recognize the provider we're about to write.
+        # Without this, we'd silently produce a config.yaml that breaks
+        # chat dispatch later — the original sin of β.10/β.14/β.16.
+        _ok, _reason = _agent_recognizes_provider(_NEOWOW_RUNTIME_PROVIDER)
+        if not _ok:
+            logger.error(
+                "[neowow auto-onboard] REFUSING TO WRITE config.yaml: "
+                "agent CLI doesn't recognize provider '%s' (%s). "
+                "Run docker/patch_hermes_agent.py against the agent install, "
+                "or update _NEOWOW_RUNTIME_PROVIDER in api/onboarding.py to "
+                "match an existing PROVIDER_REGISTRY entry. See "
+                "docs/CODING_PLAN_PROVIDER.md for the recipe.",
+                _NEOWOW_RUNTIME_PROVIDER, _reason,
+            )
+            _should_auto_onboard = False
+    if _should_auto_onboard:
         try:
             from api.neowow import get_jwt as _get_jwt
             _jwt = (_get_jwt() or "").strip()
@@ -1292,6 +1354,29 @@ def apply_onboarding_setup(body: dict) -> dict:
         if provider == _NEOWOW_CODING_PLAN_PROVIDER_ID
         else provider
     )
+    # Phase ζ.5 safety gate — same idea as auto-onboard. Refuse to
+    # persist a config.yaml whose provider field hermes_cli will later
+    # reject. Without this we recreate the β.10/β.14/β.16 silent-fail
+    # class of bug.
+    #
+    # Scope: ONLY enforce for the Neowow-managed runtime provider. The
+    # other entries in _SUPPORTED_PROVIDER_SETUPS are a curated list and
+    # hermes_cli intentionally handles some of them (openrouter, custom)
+    # via special-case logic in resolve_provider() rather than the
+    # PROVIDER_REGISTRY dict — applying the gate uniformly would falsely
+    # reject those known-good aggregators. The gate's actual job is to
+    # protect our auto-generated/managed name from drifting against the
+    # patched agent registry.
+    if runtime_provider == _NEOWOW_RUNTIME_PROVIDER:
+        _ok, _reason = _agent_recognizes_provider(runtime_provider)
+        if not _ok:
+            raise ValueError(
+                f"Provider '{runtime_provider}' is not registered with the "
+                f"hermes_cli agent ({_reason}). The WebUI refuses to write "
+                f"config.yaml because chat dispatch would fail at runtime. "
+                f"See docs/CODING_PLAN_PROVIDER.md for the recipe to register "
+                f"a new provider."
+            )
     model_cfg["provider"] = runtime_provider
     model_cfg["default"] = _normalize_model_for_provider(runtime_provider, model)
 
