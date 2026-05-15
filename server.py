@@ -4,11 +4,109 @@ Thin routing shell: imports Handler, delegates to api/routes.py, runs server.
 All business logic lives in api/*.
 """
 import logging
+import os
 import socket
 import sys
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# ── Test-mode network isolation ─────────────────────────────────────────────
+# When `HERMES_WEBUI_TEST_NETWORK_BLOCK=1` is set in the environment, refuse
+# outbound socket connections to anything that is not loopback / RFC1918 /
+# link-local / reserved-TLD. This catches accidental real outbound (forgotten
+# mocks, leaked credentials triggering SDK init, new code paths bypassing an
+# existing mock) so the test suite stays hermetic and fast.
+#
+# tests/conftest.py sets this env var on every test_server subprocess so the
+# server.py-side network isolation matches the pytest-process-side isolation
+# already installed there.
+#
+# A test that legitimately needs real outbound spawns the server with the env
+# var unset (no current callers — every test_server-using test should be
+# mockable).
+if os.environ.get("HERMES_WEBUI_TEST_NETWORK_BLOCK", "").strip() in ("1", "true", "yes"):
+    _REAL_CREATE_CONN = socket.create_connection
+    _REAL_SOCK_CONNECT = socket.socket.connect
+
+    import re as _re
+
+    def _re_match_unique_local_ipv6(h):
+        """Match IPv6 fc00::/7 (canonical syntax). Tighter than startswith('fc')
+        so we don't mistakenly classify hostnames like 'food.example.com' as local."""
+        return bool(_re.match(r"^f[cd][0-9a-f]{0,2}:", h))
+
+    def _addr_is_local(host):
+        if not isinstance(host, str):
+            return False
+        h = host.strip().lower()
+        if not h:
+            return False
+        # IPv6 unique-local fc00::/7: require hex pair + colon to avoid
+        # matching hostnames like "food.example.com" or "fdsa.test".
+        if h in ("::1", "0:0:0:0:0:0:0:1") or h.startswith("fe80:") or _re_match_unique_local_ipv6(h):
+            return True
+        if h == "localhost" or h.endswith(".localhost"):
+            return True
+        if h.endswith(".local") or h.endswith(".test") or h.endswith(".invalid"):
+            return True
+        if h == "example.com" or h.endswith(".example.com"):
+            return True
+        if h == "example.net" or h.endswith(".example.net"):
+            return True
+        if h == "example.org" or h.endswith(".example.org"):
+            return True
+        if h.endswith(".example"):
+            return True
+        if h and h[0].isdigit() and h.count(".") == 3:
+            try:
+                o1, o2, o3, o4 = [int(p) for p in h.split(".")]
+            except ValueError:
+                return False
+            if o1 == 127:
+                return True
+            if o1 == 10:
+                return True
+            if o1 == 192 and o2 == 168:
+                return True
+            if o1 == 172 and 16 <= o2 <= 31:
+                return True
+            if o1 == 169 and o2 == 254:
+                return True
+            if o1 == 203 and o2 == 0 and o3 == 113:
+                return True
+        return False
+
+    def _blocked_create_connection(address, *a, **kw):
+        try:
+            host = address[0]
+        except (TypeError, IndexError):
+            host = ""
+        if _addr_is_local(host):
+            return _REAL_CREATE_CONN(address, *a, **kw)
+        raise OSError(
+            f"hermes test network isolation (server.py): outbound to {address!r} blocked"
+        )
+
+    def _blocked_socket_connect(self, address):
+        try:
+            host = address[0]
+        except (TypeError, IndexError):
+            host = ""
+        if _addr_is_local(host):
+            return _REAL_SOCK_CONNECT(self, address)
+        raise OSError(
+            f"hermes test network isolation (server.py): socket.connect to {address!r} blocked"
+        )
+
+    socket.create_connection = _blocked_create_connection
+    socket.socket.connect = _blocked_socket_connect
+
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - resource is Unix-only
+    resource = None
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -17,7 +115,7 @@ from api.auth import check_auth
 from api.config import HOST, PORT, STATE_DIR, SESSION_DIR, DEFAULT_WORKSPACE
 from api.helpers import j, get_profile_cookie
 from api.profiles import set_request_profile, clear_request_profile
-from api.routes import handle_get, handle_post
+from api.routes import handle_delete, handle_get, handle_patch, handle_post
 from api.startup import auto_install_agent_deps, fix_credential_permissions
 from api.updates import WEBUI_VERSION
 
@@ -26,19 +124,31 @@ class QuietHTTPServer(ThreadingHTTPServer):
     """Custom HTTP server that silently handles common network errors."""
     daemon_threads = True
     request_queue_size = 64
-    
-    def server_bind(self):
-        """Set socket options to prevent TIME_WAIT and CLOSE-WAIT accumulation."""
-        # Enable address reuse to avoid "Address already in use" errors
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # Enable TCP keepalive to detect dead connections (Linux)
-        try:
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)   # Start probing after 60s idle
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)  # Probe every 10s
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)     # Drop after 3 failed probes
-        except (OSError, AttributeError):
-            pass  # TCP_KEEP* may not be available on all platforms
-        super().server_bind()
+
+    def __init__(self, *args, **kwargs):
+        server_address = args[0] if args else kwargs.get('server_address', None)
+        if server_address and ':' in server_address[0]:
+            self.address_family = socket.AF_INET6
+        super().__init__(*args, **kwargs)
+        self.accept_loop_requests_total = 0
+        self.accept_loop_last_request_at = 0.0
+
+    def _handle_request_noblock(self):
+        """Record accept-loop progress before dispatching a request handler.
+
+        A process can be alive and still stop accepting/dispatching requests.
+        Exposing this heartbeat on /health gives supervisors and watchdogs a
+        cheap signal that the accept loop is still moving.
+
+        Note: this method is called only from the single ``serve_forever()``
+        thread in CPython socketserver, so the un-locked ``+=`` increment is
+        safe — there is no other thread mutating these counters. The /health
+        readers may see a stale value momentarily but never an inconsistent
+        one (Python int reads are atomic). Per Opus advisor on stage-297.
+        """
+        self.accept_loop_requests_total += 1
+        self.accept_loop_last_request_at = time.time()
+        return super()._handle_request_noblock()
     
     def handle_error(self, request, client_address):
         """Override to suppress logging for common client disconnect errors."""
@@ -63,21 +173,57 @@ class Handler(BaseHTTPRequestHandler):
     timeout = 30  # seconds — kills idle/incomplete connections to prevent thread exhaustion
     
     def setup(self):
-        """Set additional socket options for each connection."""
+        """Set socket options for each accepted connection."""
         super().setup()
-        # Enable TCP keepalive on the connection socket (not just server socket)
+        # TCP_NODELAY — universal, disables Nagle for HTTP latency
         try:
-            import socket
-            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Disable Nagle's algorithm
-            # Aggressive keepalive: start after 10s idle, probe every 5s, drop after 3 failures
-            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
-            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
-            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        # SO_KEEPALIVE — universal master switch (must be set before timing params)
+        try:
             self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        except (OSError, AttributeError):
-            pass  # May not be available on all platforms
+        except OSError:
+            pass
+        # Per-platform timing parameters
+        if hasattr(socket, 'TCP_KEEPIDLE'):  # Linux
+            try:
+                self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
+                self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+                self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            except OSError:
+                pass
+        elif hasattr(socket, 'TCP_KEEPALIVE'):  # macOS
+            try:
+                self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, 10)
+            except OSError:
+                pass
     _ver_suffix = WEBUI_VERSION.removeprefix('v')
     server_version = ('HermesWebUI/' + _ver_suffix) if _ver_suffix != 'unknown' else 'HermesWebUI'
+    _CSP_REPORT_ONLY = (
+        "default-src 'self'; "
+        "base-uri 'self'; "
+        "object-src 'none'; "
+        "frame-ancestors 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data: blob:; "
+        "font-src 'self' data:; "
+        "media-src 'self' data: blob:; "
+        "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "
+        "report-uri /api/csp-report; report-to csp-endpoint"
+    )
+    _CSP_REPORT_TO = '{"group":"csp-endpoint","max_age":10886400,"endpoints":[{"url":"/api/csp-report"}]}'
+
+    @classmethod
+    def csp_report_only_policy(cls) -> str:
+        return cls._CSP_REPORT_ONLY
+
+    def end_headers(self) -> None:
+        self.send_header("Content-Security-Policy-Report-Only", self.csp_report_only_policy())
+        self.send_header("Report-To", self._CSP_REPORT_TO)
+        super().end_headers()
+
     def log_message(self, fmt, *args): pass  # suppress default Apache-style log
 
     def log_request(self, code: str='-', size: str='-') -> None:
@@ -111,7 +257,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             clear_request_profile()
 
-    def do_POST(self) -> None:
+    def _handle_write(self, route_func) -> None:
         self._req_t0 = time.time()
         # Per-request profile context from cookie (issue #798)
         cookie_profile = get_profile_cookie(self)
@@ -119,8 +265,16 @@ class Handler(BaseHTTPRequestHandler):
             set_request_profile(cookie_profile)
         try:
             parsed = urlparse(self.path)
-            if not check_auth(self, parsed): return
-            result = handle_post(self, parsed)
+            # Stage-346 Opus SHOULD-FIX defense-in-depth: scope the CSP-report
+            # auth carve-out to POST only. The endpoint is intentionally
+            # unauthenticated (browsers omit cookies on CSP reports), but the
+            # carve-out should not extend to PATCH/DELETE on that path even
+            # though they currently fail through CSRF/routing fallthrough.
+            _is_csp_report_post = (
+                parsed.path == "/api/csp-report" and self.command == "POST"
+            )
+            if not _is_csp_report_post and not check_auth(self, parsed): return
+            result = route_func(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
         except Exception as e:
@@ -129,11 +283,59 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             clear_request_profile()
 
+    def do_POST(self) -> None:
+        self._handle_write(handle_post)
+
+    def do_PATCH(self) -> None:
+        self._handle_write(handle_patch)
+
+    def do_DELETE(self) -> None:
+        self._handle_write(handle_delete)
+
+
+def _raise_fd_soft_limit(target: int = 4096) -> dict:
+    """Best-effort raise of RLIMIT_NOFILE for persistent WebUI hosts.
+
+    macOS launchd jobs often start with a 256 soft limit. If a future FD leak
+    regresses, that low ceiling turns a leak into a hard HTTP wedge quickly.
+    Raising the soft limit does not hide leaks; it buys enough headroom for
+    diagnostics and watchdog recovery.
+    """
+    if resource is None:
+        return {"status": "unsupported"}
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+    # On Unix, RLIM_INFINITY is commonly a large int; keep the logic explicit
+    # so tests can use ordinary integers without depending on platform values.
+    desired = int(target)
+    if hard not in (-1, getattr(resource, "RLIM_INFINITY", object())):
+        desired = min(desired, int(hard))
+    if soft >= desired:
+        return {"status": "unchanged", "soft": soft, "hard": hard}
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (desired, hard))
+    except Exception as exc:
+        return {"status": "error", "soft": soft, "hard": hard, "error": str(exc)}
+    return {"status": "raised", "soft": desired, "hard": hard, "previous_soft": soft}
+
 
 def main() -> None:
     from api.config import print_startup_config, verify_hermes_imports, _HERMES_FOUND
 
     print_startup_config()
+
+    fd_limit = _raise_fd_soft_limit()
+    if fd_limit.get("status") == "raised":
+        print(
+            f"[ok] Raised file descriptor soft limit "
+            f"{fd_limit.get('previous_soft')} -> {fd_limit.get('soft')}",
+            flush=True,
+        )
+    elif fd_limit.get("status") == "error":
+        print(f"[!!] WARNING: Could not raise file descriptor limit: {fd_limit.get('error')}", flush=True)
 
     # Fix sensitive file permissions before doing anything else
     fix_credential_permissions()
@@ -143,8 +345,13 @@ def main() -> None:
     # its .bak (the data-loss shape #1558 produced), restore from the .bak.
     # Safe to run unconditionally — a clean install is a no-op.
     try:
+        from api.models import _active_state_db_path
         from api.session_recovery import recover_all_sessions_on_startup
-        result = recover_all_sessions_on_startup(SESSION_DIR)
+        result = recover_all_sessions_on_startup(
+            SESSION_DIR,
+            rebuild_index=True,
+            state_db_path=_active_state_db_path(),
+        )
         if result.get("restored"):
             print(f"[recovery] Restored {result['restored']}/{result['scanned']} sessions from .bak (see #1558).", flush=True)
     except Exception as exc:
@@ -170,7 +377,7 @@ def main() -> None:
         print(f'     Set a password via Settings or HERMES_WEBUI_PASSWORD env var.', flush=True)
         print(f'     To suppress: bind to 127.0.0.1 or set a password.', flush=True)
         if within_container:
-            print(f'     Note: You are running within a container, must bind to 0.0.0.0 to publish the port.', flush=True)
+            print(f'     Note: You are running within a container, must bind to 0.0.0.0 (IPv4) or :: (IPv6) to publish the port.', flush=True)
     elif not is_auth_enabled():
         print(f'  [tip] No password set. Any process on this machine can read sessions', flush=True)
         print(f'        and memory via the local API. Set HERMES_WEBUI_PASSWORD to', flush=True)
@@ -221,7 +428,7 @@ def main() -> None:
             scheme = 'http'
 
     print(f'  Hermes Web UI listening on {scheme}://{HOST}:{PORT}', flush=True)
-    if HOST == '127.0.0.1' or within_container:
+    if HOST in ('127.0.0.1', '::1') or within_container:
         print(f'  Remote access: ssh -N -L {PORT}:127.0.0.1:{PORT} <user>@<your-server>', flush=True)
     print(f'  Then open:     {scheme}://localhost:{PORT}', flush=True)
     print('', flush=True)

@@ -20,6 +20,7 @@ This test reproduces the data loss path against the on-disk session file.
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -130,6 +131,53 @@ def test_clear_stale_stream_state_preserves_messages(temp_session_dir):
     )
 
 
+def test_archive_route_reloads_metadata_only_cached_session(temp_session_dir, monkeypatch):
+    """Archiving must upgrade cached metadata-only stubs before save()."""
+    from types import SimpleNamespace
+
+    import api.routes as routes
+    from api.models import LOCK, SESSIONS, Session, get_session
+    monkeypatch.setattr(routes, "SESSIONS", SESSIONS)
+
+    sid = _make_session_on_disk(temp_session_dir, n_msgs=12, with_active_stream=False)
+    stub = get_session(sid, metadata_only=True)
+    assert getattr(stub, "_loaded_metadata_only", False) is True
+    assert stub.messages == []
+
+    # Reproduce the bad cache state: get_session() returns cached entries before
+    # considering the requested load mode, so a metadata-only stub in SESSIONS
+    # used to flow straight into archive mutation and hit the #1558 save guard.
+    with LOCK:
+        SESSIONS[sid] = stub
+
+    captured = {}
+    monkeypatch.setattr(routes, "_check_csrf", lambda handler: True)
+    monkeypatch.setattr(routes, "read_body", lambda handler: {"session_id": sid, "archived": True})
+    monkeypatch.setattr(
+        routes,
+        "j",
+        lambda handler, payload, status=200, extra_headers=None: captured.update(
+            payload=payload,
+            status=status,
+        )
+        or True,
+    )
+
+    assert routes.handle_post(object(), SimpleNamespace(path="/api/session/archive")) is True
+
+    assert captured["status"] == 200
+    assert captured["payload"]["session"]["archived"] is True
+
+    reloaded = Session.load(sid)
+    assert reloaded.archived is True
+    assert len(reloaded.messages) == 12
+
+    with LOCK:
+        cached = SESSIONS[sid]
+    assert getattr(cached, "_loaded_metadata_only", False) is False
+    assert len(cached.messages) == 12
+
+
 def test_save_writes_bak_when_messages_shrink(temp_session_dir):
     """The backup safeguard: a save that shrinks messages must leave a .bak."""
     from api.models import Session
@@ -204,6 +252,71 @@ def test_recover_all_sessions_on_startup_restores_shrunken_session(temp_session_
     assert len(restored["messages"]) == 1000
 
 
+def test_recover_all_sessions_on_startup_restores_orphan_bak(temp_session_dir):
+    """Startup self-heal: if only <sid>.json.bak survived, recreate <sid>.json."""
+    sid = _make_session_on_disk(temp_session_dir, n_msgs=293)
+    live_path = temp_session_dir / f"{sid}.json"
+    bak_path = temp_session_dir / f"{sid}.json.bak"
+    bak_path.write_text(live_path.read_text(encoding="utf-8"), encoding="utf-8")
+    live_path.unlink()
+
+    from api.session_recovery import recover_all_sessions_on_startup
+    result = recover_all_sessions_on_startup(temp_session_dir)
+
+    assert result["restored"] == 1
+    assert result["scanned"] == 1
+    assert result.get("orphaned_backups") == 1
+    restored = json.loads(live_path.read_text(encoding="utf-8"))
+    assert len(restored["messages"]) == 293
+
+
+def test_recover_all_sessions_on_startup_rebuilds_index_after_orphan_restore(temp_session_dir, monkeypatch):
+    """A restored orphan must be visible through the WebUI session index immediately."""
+    import api.models as _m
+
+    sid = _make_session_on_disk(temp_session_dir, n_msgs=42)
+    live_path = temp_session_dir / f"{sid}.json"
+    bak_path = temp_session_dir / f"{sid}.json.bak"
+    bak_path.write_text(live_path.read_text(encoding="utf-8"), encoding="utf-8")
+    live_path.unlink()
+
+    stale_index = temp_session_dir / "_index.json"
+    stale_index.write_text(json.dumps([]), encoding="utf-8")
+    monkeypatch.setattr(_m, "SESSION_INDEX_FILE", stale_index)
+
+    from api.session_recovery import recover_all_sessions_on_startup
+    result = recover_all_sessions_on_startup(temp_session_dir, rebuild_index=True)
+
+    assert result["restored"] == 1
+    index = json.loads(stale_index.read_text(encoding="utf-8"))
+    assert [entry["session_id"] for entry in index] == [sid]
+    assert index[0]["message_count"] == 42
+
+
+def test_orphan_bak_recovery_skips_sessions_absent_from_state_db(temp_session_dir):
+    """Do not resurrect an explicitly deleted session when state.db lacks the row."""
+    import sqlite3
+
+    sid = _make_session_on_disk(temp_session_dir, n_msgs=12)
+    live_path = temp_session_dir / f"{sid}.json"
+    bak_path = temp_session_dir / f"{sid}.json.bak"
+    bak_path.write_text(live_path.read_text(encoding="utf-8"), encoding="utf-8")
+    live_path.unlink()
+
+    state_db = temp_session_dir / "state.db"
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("create table sessions (id text primary key)")
+        conn.execute("insert into sessions (id) values (?)", ("different_session",))
+
+    from api.session_recovery import recover_all_sessions_on_startup
+    result = recover_all_sessions_on_startup(temp_session_dir, state_db_path=state_db)
+
+    assert result["restored"] == 0
+    assert result["scanned"] == 0
+    assert result["orphaned_backups"] == 0
+    assert not live_path.exists()
+
+
 def test_recover_all_sessions_on_startup_is_idempotent_no_op_on_clean_state(temp_session_dir):
     """A clean install (no .bak files) must not modify anything."""
     sid = _make_session_on_disk(temp_session_dir, n_msgs=1000)
@@ -259,3 +372,73 @@ def test_msg_count_returns_neg1_for_non_dict_top_level(temp_session_dir):
     # Pre-fix: AttributeError. Post-fix: -1.
     assert _msg_count(list_shaped) == -1
 
+
+@pytest.mark.parametrize(
+    ("path", "body", "assertion"),
+    [
+        (
+            "/api/session/pin",
+            {"session_id": "{sid}", "pinned": True},
+            lambda session: session.pinned is True,
+        ),
+        (
+            "/api/session/rename",
+            {"session_id": "{sid}", "title": "Renamed metadata-only session"},
+            lambda session: session.title == "Renamed metadata-only session",
+        ),
+        (
+            "/api/personality/set",
+            {"session_id": "{sid}", "name": ""},
+            lambda session: session.personality is None,
+        ),
+    ],
+)
+def test_metadata_only_cached_session_mutation_routes_reload_full_session(
+    temp_session_dir, monkeypatch, path, body, assertion
+):
+    """Session metadata mutation routes must not save cached metadata-only stubs."""
+    import api.routes as routes
+    from api.models import LOCK, SESSIONS, Session, get_session
+
+    sid = _make_session_on_disk(
+        temp_session_dir,
+        sid="s_metadata_mutation",
+        n_msgs=12,
+        with_active_stream=False,
+    )
+    full_before = Session.load(sid)
+    full_before.personality = "old-personality"
+    full_before.save(skip_index=True)
+
+    stub = get_session(sid, metadata_only=True)
+    assert getattr(stub, "_loaded_metadata_only", False) is True
+    assert stub.messages == []
+    with LOCK:
+        SESSIONS[sid] = stub
+    monkeypatch.setattr(routes, "SESSIONS", SESSIONS)
+
+    request_body = {
+        key: (sid if value == "{sid}" else value)
+        for key, value in body.items()
+    }
+    captured = {}
+    monkeypatch.setattr(routes, "_check_csrf", lambda handler: True)
+    monkeypatch.setattr(routes, "read_body", lambda handler: request_body)
+    monkeypatch.setattr(
+        routes,
+        "j",
+        lambda handler, payload, status=200, extra_headers=None: captured.update(
+            payload=payload, status=status
+        ) or True,
+    )
+
+    assert routes.handle_post(object(), SimpleNamespace(path=path)) is True
+    assert captured["status"] == 200
+
+    saved = Session.load(sid)
+    assert assertion(saved)
+    assert len(saved.messages) == 12
+    with LOCK:
+        cached = SESSIONS[sid]
+    assert getattr(cached, "_loaded_metadata_only", False) is False
+    assert len(cached.messages) == 12

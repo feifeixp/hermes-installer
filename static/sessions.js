@@ -9,12 +9,81 @@ const ICONS={
   dup:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="4.5" y="4.5" width="8.5" height="8.5" rx="1.5"/><path d="M3 11.5V3h8.5"/></svg>',
   trash:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 4.5h9M6.5 4.5V3h3v1.5M4.5 4.5v8.5h7v-8.5"/><line x1="7" y1="7" x2="7" y2="11"/><line x1="9" y1="7" x2="9" y2="11"/></svg>',
   more:'<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" stroke="none"><circle cx="8" cy="3" r="1.25"/><circle cx="8" cy="8" r="1.25"/><circle cx="8" cy="13" r="1.25"/></svg>',
+  edit:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>',
 };
 
 // Tracks which session_id is currently being loaded. Used to discard stale
 // responses from in-flight requests when the user switches sessions again
 // before the first request completes (#1060).
 let _loadingSessionId = null;
+
+// ── Composer draft persistence ────────────────────────────────────────────────
+
+// Debounced save — prevents hammering the server on every keystroke.
+let _draftSaveTimer = null;
+const _DRAFT_SAVE_DELAY_MS = 400;
+
+function _saveComposerDraft(sid, text, files) {
+  if (!sid) return;
+  clearTimeout(_draftSaveTimer);
+  _draftSaveTimer = setTimeout(() => {
+    api('/api/session/draft', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sid, text: text || '', files: files || [] }),
+    }).catch(() => {});
+  }, _DRAFT_SAVE_DELAY_MS);
+}
+
+// Fire-and-forget immediate save (used before session switches).
+function _saveComposerDraftNow(sid, text, files) {
+  if (!sid) return;
+  clearTimeout(_draftSaveTimer);
+  api('/api/session/draft', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sid, text: text || '', files: files || [] }),
+  }).catch(() => {});
+}
+
+// Restore composer draft from server onto #msg textarea.
+// Only restores if there's actual text (skip empty/None drafts).
+// Guards against double-restore when rapidly switching sessions.
+function _restoreComposerDraft(draft, targetSid) {
+  const ta = $('msg');
+  if (!ta) return;
+  // targetSid is the session that was requested — if it no longer matches
+  // _loadingSessionId, a newer session switch has already begun, so skip.
+  if (targetSid && _loadingSessionId !== null && _loadingSessionId !== targetSid) return;
+  const text = (draft && typeof draft.text === 'string') ? draft.text : '';
+  const files = (draft && Array.isArray(draft.files)) ? draft.files : [];
+  // If there's no text and no files, clear the textarea (a previous session's
+  // draft may still be sitting there from a cross-session switch).
+  if (!text && !files.length) {
+    if (ta.value) {
+      ta.value = '';
+      if (typeof autoResize === 'function') autoResize();
+      if (typeof updateSendBtn === 'function') updateSendBtn();
+    }
+    return;
+  }
+  // Only update if different to avoid cursor jumps on unrelated session switches.
+  const current = ta.value || '';
+  if (current !== text) {
+    ta.value = text;
+    if (typeof autoResize === 'function') autoResize();
+    if (typeof updateSendBtn === 'function') updateSendBtn();
+  }
+  // Files restoration is skipped for now (requires S.pendingFiles plumbing).
+}
+
+// Clear the saved draft for a session (called when message is sent).
+function _clearComposerDraft(sid) {
+  if (!sid) return;
+  clearTimeout(_draftSaveTimer);
+  api('/api/session/draft', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sid, text: '' }),
+  }).catch(() => {});
+}
 
 const SESSION_VIEWED_COUNTS_KEY = 'hermes-session-viewed-counts';
 const SESSION_COMPLETION_UNREAD_KEY = 'hermes-session-completion-unread';
@@ -24,6 +93,20 @@ let _sessionCompletionUnread = null;
 let _sessionObservedStreaming = null;
 const _sessionStreamingById = new Map();
 const _sessionListSnapshotById = new Map();
+let _sessionListPointerActive = false;
+let _sessionListLastScrollAt = 0;
+let _pendingSessionListPayload = null;
+let _pendingSessionListApplyTimer = 0;
+const SESSION_LIST_INTERACTION_IDLE_MS = 700;
+
+function _formatSessionModelWithGateway(s){
+  if(!s||!s.model)return'';
+  const routing=(typeof _latestGatewayRoutingForSession==='function')?_latestGatewayRoutingForSession(s):(s.gateway_routing||null);
+  if(typeof _formatGatewayModelLabel==='function'){
+    return _formatGatewayModelLabel(s.model,s.model,routing)||s.model;
+  }
+  return s.model;
+}
 
 function _getSessionViewedCounts() {
   if (_sessionViewedCounts !== null) return _sessionViewedCounts;
@@ -153,14 +236,48 @@ function _isSessionActivelyViewedForList(sid) {
 function _isSessionLocallyStreaming(s) {
   if (!s || !s.session_id) return false;
   const isActive = S.session && s.session_id === S.session.session_id;
-  return Boolean(
-    (isActive && S.busy)
-    || (typeof INFLIGHT === 'object' && INFLIGHT && INFLIGHT[s.session_id])
-  );
+  // For the active session, rely on S.busy to indicate an ongoing stream.
+  // INFLIGHT entries for non-active sessions are artifacts of interrupted
+  // streams (page refresh, network disconnect, gateway restart) where
+  // `delete INFLIGHT[sid]` was never reached — they should NOT cause the
+  // sidebar spinner to appear on completed sessions. (#2066)
+  return isActive && Boolean(S.busy);
 }
 
 function _isSessionEffectivelyStreaming(s) {
   return Boolean(s && (s.is_streaming || _isSessionLocallyStreaming(s)));
+}
+
+function _purgeStaleInflightEntries() {
+  // Clean up INFLIGHT entries for sessions the server confirms are NOT
+  // streaming. This prevents the in-memory cache from growing unbounded
+  // when streams end abnormally. (#2066)  Additionally, any INFLIGHT entry
+  // whose session id is no longer present in the current _allSessions list
+  // (deleted / archived / filtered out) is also removed so that ghost entries
+  // from deleted sessions do not accumulate. (#2092)
+  if (typeof INFLIGHT !== 'object' || !INFLIGHT) return;
+  const sessionsById = new Map();
+  if (Array.isArray(_allSessions)) {
+    for (const s of _allSessions) {
+      if (s && s.session_id) sessionsById.set(s.session_id, s);
+    }
+  }
+  for (const sid of Object.keys(INFLIGHT)) {
+    if (!sessionsById.has(sid)) {
+      // Session is absent from _allSessions — it was deleted / archived /
+      // filtered and can never stream again, so drop the entry.
+      delete INFLIGHT[sid];
+      if (typeof clearInflightState === 'function') clearInflightState(sid);
+      continue;
+    }
+    const s = sessionsById.get(sid);
+    if (!s.is_streaming) {
+      // Session exists but is not streaming — purge it.
+      delete INFLIGHT[sid];
+      if (typeof clearInflightState === 'function') clearInflightState(sid);
+    }
+    // Sessions that exist and are still streaming are preserved.
+  }
 }
 
 function _rememberRenderedStreamingState(s, isStreaming) {
@@ -262,7 +379,7 @@ function _markPollingCompletionUnreadTransitions(sessions) {
   }
 }
 
-async function newSession(flash){
+async function newSession(flash, options={}){
   updateQueueBadge();
   S.toolCalls=[];
   clearLiveToolCards();
@@ -293,6 +410,7 @@ async function newSession(flash){
     workspace:inheritWs,
     profile:S.activeProfile||'default',
   };
+  if(options&&options.worktree) reqBody.worktree=true;
   if(_activeProject&&_activeProject!==NO_PROJECT_FILTER) reqBody.project_id=_activeProject;
   const data=await api('/api/session/new',{method:'POST',body:JSON.stringify(reqBody)});
   S.session=data.session;S.messages=data.session.messages||[];
@@ -314,12 +432,28 @@ async function newSession(flash){
   updateSendBtn();
   setStatus('');
   setComposerStatus('');
+  if(typeof _setLiveAssistantTps==='function') _setLiveAssistantTps(null);
+  if(typeof _syncCtxIndicator==='function'){
+    _syncCtxIndicator({
+      input_tokens:data.session.input_tokens||0,
+      output_tokens:data.session.output_tokens||0,
+      estimated_cost:data.session.estimated_cost||0,
+      context_length:data.session.context_length||0,
+      last_prompt_tokens:data.session.last_prompt_tokens||0,
+      threshold_tokens:data.session.threshold_tokens||0,
+    });
+  }
   updateQueueBadge(S.session.session_id);
   syncTopbar();renderMessages();loadDir('.');
   // don't call renderSessionList here - callers do it when needed
 }
 
 async function loadSession(sid){
+  const currentSid = S.session ? S.session.session_id : null;
+  // Clicking the already-open session in the sidebar is a no-op. Reloading it
+  // tears down active pane state and can reset the long-session scroll window
+  // to the top even though the user did not navigate anywhere.
+  if(currentSid===sid) return;
   // Mark this session as the in-flight load. Subsequent loadSession() calls
   // will overwrite this; stale awaits use the mismatch to bail out (#1060).
   _loadingSessionId = sid;
@@ -329,13 +463,11 @@ async function loadSession(sid){
   if(typeof hideClarifyCard==='function') hideClarifyCard();
   // Show loading indicator immediately for responsiveness.
   // Cleared by renderMessages() once full session data arrives.
-  const currentSid = S.session ? S.session.session_id : null;
   // Persist the current composer draft before switching away so it can be
-  // restored when the user switches back (#1060).
+  // restored when the user switches back (#1060). Save to server now so the
+  // draft survives page refresh and syncs across clients.
   if (currentSid && currentSid !== sid) {
-    if (!S.composerDrafts) S.composerDrafts = {};
-    const draft = { text: ($('msg') || {}).value || '', files: S.pendingFiles ? [...S.pendingFiles] : [] };
-    if (draft.text || draft.files.length) S.composerDrafts[currentSid] = draft;
+    _saveComposerDraftNow(currentSid, ($('msg') || {}).value || '', S.pendingFiles ? [...S.pendingFiles] : []);
   }
   if (currentSid !== sid) {
     S.messages = [];
@@ -383,6 +515,12 @@ async function loadSession(sid){
   S.session=data.session;
   S.session._modelResolutionDeferred=true;
   S.lastUsage={...(data.session.last_usage||{})};
+  // Reset scroll-direction tracker on session switch so the new chat's
+  // first scroll doesn't compare against the previous chat's scrollTop
+  // and false-trigger an unpin (#1731 follow-up — Opus stage-302 SHOULD-FIX).
+  if (typeof window !== 'undefined' && typeof window._resetScrollDirectionTracker === 'function') {
+    try { window._resetScrollDirectionTracker(); } catch (_) {}
+  }
   // Sync workspace display immediately so the chip label reflects the new session's workspace
   // before any async message-loading begins (mirrors how model is handled).
   if(typeof syncTopbar==='function') syncTopbar();
@@ -421,6 +559,10 @@ async function loadSession(sid){
     S.messages=INFLIGHT[sid].messages;
     S.toolCalls=(INFLIGHT[sid].toolCalls||[]);
     S.busy=true;
+    // appendLiveToolCard() is guarded by S.activeStreamId; restore it before
+    // replaying persisted live tools so the compact Activity count survives
+    // switching away from and back to an active chat (#1715).
+    S.activeStreamId=activeStreamId;
     syncTopbar();renderMessages();appendThinking();loadDir('.');
     clearLiveToolCards();
     if(typeof placeLiveToolCardsHost==='function') placeLiveToolCardsHost();
@@ -431,7 +573,6 @@ async function loadSession(sid){
     startApprovalPolling(sid);
     if(typeof startClarifyPolling==='function') startClarifyPolling(sid);
     if(typeof _fetchYoloState==='function') _fetchYoloState(sid);
-    S.activeStreamId=activeStreamId;
     if(INFLIGHT[sid].reattach&&activeStreamId&&typeof attachLiveStream==='function'){
       INFLIGHT[sid].reattach=false;
       if (_loadingSessionId !== sid) return;
@@ -517,10 +658,8 @@ async function loadSession(sid){
       setComposerStatus('');
       updateQueueBadge(sid);
       syncTopbar();renderMessages();
-      // Kick off loadDir first (issues network requests), then highlight code.
-      // The fetch is dispatched before the CPU-bound Prism pass begins.
+      if(typeof resumeManualCompressionForSession==='function') resumeManualCompressionForSession(sid);
       const _dirP=loadDir('.');
-      highlightCode();
       await _dirP;
     }
   }
@@ -539,6 +678,16 @@ async function loadSession(sid){
       threshold_tokens:  _pick(u.threshold_tokens,  _s.threshold_tokens),
     });
   }
+  if(typeof _renderPendingPromptsForActiveSession==='function') _renderPendingPromptsForActiveSession();
+
+  // Restore server-persisted composer draft (synced across clients + survives refresh).
+  // Pass sid so _restoreComposerDraft can skip if this session is mid-load (guards
+  // against stale writes from slow responses racing to restore the previous draft).
+  const _draft = S.session && S.session.composer_draft;
+  if (_draft && (typeof _restoreComposerDraft === 'function')) {
+    _restoreComposerDraft(_draft, sid);
+  }
+
   _resolveSessionModelForDisplaySoon(sid);
   // Clear the in-flight session marker now that this load has completed (#1060).
   if (_loadingSessionId === sid) _loadingSessionId = null;
@@ -574,6 +723,32 @@ function _isMessagingSession(session) {
   // Fallback: check raw_source directly
   const raw = (session.raw_source || session.source_tag || session.source || '').toLowerCase();
   return _MESSAGING_RAW_SOURCES.has(raw);
+}
+
+function _isReadOnlySession(session) {
+  return !!(session && (session.read_only || session.is_read_only));
+}
+
+function _sourceKeyForSession(session) {
+  return (session && (session.raw_source || session.source_tag || session.source || '') || '').toLowerCase();
+}
+
+function _isCliSession(session) {
+  if (!session) return false;
+  // session_source is set by upstream normalization for CLI sessions as 'cli'
+  if (session.session_source === 'cli') return true;
+  // Legacy payloads often use raw/source tags to convey the source.
+  const raw = (
+    session.raw_source
+    || session.source_tag
+    || session.source
+    || session.source_label
+    || ''
+  ).toLowerCase();
+  if (raw === 'cli') return true;
+  // If messaging-like, don't classify as legacy CLI even when is_cli_session is true.
+  if (_isMessagingSession(session)) return false;
+  return session.is_cli_session === true;
 }
 
 function _normalizeMessageForCliImportComparison(message) {
@@ -948,6 +1123,19 @@ let _loadingOlder = false;
 // oldest message currently loaded in S.messages. Starts at 0 when all
 // messages are loaded, or > 0 when truncated by msg_limit.
 let _oldestIdx = 0;
+// Generation token bumped every time S.messages is wholesale-replaced
+// (rather than incrementally extended). _loadOlderMessages snapshots it
+// before its `await` and re-checks after, so a late-resolving prefetch
+// does not prepend onto a transcript that was rebuilt under it
+// (e.g. by _ensureAllMessagesLoaded after a Start-jump). See #1937.
+let _messagesGeneration = 0;
+function _bumpMessagesGeneration() {
+  // Wrap to keep the counter bounded; the only operation that matters is
+  // strict inequality between the snapshot and the post-await read, so any
+  // monotonic bump is sufficient.
+  _messagesGeneration = (_messagesGeneration + 1) | 0;
+  return _messagesGeneration;
+}
 
 async function _loadOlderMessages() {
   if (_loadingOlder || !_messagesTruncated) return;
@@ -955,6 +1143,11 @@ async function _loadOlderMessages() {
   if (!sid || !S.messages.length) return;
   if (_oldestIdx <= 0) { _messagesTruncated = false; return; }
   _loadingOlder = true;
+  // Snapshot the generation BEFORE we await. If S.messages is wholesale
+  // replaced while the request is in flight, the post-await check below
+  // bails out so we never prepend stale older messages onto a freshly
+  // rebuilt transcript (#1937).
+  const startGeneration = _messagesGeneration;
   try {
     const data = await api(`/api/session?session_id=${encodeURIComponent(sid)}&messages=1&resolve_model=0&msg_before=${_oldestIdx}&msg_limit=${_INITIAL_MSG_LIMIT}`);
     // Guard: api() may have redirected (401) and returned undefined.
@@ -967,6 +1160,13 @@ async function _loadOlderMessages() {
     if (!data || !data.session) return;
     if (!S.session || S.session.session_id !== sid) return;
     if (_loadingSessionId !== null && _loadingSessionId !== sid) return;
+    // Generation guard: another code path (typically jumpToSessionStart →
+    // _ensureAllMessagesLoaded) may have replaced S.messages while we were
+    // awaiting. Prepending older messages onto that replacement would
+    // duplicate the head of the transcript. Detect via the generation
+    // counter and abort cleanly. _oldestIdx and _messagesTruncated were
+    // already reset by the wholesale-replace path, so no rollback needed.
+    if (_messagesGeneration !== startGeneration) return;
     const olderMsgs = (data.session.messages || []).filter(m => m && m.role);
     if (!olderMsgs.length) { _messagesTruncated = false; return; }
     // Prepend older messages
@@ -974,18 +1174,32 @@ async function _loadOlderMessages() {
     const container = $('messages');
     const prevScrollH = container ? container.scrollHeight : 0;
     S.messages = [...olderMsgs, ...S.messages];
+    // renderMessages() windows long transcripts from the end. If we do not
+    // expand that window before rendering, the newly prepended page stays
+    // hidden and the "hidden" counter rises while the viewport appears stuck.
+    // Count roughly by the same visible-message rules used by renderMessages().
+    const addedRenderable = olderMsgs.filter(m=>{
+      if(!m||!m.role||m.role==='tool') return false;
+      if(typeof _isContextCompactionMessage==='function'&&_isContextCompactionMessage(m)) return false;
+      if(typeof _isPreservedCompressionTaskListMessage==='function'&&_isPreservedCompressionTaskListMessage(m)) return false;
+      const hasTc=Array.isArray(m.tool_calls)&&m.tool_calls.length>0;
+      const hasTu=Array.isArray(m.content)&&m.content.some(p=>p&&p.type==='tool_use');
+      return !!(msgContent(m)||m._statusCard||m.attachments?.length||(m.role==='assistant'&&(hasTc||hasTu||(typeof _messageHasReasoningPayload==='function'&&_messageHasReasoningPayload(m)))));
+    }).length;
+    _messageRenderWindowSize=_currentMessageRenderWindowSize()+Math.max(addedRenderable, MESSAGE_RENDER_WINDOW_DEFAULT);
     _messagesTruncated = !!data.session._messages_truncated;
     _oldestIdx = data.session._messages_offset || 0;
-    renderMessages();
-    // Restore scroll position so the user stays at the same message.
-    // renderMessages() calls scrollToBottom() at the end, so we must
-    // counter-scroll to where the user was before loading older messages.
+    renderMessages({ preserveScroll: true });
     if (container) {
+      // Prepending older messages must not teleport the reader. Preserve the
+      // currently visible viewport by adding the inserted height to scrollTop.
+      const oldTop = container.scrollTop;
       const newScrollH = container.scrollHeight;
-      container.scrollTop = newScrollH - prevScrollH;
+      const addedHeight = Math.max(0, newScrollH - prevScrollH);
+      _programmaticScroll = true;
+      container.scrollTop = oldTop + addedHeight;
+      requestAnimationFrame(()=>{ _programmaticScroll = false; });
     }
-    // renderMessages() called scrollToBottom() which set _scrollPinned=true.
-    // We just restored the user's scroll position, so mark as not pinned.
     _scrollPinned = false;
   } catch(e) {
     console.warn('_loadOlderMessages failed:', e);
@@ -999,17 +1213,56 @@ async function _loadOlderMessages() {
 
 // Ensure the full message history is loaded (for undo, export, etc).
 // If the session was loaded with msg_limit, this fetches all messages.
+//
+// Race-safety (#1937): with the endless-scroll opt-in, _loadOlderMessages
+// may be in flight when this runs (e.g. user scrolled near the top, then
+// hit the Start jump pill). Two coordinated guards prevent the prefetch
+// from prepending duplicate messages onto our wholesale replacement:
+//   1. Hold the _loadingOlder mutex around the body so a NEW prefetch
+//      cannot start mid-replace (entry-gate check at line ~1003 returns
+//      early). The mutex is also self-protecting against concurrent
+//      ensure-all calls from rapid double-clicks on Start.
+//   2. Bump _messagesGeneration before mutating S.messages so any
+//      in-flight prefetch's post-await generation check bails out.
 async function _ensureAllMessagesLoaded() {
   if (!_messagesTruncated || !S.session) return;
-  const sid = S.session.session_id;
-  const data = await api(`/api/session?session_id=${encodeURIComponent(sid)}&messages=1&resolve_model=0`);
-  // Guard: api() may have redirected (401) and returned undefined.
-  if (!data || !data.session) return;
-  const msgs = (data.session.messages || []).filter(m => m && m.role);
-  S.messages = msgs;
-  _messagesTruncated = false;
-  if(S.session && S.session.session_id === sid){
-    S.session.message_count = Number(data.session.message_count || msgs.length);
+  if (_loadingOlder) {
+    // A prefetch is mid-flight (between the `_loadingOlder = true` line
+    // and its post-await guards). Bumping the generation token now
+    // poisons that prefetch's continuation, but we still need to claim
+    // the mutex AFTER it releases. Yield until the prefetch finishes
+    // (its finally-block clears _loadingOlder) before fetching the full
+    // history ourselves. The generation bump below ensures any other
+    // future race against this same continuation also fails closed.
+    _bumpMessagesGeneration();
+    while (_loadingOlder) {
+      await new Promise(resolve => setTimeout(resolve, 16));
+    }
+    if (!_messagesTruncated || !S.session) return;
+  }
+  _loadingOlder = true;
+  try {
+    const sid = S.session.session_id;
+    const data = await api(`/api/session?session_id=${encodeURIComponent(sid)}&messages=1&resolve_model=0`);
+    // Guard: api() may have redirected (401) and returned undefined.
+    if (!data || !data.session) return;
+    // Session may have been switched while we awaited. Bail rather than
+    // overwrite the new session's messages.
+    if (!S.session || S.session.session_id !== sid) return;
+    if (_loadingSessionId !== null && _loadingSessionId !== sid) return;
+    const msgs = (data.session.messages || []).filter(m => m && m.role);
+    // Bump the generation BEFORE the wholesale replace so any racing
+    // prefetch (whose snapshot was taken before this call's mutex
+    // acquisition) sees the new value and aborts.
+    _bumpMessagesGeneration();
+    S.messages = msgs;
+    _messagesTruncated = false;
+    _oldestIdx = 0;
+    if (S.session && S.session.session_id === sid) {
+      S.session.message_count = Number(data.session.message_count || msgs.length);
+    }
+  } finally {
+    _loadingOlder = false;
   }
 }
 
@@ -1028,10 +1281,51 @@ let _allProjects = [];  // cached project list
 const NO_PROJECT_FILTER = '__none__';
 let _activeProject = null;  // project_id filter (null = show all, NO_PROJECT_FILTER = unassigned only)
 let _showAllProfiles = false;  // false = filter to active profile only
+let _otherProfileCount = 0;       // count of sessions from other profiles (server-reported)
 let _sessionActionMenu = null;
 let _sessionActionAnchor = null;
 let _sessionActionSessionId = null;
 const _expandedChildSessionKeys = new Set();
+const _expandedLineageKeys = new Set();
+const _lineageReportCache = new Map();
+const _lineageReportInflight = new Map();
+let _lineageReportCacheGeneration = 0;
+let _sessionVisibleSidebarIds = [];
+const SESSION_VIRTUAL_ROW_HEIGHT = 52;
+const SESSION_VIRTUAL_BUFFER_ROWS = 12;
+const SESSION_VIRTUAL_THRESHOLD_ROWS = 80;
+let _sessionVirtualScrollList = null;
+let _sessionVirtualScrollRaf = 0;
+
+function _sessionSnapshotById(sid){
+  if(!sid)return null;
+  if(S.session&&S.session.session_id===sid) return S.session;
+  return (_allSessions||[]).find(s=>s&&s.session_id===sid)||null;
+}
+function _worktreeSessionCount(ids){
+  return (ids||[]).reduce((count,sid)=>{
+    const session=_sessionSnapshotById(sid);
+    return count+(session&&session.worktree_path?1:0);
+  },0);
+}
+function _sessionResponseRetainsWorktree(response, session){
+  if(response&&typeof response.worktree_retained==='boolean') return response.worktree_retained;
+  return !!(session&&session.worktree_path);
+}
+function _worktreeResponseCount(results){
+  return (results||[]).reduce((count,result)=>{
+    return count+(_sessionResponseRetainsWorktree(result&&result.response,result&&result.session)?1:0);
+  },0);
+}
+function _sessionArchiveDescription(session){
+  return session&&session.worktree_path?t('session_archive_worktree_desc'):t('session_archive_desc');
+}
+function _sessionArchiveToast(response, session){
+  return _sessionResponseRetainsWorktree(response,session)?t('session_archived_worktree'):t('session_archived');
+}
+function _sessionDeleteDescription(session){
+  return session&&session.worktree_path?t('session_delete_worktree_desc'):t('session_delete_desc');
+}
 
 function _sessionIdFromLocation(){
   if(typeof window==='undefined'||!window.location) return null;
@@ -1099,9 +1393,13 @@ function setSessionSelected(sid, selected){
 }
 function selectAllSessions(){
   _selectedSessions.clear();
+  const ids=Array.isArray(_sessionVisibleSidebarIds)&&_sessionVisibleSidebarIds.length
+    ? _sessionVisibleSidebarIds
+    : Array.from(document.querySelectorAll('.session-select-cb')).map(cb=>cb.dataset.sid).filter(Boolean);
+  ids.forEach(sid=>_selectedSessions.add(sid));
   document.querySelectorAll('.session-select-cb').forEach(cb=>{
     const sid=cb.dataset.sid;
-    if(sid){_selectedSessions.add(sid);cb.checked=true;const item=cb.closest('.session-item');if(item)item.classList.add('selected');}
+    if(sid){cb.checked=_selectedSessions.has(sid);const item=cb.closest('.session-item');if(item)item.classList.toggle('selected',_selectedSessions.has(sid));}
   });
   _updateBatchActionBar();
 }
@@ -1126,10 +1424,21 @@ function _renderBatchActionBar(){
   archiveBtn.textContent=t('session_batch_archive');
   archiveBtn.onclick=async()=>{
     const ids=[..._selectedSessions];
-    const ok=await showConfirmDialog({message:t('session_batch_archive_confirm',ids.length),confirmLabel:t('session_batch_archive'),danger:true});
+    const wtCount=_worktreeSessionCount(ids);
+    const sessionsById=new Map(ids.map(sid=>[sid,_sessionSnapshotById(sid)]));
+    const ok=await showConfirmDialog({
+      message:wtCount?t('session_batch_archive_worktree_confirm',ids.length,wtCount):t('session_batch_archive_confirm',ids.length),
+      confirmLabel:t('session_batch_archive'),
+      danger:true
+    });
     if(!ok)return;
-    try{await Promise.all(ids.map(sid=>api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:sid,archived:true})})));
-      showToast(t('session_archived'));exitSessionSelectMode();await renderSessionList();
+    try{
+      const results=await Promise.all(ids.map(async sid=>{
+        const response=await api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:sid,archived:true})});
+        return {response,session:sessionsById.get(sid)||null};
+      }));
+      const retainedCount=_worktreeResponseCount(results);
+      showToast(retainedCount?t('session_archived_worktree'):t('session_archived'));exitSessionSelectMode();await renderSessionList();
     }catch(e){showToast('Archive failed: '+(e.message||e));}
   };bar.appendChild(archiveBtn);
   // Move
@@ -1141,10 +1450,20 @@ function _renderBatchActionBar(){
   deleteBtn.textContent=t('session_batch_delete');
   deleteBtn.onclick=async()=>{
     const ids=[..._selectedSessions];
-    const ok=await showConfirmDialog({message:t('session_batch_delete_confirm',ids.length),confirmLabel:t('delete_title'),danger:true});
+    const wtCount=_worktreeSessionCount(ids);
+    const sessionsById=new Map(ids.map(sid=>[sid,_sessionSnapshotById(sid)]));
+    const ok=await showConfirmDialog({
+      message:wtCount?t('session_batch_delete_worktree_confirm',ids.length,wtCount):t('session_batch_delete_confirm',ids.length),
+      confirmLabel:t('delete_title'),
+      danger:true
+    });
     if(!ok)return;
     try{
-      await Promise.all(ids.map(sid=>api('/api/session/delete',{method:'POST',body:JSON.stringify({session_id:sid})})));
+      const results=await Promise.all(ids.map(async sid=>{
+        const response=await api('/api/session/delete',{method:'POST',body:JSON.stringify({session_id:sid})});
+        return {response,session:sessionsById.get(sid)||null};
+      }));
+      const retainedCount=_worktreeResponseCount(results);
       ids.forEach(_clearHandoffStorageForSession);
       if(S.session&&ids.includes(S.session.session_id)){
         S.session=null;S.messages=[];S.entries=[];localStorage.removeItem('hermes-webui-session');
@@ -1152,7 +1471,7 @@ function _renderBatchActionBar(){
         if(remaining.sessions&&remaining.sessions.length){await loadSession(remaining.sessions[0].session_id);}
         else{$('msgInner').innerHTML='';$('emptyState').style.display='';}
       }
-      showToast(t('session_delete')+' ('+ids.length+')');exitSessionSelectMode();await renderSessionList();
+      showToast((retainedCount?t('session_deleted_worktree'):t('session_delete'))+' ('+ids.length+')');exitSessionSelectMode();await renderSessionList();
     }catch(e){showToast('Delete failed: '+(e.message||e));}
   };bar.appendChild(deleteBtn);
 }
@@ -1255,14 +1574,44 @@ function _appendSessionDuplicateAction(menu, session){
 }
 
 function _openSessionActionMenu(session, anchorEl){
+  if(_isReadOnlySession(session)){ if(typeof showToast==='function') showToast('Read-only imported sessions cannot be modified.',3000); return; }
   if(_sessionActionMenu && _sessionActionSessionId===session.session_id && _sessionActionAnchor===anchorEl){
     closeSessionActionMenu();
     return;
   }
   closeSessionActionMenu();
   const isMessagingSession = _isMessagingSession(session);
+  const isCliSession = _isCliSession(session);
+  const isExternalSession = isMessagingSession || isCliSession;
   const menu=document.createElement('div');
   menu.className='session-action-menu open';
+  // Rename — first menu item by request (#1764). Double-click rename is
+  // timing-sensitive: the first click frequently registers as "open the
+  // chat" before the second click arrives, so users open the conversation
+  // when they meant to rename it. Putting Rename in the menu eliminates
+  // the timing entirely. Only shown for sessions that support rename
+  // (read-only imported sessions skip it; same gate as startRename's
+  // _isReadOnlySession check).
+  if(!_isReadOnlySession(session)){
+    menu.appendChild(_buildSessionAction(
+      t('session_rename'),
+      t('session_rename_desc'),
+      ICONS.edit,
+      ()=>{
+        closeSessionActionMenu();
+        // Find the row for this session and call its attached startRename.
+        // Falls back to a no-op toast if the row isn't currently rendered
+        // (e.g. archived-and-hidden) — extremely rare since the menu only
+        // opens from a visible row's three-dot button.
+        const row=document.querySelector('.session-item[data-sid="'+session.session_id+'"]');
+        if(row && typeof row._startRename === 'function'){
+          row._startRename();
+        } else if(typeof showToast==='function'){
+          showToast(t('session_rename_failed_no_row')||'Could not start rename — row not found.', 3000, 'error');
+        }
+      }
+    ));
+  }
   menu.appendChild(_buildSessionAction(
     session.pinned?t('session_unpin'):t('session_pin'),
     session.pinned?t('session_unpin_desc'):t('session_pin_desc'),
@@ -1290,20 +1639,20 @@ function _openSessionActionMenu(session, anchorEl){
   ));
   menu.appendChild(_buildSessionAction(
     session.archived?t('session_restore'):t('session_archive'),
-    session.archived?t('session_restore_desc'):t('session_archive_desc'),
+    session.archived?t('session_restore_desc'):_sessionArchiveDescription(session),
     session.archived?ICONS.unarchive:ICONS.archive,
     async()=>{
       closeSessionActionMenu();
       try{
-        await api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:session.session_id,archived:!session.archived})});
+        const response=await api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:session.session_id,archived:!session.archived})});
         session.archived=!session.archived;
         if(S.session&&S.session.session_id===session.session_id) S.session.archived=session.archived;
         await renderSessionList();
-        showToast(session.archived?t('session_archived'):t('session_restored'));
+        showToast(session.archived?_sessionArchiveToast(response,session):t('session_restored'));
       }catch(err){showToast(t('session_archive_failed')+err.message);}
     }
   ));
-  if(!isMessagingSession){
+  if(!isExternalSession){
     _appendSessionDuplicateAction(menu, session);
   }
   if(session.active_stream_id){
@@ -1318,10 +1667,22 @@ function _openSessionActionMenu(session, anchorEl){
       }
     ));
   }
-  if(!isMessagingSession){
+  if(!isExternalSession){
+    if(session.worktree_path){
+      menu.appendChild(_buildSessionAction(
+        t('session_worktree_remove'),
+        t('session_worktree_remove_desc', session.worktree_path),
+        ICONS.trash,
+        async()=>{
+          closeSessionActionMenu();
+          await removeWorktree(session);
+        },
+        'danger'
+      ));
+    }
     menu.appendChild(_buildSessionAction(
       t('session_delete'),
-      t('session_delete_desc'),
+      _sessionDeleteDescription(session),
       ICONS.trash,
       async()=>{
         closeSessionActionMenu();
@@ -1358,34 +1719,134 @@ window.addEventListener('resize',()=>{
   if(_sessionActionMenu && _sessionActionAnchor) _positionSessionActionMenu(_sessionActionAnchor);
 });
 
-async function renderSessionList(){
+// Generation counter to discard stale API responses (issue #1430).
+// Multiple callers (message send, rename, session switch) fire renderSessionList()
+// concurrently. Without this guard, a slower older response can overwrite _allSessions
+// with stale data, causing sessions to vanish from the sidebar.
+let _renderSessionListGen = 0;
+
+function _isOptimisticFirstTurnSessionRow(s){
+  if(!s||!s.session_id||s.archived) return false;
+  const messageCount=Number(s.message_count||0);
+  if(messageCount<=0&&!s.pending_user_message) return false;
+  return Boolean(
+    s.is_streaming||
+    s.active_stream_id||
+    s.pending_user_message||
+    s.pending_started_at||
+    _isSessionLocallyStreaming(s)||
+    _sessionStreamingById.get(s.session_id)===true
+  );
+}
+
+function _mergeOptimisticFirstTurnSessions(fetchedSessions){
+  const merged=Array.isArray(fetchedSessions)?[...fetchedSessions]:[];
+  const bySid=new Map();
+  merged.forEach((s,idx)=>{if(s&&s.session_id) bySid.set(s.session_id,idx);});
+  for(const local of Array.isArray(_allSessions)?_allSessions:[]){
+    if(!_isOptimisticFirstTurnSessionRow(local)) continue;
+    const sid=local.session_id;
+    const idx=bySid.has(sid)?bySid.get(sid):-1;
+    if(idx>=0){
+      const fetched=merged[idx]||{};
+      const localCount=Number(local.message_count||0);
+      const fetchedCount=Number(fetched.message_count||0);
+      const localTs=Number(local.last_message_at||local.updated_at||0);
+      const fetchedTs=Number(fetched.last_message_at||fetched.updated_at||0);
+      merged[idx]={
+        ...local,
+        ...fetched,
+        message_count:Math.max(localCount,fetchedCount),
+        last_message_at:Math.max(localTs,fetchedTs),
+        updated_at:Math.max(Number(local.updated_at||0),Number(fetched.updated_at||0),localTs,fetchedTs),
+        active_stream_id:fetched.active_stream_id||local.active_stream_id||null,
+        pending_user_message:fetched.pending_user_message||local.pending_user_message||null,
+        pending_started_at:fetched.pending_started_at||local.pending_started_at||null,
+        is_streaming:Boolean(fetched.is_streaming||local.is_streaming||_isSessionLocallyStreaming(local)),
+      };
+    }else{
+      merged.push({...local,is_streaming:true});
+      bySid.set(sid,merged.length-1);
+    }
+  }
+  return merged;
+}
+
+function _isSessionListUserInteracting(){
+  const now=Date.now();
+  const list=$('sessionList');
+  const pointerOverList=Boolean(list&&(list.matches(':hover')||list.matches(':focus-within')));
+  return Boolean(
+    _sessionListPointerActive ||
+    pointerOverList ||
+    (_sessionListLastScrollAt && now-_sessionListLastScrollAt<SESSION_LIST_INTERACTION_IDLE_MS)
+  );
+}
+
+function _schedulePendingSessionListApply(){
+  if(_pendingSessionListApplyTimer) clearTimeout(_pendingSessionListApplyTimer);
+  _pendingSessionListApplyTimer=setTimeout(()=>{
+    _pendingSessionListApplyTimer=0;
+    if(!_pendingSessionListPayload) return;
+    if(_isSessionListUserInteracting()){
+      _schedulePendingSessionListApply();
+      return;
+    }
+    const payload=_pendingSessionListPayload;
+    _pendingSessionListPayload=null;
+    if(payload.gen!==_renderSessionListGen) return;
+    _applySessionListPayload(payload.sessData,payload.projData);
+  }, Math.max(120, SESSION_LIST_INTERACTION_IDLE_MS));
+}
+
+function _applySessionListPayload(sessData, projData){
+  // Server's other_profile_count tells us how many sessions exist outside the
+  // active profile so the "Show N from other profiles" toggle can render
+  // without a second round-trip. Stashed on the module for renderSessionListFromCache.
+  _otherProfileCount = sessData.other_profile_count || 0;
+  _allSessions = _mergeOptimisticFirstTurnSessions(sessData.sessions||[]);
+  _clearLineageReportCache();
+  _allProjects = projData.projects||[];
+  // Capture server clock for clock-skew compensation (issue #1144).
+  // server_time is epoch seconds from the server's time.time().
+  // _serverTimeDelta = client - server, so (Date.now() - _serverTimeDelta)
+  // gives an approximation of the current server time.
+  if (typeof sessData.server_time === 'number' && sessData.server_time > 0) {
+    _serverTimeDelta = Date.now() - (sessData.server_time * 1000);
+  }
+  if (typeof sessData.server_tz === 'string') {
+    _serverTz = sessData.server_tz;
+  }
+  _markPollingCompletionUnreadTransitions(_allSessions);
+  const isStreaming = _allSessions.some(s => Boolean(s && s.is_streaming));
+  if (isStreaming) {
+    startStreamingPoll();
+  } else {
+    stopStreamingPoll();
+  }
+  ensureSessionTimeRefreshPoll();
+  renderSessionListFromCache();  // no-ops if rename is in progress
+}
+
+async function renderSessionList(opts={}){
+  const deferWhileInteracting=Boolean(opts&&opts.deferWhileInteracting);
+  const _gen = ++_renderSessionListGen;
+  if(!deferWhileInteracting) _pendingSessionListPayload=null;
   try{
     if(!($('sessionSearch').value||'').trim()) _contentSearchResults = [];
+    const allProfilesQS = _showAllProfiles ? '?all_profiles=1' : '';
     const [sessData, projData] = await Promise.all([
-      api('/api/sessions'),
-      api('/api/projects'),
+      api('/api/sessions' + allProfilesQS),
+      api('/api/projects' + allProfilesQS),
     ]);
-    _allSessions = sessData.sessions||[];
-    _allProjects = projData.projects||[];
-    // Capture server clock for clock-skew compensation (issue #1144).
-    // server_time is epoch seconds from the server's time.time().
-    // _serverTimeDelta = client - server, so (Date.now() - _serverTimeDelta)
-    // gives an approximation of the current server time.
-    if (typeof sessData.server_time === 'number' && sessData.server_time > 0) {
-      _serverTimeDelta = Date.now() - (sessData.server_time * 1000);
+    // Discard stale response — a newer renderSessionList() call superseded us.
+    if (_gen !== _renderSessionListGen) return;
+    if(deferWhileInteracting&&_isSessionListUserInteracting()){
+      _pendingSessionListPayload={gen:_gen,sessData,projData};
+      _schedulePendingSessionListApply();
+      return;
     }
-    if (typeof sessData.server_tz === 'string') {
-      _serverTz = sessData.server_tz;
-    }
-    _markPollingCompletionUnreadTransitions(_allSessions);
-    const isStreaming = _allSessions.some(s => Boolean(s && s.is_streaming));
-    if (isStreaming) {
-      startStreamingPoll();
-    } else {
-      stopStreamingPoll();
-    }
-    ensureSessionTimeRefreshPoll();
-    renderSessionListFromCache();  // no-ops if rename is in progress
+    _applySessionListPayload(sessData,projData);
   }catch(e){console.warn('renderSessionList',e);}
 }
 
@@ -1403,7 +1864,7 @@ let _sessionTimeRefreshTimer = null;
 function startStreamingPoll(){
   if(_streamingPollTimer) return;
   _streamingPollTimer = setInterval(() => {
-    void renderSessionList();
+    void renderSessionList({deferWhileInteracting:true});
   }, _streamingPollMs);
 }
 
@@ -1423,7 +1884,7 @@ function ensureSessionTimeRefreshPoll(){
 function startGatewayPollFallback(ms){
   const intervalMs = Math.max(5000, Number(ms) || _gatewayFallbackPollMs);
   if(_gatewayPollTimer) clearInterval(_gatewayPollTimer);
-  _gatewayPollTimer = setInterval(() => { renderSessionList(); }, intervalMs);
+  _gatewayPollTimer = setInterval(() => { renderSessionList({deferWhileInteracting:true}); }, intervalMs);
 }
 
 function stopGatewayPollFallback(){
@@ -1437,7 +1898,7 @@ async function probeGatewaySSEStatus(){
   if(_gatewayProbeInFlight || !window._showCliSessions) return;
   _gatewayProbeInFlight = true;
   try{
-    const resp = await fetch('/api/sessions/gateway/stream?probe=1', { credentials:'same-origin' });
+    const resp = await fetch(new URL('api/sessions/gateway/stream?probe=1', document.baseURI || location.href).href, { credentials:'same-origin' });
     const data = await resp.json().catch(() => ({}));
     if(resp.ok && data.watcher_running){
       stopGatewayPollFallback();
@@ -1446,7 +1907,7 @@ async function probeGatewaySSEStatus(){
     }
     if(resp.status === 503 || data.watcher_running === false){
       startGatewayPollFallback(data.fallback_poll_ms || _gatewayFallbackPollMs);
-      renderSessionList();
+      renderSessionList({deferWhileInteracting:true});
       if(!_gatewaySSEWarningShown && typeof showToast === 'function'){
         showToast('Gateway sync unavailable — falling back to periodic refresh.', 5000);
         _gatewaySSEWarningShown = true;
@@ -1457,7 +1918,7 @@ async function probeGatewaySSEStatus(){
     // Start fallback polling as a safe default; it will self-cancel
     // when the SSE connection recovers and sessions_changed fires.
     startGatewayPollFallback(_gatewayFallbackPollMs);
-    renderSessionList();
+    renderSessionList({deferWhileInteracting:true});
   }finally{
     _gatewayProbeInFlight = false;
   }
@@ -1474,7 +1935,7 @@ function startGatewaySSE(){
         if(data.sessions){
           stopGatewayPollFallback();
           _gatewaySSEWarningShown = false;
-          renderSessionList(); // re-fetch and re-render
+          renderSessionList({deferWhileInteracting:true}); // re-fetch and re-render
           // If the active session received new gateway messages, refresh the conversation view.
           // S.busy check prevents stomping on an in-progress WebUI response.
           // is_cli_session check ensures we only poll import_cli for CLI-originated sessions.
@@ -1542,7 +2003,7 @@ function filterSessions(){
   _searchDebounceTimer = setTimeout(async () => {
     try {
       const data = await api(`/api/sessions/search?q=${encodeURIComponent(q)}&content=1&depth=5`);
-      const titleIds = new Set(_allSessions.filter(s => (s.title||'Untitled').toLowerCase().includes(q.toLowerCase())).map(s=>s.session_id));
+      const titleIds = new Set(_allSessions.filter(s => _sessionDisplayTitle(s).toLowerCase().includes(q.toLowerCase())).map(s=>s.session_id));
       _contentSearchResults = (data.sessions||[]).filter(s => s.match_type === 'content' && !titleIds.has(s.session_id));
       renderSessionListFromCache();
     } catch(e) { /* ignore */ }
@@ -1671,12 +2132,18 @@ function _isChildSession(s){
 function _sessionLineageKey(s, sessionIdsInList){
   if(!s||!s.session_id) return null;
   if(_isChildSession(s)) return null;
+  if(s.session_source==='fork') return null;
+  const lineageKey=s._lineage_root_id||s.lineage_root_id||null;
+  if(lineageKey) return lineageKey;
   // If parent_session_id points to another session in the current list,
-  // this is a subagent child — don't collapse it into lineage (#494).
+  // this is a subagent/fork child without compression metadata — don't
+  // collapse it into lineage (#494). Compression continuations carry an
+  // explicit lineage root, even when stale optimistic rows leave parent
+  // segments in the browser cache during active compression.
   if(s.parent_session_id && sessionIdsInList && sessionIdsInList.has(s.parent_session_id)){
     return null;
   }
-  return s._lineage_root_id || s.lineage_root_id || s.parent_session_id || null;
+  return s.parent_session_id || null;
 }
 
 function _sessionLineageContainsSession(s, sid){
@@ -1687,9 +2154,101 @@ function _sessionLineageContainsSession(s, sid){
   return false;
 }
 
+function _sessionSegmentCount(s){
+  if(!s) return 0;
+  const counts=[];
+  if(typeof s._lineage_collapsed_count==='number') counts.push(s._lineage_collapsed_count);
+  if(typeof s._compression_segment_count==='number') counts.push(s._compression_segment_count);
+  if(Array.isArray(s._lineage_segments)) counts.push(s._lineage_segments.length);
+  const count=Math.max(0,...counts.map(n=>Number.isFinite(n)?n:0));
+  return count>1?count:0;
+}
+
+function _clearLineageReportCache(){
+  _lineageReportCache.clear();
+  _lineageReportInflight.clear();
+  _lineageReportCacheGeneration++;
+}
+
+function _lineageReportCacheKey(s,lineageKey){
+  return lineageKey||_sidebarLineageKeyForRow(s)||null;
+}
+
+function _lineageLocalSegmentCount(s){
+  if(!s) return 0;
+  if(Array.isArray(s._lineage_segments)) return s._lineage_segments.length;
+  return s.session_id?1:0;
+}
+
+function _lineageReportNeedsFetch(s,lineageKey,segmentCount){
+  const key=_lineageReportCacheKey(s,lineageKey);
+  if(!s||!s.session_id||!key) return false;
+  if(_lineageReportCache.has(key)||_lineageReportInflight.has(key)) return false;
+  return Number(segmentCount||0)>_lineageLocalSegmentCount(s);
+}
+
+function _lineageSegmentsForRender(s,lineageKey){
+  const segments=[];
+  const seen=new Set();
+  const currentSid=s&&s.session_id;
+  const addSegment=(seg)=>{
+    if(!seg||!seg.session_id||seg.session_id===currentSid||seen.has(seg.session_id)) return;
+    if(seg.role==='child_session') return;
+    seen.add(seg.session_id);
+    segments.push({...seg});
+  };
+  for(const seg of (Array.isArray(s&&s._lineage_segments)?s._lineage_segments:[])) addSegment(seg);
+  const cached=_lineageReportCache.get(_lineageReportCacheKey(s,lineageKey));
+  if(cached&&Array.isArray(cached.segments)){
+    for(const seg of cached.segments) addSegment(seg);
+  }
+  return segments;
+}
+
+function _fetchLineageReportForRow(s,lineageKey){
+  const key=_lineageReportCacheKey(s,lineageKey);
+  if(!s||!s.session_id||!key) return Promise.resolve(null);
+  if(_lineageReportCache.has(key)) return Promise.resolve(_lineageReportCache.get(key));
+  if(_lineageReportInflight.has(key)) return _lineageReportInflight.get(key);
+  const generation=_lineageReportCacheGeneration;
+  let request;
+  request=api('/api/session/lineage/report?session_id='+encodeURIComponent(s.session_id))
+    .then(report=>{
+      if(generation===_lineageReportCacheGeneration){
+        _lineageReportCache.set(key,(report&&report.found!==false)?report:{error:true});
+      }
+      return report;
+    })
+    .catch(err=>{
+      console.warn('lineage report',err);
+      if(generation===_lineageReportCacheGeneration) _lineageReportCache.set(key,{error:true});
+      return null;
+    })
+    .finally(()=>{
+      if(_lineageReportInflight.get(key)===request) _lineageReportInflight.delete(key);
+    });
+  _lineageReportInflight.set(key,request);
+  return request;
+}
+
 function _sidebarLineageKeyForRow(s){
   if(!s) return null;
   return s._lineage_key||s._lineage_root_id||s.lineage_root_id||s.parent_session_id||s.session_id||null;
+}
+
+function _truncatedSessionId(sid){
+  sid=String(sid||'').trim();
+  if(!sid) return '';
+  if(sid.length<=16) return sid;
+  return sid.slice(0,12)+'...';
+}
+
+function _sessionTitleForForkParent(parentSid){
+  if(!parentSid||!Array.isArray(_allSessions)) return '';
+  const parent=_allSessions.find(item=>item&&item.session_id===parentSid);
+  const title=parent&&String(parent.title||'').trim();
+  if(!title||title==='Untitled') return '';
+  return title;
 }
 
 function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions){
@@ -1708,6 +2267,10 @@ function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions){
   const orphans=[];
   for(const child of rawSessions||[]){
     if(!_isChildSession(child)) continue;
+    if(child._cross_surface_child_session){
+      orphans.push({...child,_orphan_child_session:true});
+      continue;
+    }
     const parentSid=child.parent_session_id;
     let parentRow=visibleBySid.get(parentSid);
     let parentSegment=null;
@@ -1724,7 +2287,7 @@ function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions){
       const childCopy={...child};
       if(parentSegment){
         childCopy._parent_segment_id=parentSegment.session_id;
-        childCopy._parent_segment_title=parentSegment.title||child.parent_title||'Untitled';
+        childCopy._parent_segment_title=_sessionDisplayTitle(parentSegment)||child.parent_title||'Untitled';
       }
       parentRow._child_sessions.push(childCopy);
       parentRow._child_session_count=parentRow._child_sessions.length;
@@ -1743,6 +2306,9 @@ function _syncSidebarExpansionForActiveSession(rows, activeSid){
     if(Array.isArray(row._child_sessions)&&row._child_sessions.some(child=>child&&child.session_id===activeSid)){
       _expandedChildSessionKeys.add(key);
     }
+    if(Array.isArray(row._lineage_segments)&&row._lineage_segments.some(seg=>seg&&seg.session_id===activeSid&&seg.session_id!==row.session_id)){
+      _expandedLineageKeys.add(key);
+    }
   }
 }
 
@@ -1758,11 +2324,33 @@ function _collapseSessionLineageForSidebar(sessions){
   }
   for(const [key,items] of groups.entries()){
     if(items.length<=1){result.push(items[0]);continue;}
-    const sorted=[...items].sort((a,b)=>_sessionTimestampMs(b)-_sessionTimestampMs(a));
+    const sorted=[...items].sort((a,b)=>{
+      const bSeg=Number(b&&b._compression_segment_count||0);
+      const aSeg=Number(a&&a._compression_segment_count||0);
+      if(bSeg||aSeg){
+        if(bSeg!==aSeg) return bSeg-aSeg;
+      }
+      return _sessionTimestampMs(b)-_sessionTimestampMs(a);
+    });
     const chosen=sorted[0];
     result.push({...chosen,_lineage_key:key,_lineage_collapsed_count:items.length,_lineage_segments:sorted});
   }
   return result;
+}
+
+function _sessionDisplayTitle(s){
+  const title=String((s&&(s.display_title||s._state_db_title||s.title))||'Untitled').trim();
+  return title||'Untitled';
+}
+
+function _sessionTitleIsDefaultWebUI(rawTitle){
+  const title=String(rawTitle||'').replace(/\s+/g,' ').trim();
+  return title==='Hermes WebUI'||/^Hermes WebUI #\d+$/.test(title);
+}
+
+function _sessionTitleTags(rawTitle){
+  if(_sessionTitleIsDefaultWebUI(rawTitle)) return [];
+  return String(rawTitle||'').match(/#[\w-]+/g)||[];
 }
 
 function _activeSessionIdForSidebar(){
@@ -1825,13 +2413,119 @@ function clearOptimisticSessionStreaming(sid){
   renderSessionListFromCache();
 }
 
+
+function _sessionVirtualWindow(opts){
+  const total=Math.max(0, Number(opts&&opts.total)||0);
+  const threshold=Math.max(1, Number(opts&&opts.threshold)||SESSION_VIRTUAL_THRESHOLD_ROWS);
+  const itemHeight=Math.max(1, Number(opts&&opts.itemHeight)||SESSION_VIRTUAL_ROW_HEIGHT);
+  const buffer=Math.max(0, Number(opts&&opts.buffer)||SESSION_VIRTUAL_BUFFER_ROWS);
+  const viewportHeight=Math.max(itemHeight, Number(opts&&opts.viewportHeight)||itemHeight*10);
+  const visibleRows=Math.max(1, Math.ceil(viewportHeight/itemHeight));
+  if(total<=threshold){
+    return {virtualized:false,start:0,end:total,topPad:0,bottomPad:0,itemHeight,total};
+  }
+  let start=Math.floor((Number(opts&&opts.scrollTop)||0)/itemHeight)-buffer;
+  start=Math.max(0, Math.min(start, Math.max(0,total-visibleRows)));
+  let end=Math.min(total, start+visibleRows+(buffer*2));
+  const activeIndex=Number.isFinite(Number(opts&&opts.activeIndex))?Number(opts.activeIndex):-1;
+  if(activeIndex>=0&&activeIndex<total&&(activeIndex<start||activeIndex>=end)){
+    start=Math.max(0, Math.min(activeIndex-buffer, Math.max(0,total-visibleRows-(buffer*2))));
+    end=Math.min(total, start+visibleRows+(buffer*2));
+  }
+  return {
+    virtualized:true,
+    start,
+    end,
+    topPad:start*itemHeight,
+    bottomPad:Math.max(0,(total-end)*itemHeight),
+    itemHeight,
+    total,
+  };
+}
+
+function _sessionVirtualSpacer(height, where){
+  const spacer=document.createElement('div');
+  spacer.className='session-virtual-spacer';
+  spacer.dataset.virtualSpacer=where||'gap';
+  spacer.setAttribute('aria-hidden','true');
+  spacer.style.height=Math.max(0,Math.round(height||0))+'px';
+  spacer.style.flex='0 0 auto';
+  return spacer;
+}
+
+function _scheduleSessionVirtualizedRender(){
+  _sessionListLastScrollAt=Date.now();
+  if(_renamingSid||_sessionVirtualScrollRaf) return;
+  const list=_sessionVirtualScrollList;
+  const total=Number(list&&list.dataset&&list.dataset.sessionVirtualTotal||0);
+  // Skip the re-render if the list is below the virtualization threshold —
+  // there's no virtual window to recompute, and re-rendering would just
+  // rebuild the whole DOM on every scroll tick. Without this guard, the
+  // unconditional scroll listener (attached for any list) caused
+  // user-facing scroll jumps on small lists. (#1669 follow-up)
+  if(total>0&&total<=SESSION_VIRTUAL_THRESHOLD_ROWS) return;
+  _sessionVirtualScrollRaf=requestAnimationFrame(()=>{
+    _sessionVirtualScrollRaf=0;
+    const liveList=_sessionVirtualScrollList;
+    const liveTotal=Number(liveList&&liveList.dataset&&liveList.dataset.sessionVirtualTotal||0);
+    if(liveList&&liveTotal>SESSION_VIRTUAL_THRESHOLD_ROWS){
+      const nextWindow=_sessionVirtualWindow({
+        total:liveTotal,
+        scrollTop:liveList.scrollTop||0,
+        viewportHeight:liveList.clientHeight||520,
+        itemHeight:SESSION_VIRTUAL_ROW_HEIGHT,
+        buffer:SESSION_VIRTUAL_BUFFER_ROWS,
+        threshold:SESSION_VIRTUAL_THRESHOLD_ROWS,
+        activeIndex:-1,
+      });
+      const currentStart=Number(liveList.dataset.sessionVirtualStart||0);
+      const currentEnd=Number(liveList.dataset.sessionVirtualEnd||0);
+      if(nextWindow.virtualized&&nextWindow.start===currentStart&&nextWindow.end===currentEnd) return;
+    }
+    renderSessionListFromCache();
+  });
+}
+
+function _ensureSessionVirtualScrollHandler(list){
+  if(!list) return;
+  if(_sessionVirtualScrollList===list) return;
+  if(_sessionVirtualScrollList){
+    _sessionVirtualScrollList.removeEventListener('scroll', _scheduleSessionVirtualizedRender);
+    _sessionVirtualScrollList.removeEventListener('pointerdown', _markSessionListPointerDown);
+    _sessionVirtualScrollList.removeEventListener('pointerup', _markSessionListPointerUp);
+    _sessionVirtualScrollList.removeEventListener('pointercancel', _markSessionListPointerUp);
+    _sessionVirtualScrollList.removeEventListener('pointerleave', _markSessionListPointerUp);
+  }
+  _sessionVirtualScrollList=list;
+  list.addEventListener('scroll', _scheduleSessionVirtualizedRender, {passive:true});
+  list.addEventListener('pointerdown', _markSessionListPointerDown, {passive:true});
+  list.addEventListener('pointerup', _markSessionListPointerUp, {passive:true});
+  list.addEventListener('pointercancel', _markSessionListPointerUp, {passive:true});
+  list.addEventListener('pointerleave', _markSessionListPointerUp, {passive:true});
+}
+
+function _markSessionListPointerDown(){
+  _sessionListPointerActive=true;
+  _sessionListLastScrollAt=Date.now();
+}
+
+function _markSessionListPointerUp(){
+  _sessionListPointerActive=false;
+  _sessionListLastScrollAt=Date.now();
+  if(_pendingSessionListPayload) _schedulePendingSessionListApply();
+}
+
 function renderSessionListFromCache(){
   // Don't re-render while user is actively renaming a session (would destroy the input)
   if(_renamingSid) return;
   closeSessionActionMenu();
+  // Purge stale INFLIGHT entries for sessions the server confirms are NOT
+  // streaming. This runs on every list refresh to prevent memory leaks from
+  // interrupted streams. (#2066)
+  _purgeStaleInflightEntries();
   const q=($('sessionSearch').value||'').toLowerCase();
   const activeSidForSidebar=_activeSessionIdForSidebar();
-  const titleMatches=q?_allSessions.filter(s=>(s.title||'Untitled').toLowerCase().includes(q)):_allSessions;
+  const titleMatches=q?_allSessions.filter(s=>_sessionDisplayTitle(s).toLowerCase().includes(q)):_allSessions;
   // Merge content matches (deduped): content matches appended after title matches
   const titleIds=new Set(titleMatches.map(s=>s.session_id));
   const allMatched=q?[...titleMatches,..._contentSearchResults.filter(s=>!titleIds.has(s.session_id))]:titleMatches;
@@ -1847,10 +2541,14 @@ function renderSessionListFromCache(){
     (activeSidForSidebar&&s.session_id===activeSidForSidebar) ||
     (S.session&&s.session_id===S.session.session_id&&(S.session.message_count||0)>0)
   );
-  // Filter by active profile (unless "All profiles" is toggled on)
-  // Server backfills profile='default' for legacy sessions, so every session has a profile.
-  // Show only sessions tagged to the active profile; 'All profiles' toggle overrides.
-  const profileFiltered=_showAllProfiles?withMessages:withMessages.filter(s=>s.is_cli_session||s.profile===S.activeProfile);
+  // The server is authoritative for profile scoping (#1611): it filters by
+  // active profile when no query param is set, and returns the aggregate when
+  // we send ?all_profiles=1. The renamed-root cross-alias (a row tagged
+  // 'default' matching active 'kinni' when kinni.is_default) lives server-side
+  // in _profiles_match, and a strict-equality client filter would reject those
+  // rows incorrectly. So we trust the wire data and skip the redundant client
+  // filter entirely.
+  const profileFiltered=withMessages;
   // Filter by active project. NO_PROJECT_FILTER sentinel asks for sessions
   // with no project_id; otherwise filter to the matching project_id, or
   // pass through when no filter is active.
@@ -1863,7 +2561,9 @@ function renderSessionListFromCache(){
   const sessions=_attachChildSessionsToSidebarRows(_collapseSessionLineageForSidebar(sessionsRaw), sessionsRaw);
   _syncSidebarExpansionForActiveSession(sessions, activeSidForSidebar);
   const archivedCount=projectFiltered.filter(s=>s.archived).length;
-  const list=$('sessionList');list.innerHTML='';
+  const list=$('sessionList');
+  const listScrollTopBeforeRender=list.scrollTop||0;
+  list.innerHTML='';
   // Batch select bar (when in select mode)
   if(_sessionSelectMode){
     const selectBar=document.createElement('div');selectBar.className='session-select-bar';
@@ -1937,19 +2637,23 @@ function renderSessionListFromCache(){
     bar.appendChild(addBtn);
     list.appendChild(bar);
   }
-  // Profile filter toggle (show sessions from other profiles)
-  const otherProfileCount=withMessages.filter(s=>s.profile&&s.profile!==S.activeProfile).length;
+  // Profile filter toggle (show sessions from other profiles).
+  // Cross-profile rows live SERVER-SIDE behind ?all_profiles=1, so the toggle
+  // must trigger a refetch — there's no client-cached aggregate to slice through.
+  // The server is authoritative for the count (renamed-root cross-alias is
+  // server-side). A naive strict-equality client fallback would mis-count.
+  const otherProfileCount = _otherProfileCount;
   if(otherProfileCount>0&&!_showAllProfiles){
     const pfToggle=document.createElement('div');
     pfToggle.style.cssText='font-size:10px;padding:4px 10px;color:var(--muted);cursor:pointer;text-align:center;opacity:.7;';
     pfToggle.textContent='Show '+otherProfileCount+' from other profiles';
-    pfToggle.onclick=()=>{_showAllProfiles=true;renderSessionListFromCache();};
+    pfToggle.onclick=()=>{_showAllProfiles=true;renderSessionList();};
     list.appendChild(pfToggle);
-  } else if(_showAllProfiles&&otherProfileCount>0){
+  } else if(_showAllProfiles){
     const pfToggle=document.createElement('div');
     pfToggle.style.cssText='font-size:10px;padding:4px 10px;color:var(--muted);cursor:pointer;text-align:center;opacity:.7;';
     pfToggle.textContent='Show active profile only';
-    pfToggle.onclick=()=>{_showAllProfiles=false;renderSessionListFromCache();};
+    pfToggle.onclick=()=>{_showAllProfiles=false;renderSessionList();};
     list.appendChild(pfToggle);
   }
   // Show/hide archived toggle if there are archived sessions
@@ -1990,7 +2694,55 @@ function renderSessionListFromCache(){
     } else { curItems.push(s); }
   }
   if(curItems.length) groups.push({label:curLabel,items:curItems});
-  // Render groups with collapsible headers
+  const flatSessionRows=[];
+  for(const g of groups){
+    if(_groupCollapsed[g.label]) continue;
+    for(const s of g.items){ flatSessionRows.push({group:g,session:s}); }
+  }
+  _sessionVisibleSidebarIds=flatSessionRows.map(row=>row.session&&row.session.session_id).filter(Boolean);
+  _ensureSessionVirtualScrollHandler(list);
+  const activeIndex=flatSessionRows.findIndex(row=>_sessionLineageContainsSession(row.session,activeSidForSidebar));
+  const shouldAnchorActive=activeSidForSidebar&&activeIndex>=0&&(
+    list.dataset.sessionVirtualActiveAnchor!==activeSidForSidebar||
+    list.dataset.sessionVirtualFilter!==q
+  );
+  const virtualWindowBeforeActiveAnchor=_sessionVirtualWindow({
+    total:flatSessionRows.length,
+    scrollTop:listScrollTopBeforeRender,
+    viewportHeight:list.clientHeight||520,
+    itemHeight:SESSION_VIRTUAL_ROW_HEIGHT,
+    buffer:SESSION_VIRTUAL_BUFFER_ROWS,
+    threshold:SESSION_VIRTUAL_THRESHOLD_ROWS,
+    activeIndex:-1,
+  });
+  const activeWasAlreadyVisible=activeIndex>=virtualWindowBeforeActiveAnchor.start&&activeIndex<virtualWindowBeforeActiveAnchor.end;
+  const shouldMoveSidebarToActive=shouldAnchorActive&&!activeWasAlreadyVisible;
+  let virtualWindow=_sessionVirtualWindow({
+    total:flatSessionRows.length,
+    scrollTop:listScrollTopBeforeRender,
+    viewportHeight:list.clientHeight||520,
+    itemHeight:SESSION_VIRTUAL_ROW_HEIGHT,
+    buffer:SESSION_VIRTUAL_BUFFER_ROWS,
+    threshold:SESSION_VIRTUAL_THRESHOLD_ROWS,
+    activeIndex:shouldMoveSidebarToActive?activeIndex:-1,
+  });
+  let virtualAnchorScrollTop=null;
+  if(shouldMoveSidebarToActive&&virtualWindow.virtualized){
+    list.dataset.sessionVirtualActiveAnchor=activeSidForSidebar;
+    virtualAnchorScrollTop=virtualWindow.topPad;
+  }else if(activeSidForSidebar){
+    list.dataset.sessionVirtualActiveAnchor=activeSidForSidebar;
+  }else{
+    delete list.dataset.sessionVirtualActiveAnchor;
+  }
+  list.dataset.sessionVirtualTotal=String(flatSessionRows.length);
+  list.dataset.sessionVirtualFilter=q;
+  list.dataset.sessionVirtualStart=String(virtualWindow.start);
+  list.dataset.sessionVirtualEnd=String(virtualWindow.end);
+  // Render groups with collapsible headers. Large sidebars render only the
+  // current session-row window plus top/bottom spacers inside each group body;
+  // headers remain real DOM so pin/archive/date grouping and clicks survive.
+  let globalSessionRowIndex=0;
   for(const g of groups){
     const wrapper=document.createElement('div');
     wrapper.className='session-date-group';
@@ -2004,18 +2756,42 @@ function renderSessionListFromCache(){
     hdr.appendChild(caret);hdr.appendChild(label);
     const body=document.createElement('div');
     body.className='session-date-body';
-    if(_groupCollapsed[g.label]){body.style.display='none';caret.classList.add('collapsed');}
+    const isGroupCollapsed=Boolean(_groupCollapsed[g.label]);
+    if(isGroupCollapsed){body.style.display='none';caret.classList.add('collapsed');}
     hdr.onclick=()=>{
       const isCollapsed=body.style.display==='none';
       body.style.display=isCollapsed?'':'none';
       caret.classList.toggle('collapsed',!isCollapsed);
       _groupCollapsed[g.label]=!isCollapsed;
       _saveCollapsed();
+      renderSessionListFromCache();
     };
     wrapper.appendChild(hdr);
-    for(const s of g.items){ body.appendChild(_renderOneSession(s, Boolean(g.isPinned))); }
+    let groupTopPad=0;
+    let groupBottomPad=0;
+    for(const s of g.items){
+      if(isGroupCollapsed) continue;
+      const rowIndex=globalSessionRowIndex++;
+      const inWindow=!virtualWindow.virtualized||(rowIndex>=virtualWindow.start&&rowIndex<virtualWindow.end);
+      if(inWindow){ body.appendChild(_renderOneSession(s, Boolean(g.isPinned))); }
+      else if(rowIndex<virtualWindow.start){ groupTopPad+=virtualWindow.itemHeight; }
+      else { groupBottomPad+=virtualWindow.itemHeight; }
+    }
+    if(groupTopPad>0){ body.insertBefore(_sessionVirtualSpacer(groupTopPad,'before'), body.firstChild); }
+    if(groupBottomPad>0){ body.appendChild(_sessionVirtualSpacer(groupBottomPad,'after')); }
     wrapper.appendChild(body);
     list.appendChild(wrapper);
+  }
+  if(virtualAnchorScrollTop!==null){
+    list.scrollTop=virtualAnchorScrollTop;
+  }else if(listScrollTopBeforeRender>0){
+    // Always restore the user's scroll position after re-render, regardless
+    // of whether the virtualization window applies. Lists below the
+    // virtualization threshold (≤80 rows) still have their DOM rebuilt by
+    // every renderSessionListFromCache() call, and without this restore the
+    // scrollTop drops to 0 — producing a "scroll keeps jumping back" feel
+    // when the list scrolls naturally. Fixed for #1669 follow-up.
+    list.scrollTop=listScrollTopBeforeRender;
   }
   // Select mode toggle button (only when NOT in select mode)
   if(!_sessionSelectMode){
@@ -2032,17 +2808,24 @@ function renderSessionListFromCache(){
     _rememberRenderedStreamingState(s, isStreaming);
     _rememberRenderedSessionSnapshot(s);
     const hasUnread=_hasUnreadForSession(s)&&!isActive;
+    const readOnly=_isReadOnlySession(s);
     el.className='session-item'+(isActive?' active':'')+(isActive&&S.session&&S.session._flash?' new-flash':'')+(s.archived?' archived':'')+(isStreaming?' streaming':'')+(hasUnread?' unread':'');
+    if(s.is_cli_session){
+      el.classList.add('cli-session');
+      el.dataset.source=_getChannelLabel(s)||'CLI';
+      el.dataset.sourceKey=_sourceKeyForSession(s)||'cli';
+    }
+    if(readOnly) el.classList.add('read-only-session');
     if(isActive&&S.session&&S.session._flash)delete S.session._flash;
-    const rawTitle=s.title||'Untitled';
-    const tags=(rawTitle.match(/#[\w-]+/g)||[]);
+    const rawTitle=_sessionDisplayTitle(s);
+    const tags=_sessionTitleTags(rawTitle);
     let cleanTitle=tags.length?rawTitle.replace(/#[\w-]+/g,'').trim():rawTitle;
     // Guard: system prompt content must never surface as a visible session title
     if(cleanTitle.startsWith('[SYSTEM:')){
       cleanTitle='Session';
     }
     // Checkbox for batch select mode
-    if(_sessionSelectMode){
+    if(_sessionSelectMode&&!readOnly){
       const cbWrapper=document.createElement('label');cbWrapper.className='session-select-cb-wrapper';
       const cb=document.createElement('input');cb.type='checkbox';cb.className='session-select-cb';
       cb.dataset.sid=s.session_id;cb.checked=_selectedSessions.has(s.session_id);
@@ -2065,29 +2848,85 @@ function renderSessionListFromCache(){
       pinInd.innerHTML=ICONS.pin;
       titleRow.appendChild(pinInd);
     }
+    if(s.worktree_path){
+      const wtInd=document.createElement('span');
+      wtInd.className='session-worktree-indicator';
+      wtInd.innerHTML=li('git-branch',12);
+      const wtLabel=(typeof t==='function'?t('session_worktree_badge'):'Worktree');
+      wtInd.title=`${wtLabel}: ${s.worktree_branch||s.worktree_path}`;
+      titleRow.appendChild(wtInd);
+    }
     // Parent session indicator for forked/branched sessions (#465)
     if(s.parent_session_id){
       const branchInd=document.createElement('span');
       branchInd.className='session-branch-indicator';
-      branchInd.textContent='\u2442'; // ⑂
-      branchInd.title=(typeof t==='function'?t('forked_from'):'Forked from')+' '+s.parent_session_id;
-      branchInd.style.cursor='pointer';
-      branchInd.onclick=(e)=>{
-        e.stopPropagation();
-        if(typeof loadSession==='function') loadSession(s.parent_session_id);
-      };
+      branchInd.innerHTML=li('git-branch',12);
+      const parentLabel=_sessionTitleForForkParent(s.parent_session_id)||_truncatedSessionId(s.parent_session_id);
+      branchInd.title=(typeof t==='function'?t('forked_from'):'Forked from')+' '+parentLabel;
       titleRow.appendChild(branchInd);
     }
     const title=document.createElement('span');
     title.className='session-title';
     title.textContent=cleanTitle||'Untitled';
-    title.title='Double-click to rename';
+    title.title=readOnly?'Read-only imported session':'Double-click to rename';
     const tsMs=_sessionTimestampMs(s);
     const ts=document.createElement('span');
     const hasAttentionState=isStreaming||hasUnread;
     ts.className='session-time'+(hasAttentionState?' is-hidden':'');
     ts.textContent=hasAttentionState?'':_formatRelativeSessionTime(tsMs);
     titleRow.appendChild(title);
+    // Project color dot: placed BETWEEN title and timestamp, not inside the
+    // title span. Inside the title span it would be clipped by the ellipsis
+    // truncation, becoming invisible exactly when the title is long enough
+    // to need the project marker. As a flex-flow sibling it stays visible
+    // regardless of title length and sits next to the timestamp on the right.
+    if(s.project_id){
+      const proj=_allProjects.find(p=>p.project_id===s.project_id);
+      if(proj){
+        const dot=document.createElement('span');
+        dot.className='session-project-dot';
+        dot.style.background=proj.color||'var(--blue)';
+        dot.title=proj.name;
+        titleRow.appendChild(dot);
+      }
+    }
+    const density=(window._sidebarDensity==='detailed'?'detailed':'compact');
+    const showLineageMetadata=density==='detailed';
+    const lineageKey=_sidebarLineageKeyForRow(s);
+    const segmentCount=showLineageMetadata?_sessionSegmentCount(s):0;
+    const lineageSegments=showLineageMetadata?_lineageSegmentsForRender(s,lineageKey):[];
+    const needsLineageReport=showLineageMetadata?_lineageReportNeedsFetch(s,lineageKey,segmentCount):false;
+    const lineageReportKey=showLineageMetadata?_lineageReportCacheKey(s,lineageKey):null;
+    const canExpandLineageSegments=showLineageMetadata&&Boolean(lineageKey&&segmentCount>1&&(lineageSegments.length>0||needsLineageReport||_lineageReportInflight.has(lineageReportKey)));
+    const lineageSegmentsExpanded=canExpandLineageSegments&&_expandedLineageKeys.has(lineageKey);
+    if(segmentCount>0){
+      const segmentCountEl=document.createElement('span');
+      segmentCountEl.className='session-lineage-count'+(canExpandLineageSegments?' expandable':'');
+      const segmentLabel=t('session_meta_segments', segmentCount);
+      segmentCountEl.textContent=segmentLabel;
+      segmentCountEl.title=segmentLabel;
+      if(canExpandLineageSegments){
+        segmentCountEl.setAttribute('role','button');
+        segmentCountEl.setAttribute('tabindex','0');
+        segmentCountEl.setAttribute('aria-expanded',lineageSegmentsExpanded?'true':'false');
+        ['pointerdown','pointerup','click'].forEach(ev=>segmentCountEl.addEventListener(ev,e=>e.stopPropagation()));
+        const toggleLineageSegments=(e)=>{
+          e.preventDefault();
+          e.stopPropagation();
+          if(_expandedLineageKeys.has(lineageKey)) _expandedLineageKeys.delete(lineageKey);
+          else {
+            _expandedLineageKeys.add(lineageKey);
+            if(needsLineageReport) _fetchLineageReportForRow(s,lineageKey).then(()=>renderSessionListFromCache());
+          }
+          renderSessionListFromCache();
+        };
+        segmentCountEl.onclick=toggleLineageSegments;
+        segmentCountEl.onkeydown=(e)=>{
+          if(e.key==='Enter'||e.key===' '){toggleLineageSegments(e);}
+        };
+      }
+      titleRow.appendChild(segmentCountEl);
+    }
     const childCount=typeof s._child_session_count==='number'?s._child_session_count:(Array.isArray(s._child_sessions)?s._child_sessions.length:0);
     if(childCount>0){
       const childCountEl=document.createElement('span');
@@ -2105,24 +2944,8 @@ function renderSessionListFromCache(){
       };
       titleRow.appendChild(childCountEl);
     }
-    // Project color dot: placed BETWEEN title and timestamp, not inside the
-    // title span. Inside the title span it would be clipped by the ellipsis
-    // truncation, becoming invisible exactly when the title is long enough
-    // to need the project marker. As a flex-flow sibling it stays visible
-    // regardless of title length and sits next to the timestamp on the right.
-    if(s.project_id){
-      const proj=_allProjects.find(p=>p.project_id===s.project_id);
-      if(proj){
-        const dot=document.createElement('span');
-        dot.className='session-project-dot';
-        dot.style.background=proj.color||'var(--blue)';
-        dot.title=proj.name;
-        titleRow.appendChild(dot);
-      }
-    }
     titleRow.appendChild(ts);
     sessionText.appendChild(titleRow);
-    const density=(window._sidebarDensity==='detailed'?'detailed':'compact');
     if(density==='detailed'){
       const metaBits=[];
       const msgCount=typeof s.message_count==='number'?s.message_count:0;
@@ -2131,14 +2954,43 @@ function renderSessionListFromCache(){
         : `${msgCount} msg${msgCount===1?'':'s'}`;
       metaBits.push(msgLabel);
       if(childCount>0) metaBits.push(t('session_meta_children', childCount));
-      if(s.model) metaBits.push(s.model);
+      const modelMeta=_formatSessionModelWithGateway(s);
+      if(modelMeta) metaBits.push(modelMeta);
+      const sourceLabel=_getChannelLabel(s);
+      if(s.is_cli_session&&sourceLabel) metaBits.push(sourceLabel);
+      if(readOnly) metaBits.push('read-only');
       if(_showAllProfiles&&s.profile) metaBits.push(s.profile);
       const meta=document.createElement('div');
       meta.className='session-meta';
       meta.textContent=metaBits.join(' · ');
       sessionText.appendChild(meta);
     }
-    const lineageKey=_sidebarLineageKeyForRow(s);
+    if(lineageSegmentsExpanded){
+      const lineageList=document.createElement('div');
+      lineageList.className='session-lineage-segments';
+      ['pointerdown','pointerup','click'].forEach(ev=>lineageList.addEventListener(ev,e=>e.stopPropagation()));
+      const sortedSegments=[...lineageSegments].sort((a,b)=>_sessionTimestampMs(b)-_sessionTimestampMs(a));
+      for(const seg of sortedSegments){
+        const row=document.createElement('button');
+        row.type='button';
+        row.className='session-lineage-segment'+(activeSidForSidebar&&seg.session_id===activeSidForSidebar?' active':'');
+        const segTitle=_sessionDisplayTitle(seg)||t('session_lineage_segment_untitled');
+        const segTime=_formatRelativeSessionTime(_sessionTimestampMs(seg));
+        row.textContent=`-> ${segTitle} - ${segTime}`;
+        row.title=t('session_lineage_segment_open');
+        row.onclick=async(e)=>{
+          e.stopPropagation();
+          if(seg.is_cli_session){
+            try{await api('/api/session/import_cli',{method:'POST',body:JSON.stringify({session_id:seg.session_id})});}
+            catch(_e){ /* read-only fallback */ }
+          }
+          await loadSession(seg.session_id);
+          renderSessionListFromCache();
+        };
+        lineageList.appendChild(row);
+      }
+      sessionText.appendChild(lineageList);
+    }
     if(childCount>0&&Array.isArray(s._child_sessions)&&_expandedChildSessionKeys.has(lineageKey)){
       const childList=document.createElement('div');
       childList.className='session-child-sessions';
@@ -2148,7 +3000,7 @@ function renderSessionListFromCache(){
         const row=document.createElement('button');
         row.type='button';
         row.className='session-child-session'+(activeSidForSidebar&&child.session_id===activeSidForSidebar?' active':'');
-        const childTitle=child.title||'Untitled child session';
+        const childTitle=_sessionDisplayTitle(child)||'Untitled child session';
         const childTime=_formatRelativeSessionTime(_sessionTimestampMs(child));
         const parentNote=child._parent_segment_title?` via ${child._parent_segment_title}`:'';
         row.textContent=`-> ${childTitle}${parentNote} - ${childTime}`;
@@ -2182,6 +3034,7 @@ function renderSessionListFromCache(){
 
     // Rename: called directly when we confirm it's a double-click
     const startRename=()=>{
+      if(_isReadOnlySession(s)){ if(typeof showToast==='function') showToast('Read-only imported sessions cannot be renamed.',3000); return; }
       // Guard: prevent renaming if session is currently being loaded
       if (_loadingSessionId && _loadingSessionId !== s.session_id) return;
 
@@ -2245,6 +3098,13 @@ function renderSessionListFromCache(){
       title.replaceWith(inp);
       setTimeout(()=>{inp.focus();inp.select();},10);
     };
+    // Expose the rename closure on the row so the three-dot action menu
+    // (`_openSessionActionMenu`, defined elsewhere) can trigger it without
+    // needing a separate DOM hunt or a duplicate copy of all this state
+    // (oldTitle / applyTitle / finish / _renamingSid bookkeeping). The
+    // double-click path on this element still calls startRename() directly.
+    el._startRename = startRename;
+    el.dataset.sid = s.session_id;
 
     // (Project dot is appended above, between title and timestamp, so it
     // sits outside the truncating title span and stays visible.)
@@ -2254,22 +3114,25 @@ function renderSessionListFromCache(){
     state.setAttribute('aria-hidden','true');
     el.appendChild(state);
     // Single trigger button that opens a shared dropdown menu
-    const actions=document.createElement('div');
-    actions.className='session-actions';
-    const menuBtn=document.createElement('button');
-    menuBtn.type='button';
-    menuBtn.className='session-actions-trigger';
-    menuBtn.title='Conversation actions';
-    menuBtn.setAttribute('aria-haspopup','menu');
-    menuBtn.setAttribute('aria-label','Conversation actions');
-    menuBtn.innerHTML=ICONS.more;
-    menuBtn.onclick=(e)=>{
-      e.stopPropagation();
-      e.preventDefault();
-      _openSessionActionMenu(s, menuBtn);
-    };
-    actions.appendChild(menuBtn);
-    el.appendChild(actions);
+    let actions=null;
+    if(!readOnly){
+      actions=document.createElement('div');
+      actions.className='session-actions';
+      const menuBtn=document.createElement('button');
+      menuBtn.type='button';
+      menuBtn.className='session-actions-trigger';
+      menuBtn.title='Conversation actions';
+      menuBtn.setAttribute('aria-haspopup','menu');
+      menuBtn.setAttribute('aria-label','Conversation actions');
+      menuBtn.innerHTML=ICONS.more;
+      menuBtn.onclick=(e)=>{
+        e.stopPropagation();
+        e.preventDefault();
+        _openSessionActionMenu(s, menuBtn);
+      };
+      actions.appendChild(menuBtn);
+      el.appendChild(actions);
+    }
 
     // Use pointerup + manual double-tap detection instead of onclick/ondblclick.
     // onclick/ondblclick are unreliable on touch devices (iPad Safari especially):
@@ -2282,15 +3145,31 @@ function renderSessionListFromCache(){
     let _tapTimer=null;
     let _pointerDownX=0;
     let _pointerDownY=0;
+    let _pointerActive=false;
     let _isDragging=false;
     let _clearDragTimer=null;
+    const _clearPointerDragState=()=>{
+      _pointerActive=false;
+      if(_isDragging){
+        _isDragging=false;
+        if(_clearDragTimer){clearTimeout(_clearDragTimer);_clearDragTimer=null;}
+        _clearDragTimer=setTimeout(()=>{el.classList.remove('dragging');_clearDragTimer=null;},50);
+      }
+    };
     el.onpointerdown=(e)=>{
       if(e.pointerType==='mouse' && e.button!==0) return;
+      _pointerActive=true;
       _pointerDownX=e.clientX;
       _pointerDownY=e.clientY;
       _isDragging=false;
+      if(_clearDragTimer){clearTimeout(_clearDragTimer);_clearDragTimer=null;}
+      el.classList.remove('dragging');
     };
     el.onpointermove=(e)=>{
+      // Plain hover also dispatches pointermove. Only mark a row as dragging
+      // after an actual press starts on this row; otherwise hovered rows stay
+      // faded until the next sidebar rerender clears their DOM nodes.
+      if(!_pointerActive) return;
       if(_isDragging) return;
       const dx=Math.abs(e.clientX-_pointerDownX);
       const dy=Math.abs(e.clientY-_pointerDownY);
@@ -2301,12 +3180,15 @@ function renderSessionListFromCache(){
         if(_clearDragTimer){clearTimeout(_clearDragTimer);_clearDragTimer=null;}
       }
     };
+    el.onpointercancel=_clearPointerDragState;
+    el.onpointerleave=()=>{ if(_pointerActive) _clearPointerDragState(); };
     el.onpointerup=(e)=>{
       if(e.pointerType==='mouse' && e.button!==0) return;  // ignore right/middle click
+      _pointerActive=false;
       if(_renamingSid) return;
-      if(actions.contains(e.target)) return;
-      if(e.target&&e.target.closest&&e.target.closest('.session-child-count,.session-child-sessions,.session-child-session')) return;
-      if(_sessionSelectMode){e.stopPropagation();toggleSessionSelect(s.session_id);return;}
+      if(actions&&actions.contains(e.target)) return;
+      if(e.target&&e.target.closest&&e.target.closest('.session-child-count,.session-child-sessions,.session-child-session,.session-lineage-count,.session-lineage-segments,.session-lineage-segment')) return;
+      if(_sessionSelectMode){e.stopPropagation();if(!readOnly)toggleSessionSelect(s.session_id);return;}
       // If the pointer moved enough to be a drag, cancel any pending tap
       if(_isDragging){clearTimeout(_tapTimer);_tapTimer=null;_lastTapTime=0;_clearDragTimer=setTimeout(()=>{el.classList.remove('dragging');_clearDragTimer=null;},50);return;}
       const now=Date.now();
@@ -2342,8 +3224,8 @@ function renderSessionListFromCache(){
     el.ondblclick=(e)=>{
       if(e.pointerType==='mouse' && e.button!==0) return;
       if(_renamingSid) return;
-      if(actions.contains(e.target)) return;
-      if(_sessionSelectMode){e.stopPropagation();toggleSessionSelect(s.session_id);return;}
+      if(actions&&actions.contains(e.target)) return;
+      if(_sessionSelectMode){e.stopPropagation();if(!readOnly)toggleSessionSelect(s.session_id);return;}
       // Guard: prevent renaming if session is currently being loaded
       if (_loadingSessionId && _loadingSessionId !== s.session_id) return;
       startRename();
@@ -2376,15 +3258,92 @@ if(typeof window!=='undefined'){
   });
 }
 
-async function deleteSession(sid){
+async function removeWorktree(session){
+  // Fetch status first
+  let status=null;
+  try{
+    const statusResp=await api('/api/session/worktree/status?session_id='+encodeURIComponent(session.session_id));
+    status=statusResp.status;
+  }catch(e){
+    showToast(t('session_worktree_remove_status_failed')+e.message,0,'error');
+    return;
+  }
+  if(!status){
+    showToast(t('session_worktree_remove_status_failed'),0,'error');
+    return;
+  }
+  // Build confirm message
+  let details='';
+  if(!status.exists){
+    details=t('session_worktree_remove_not_exists',status.path);
+  }else{
+    details=t('session_worktree_remove_confirm',status.path);
+    if(status.locked_by_stream){
+      showToast(t('session_worktree_remove_locked_by_stream'),0,'error');
+      return;
+    }
+    if(status.locked_by_terminal){
+      showToast(t('session_worktree_remove_locked_by_terminal'),0,'error');
+      return;
+    }
+    if(status.dirty){
+      details+='\n\n'+t('session_worktree_remove_dirty_warning');
+    }
+    if(status.untracked_count>0){
+      details+='\n'+t('session_worktree_remove_untracked_warning',status.untracked_count);
+    }
+    if(status.ahead_behind&&status.ahead_behind.ahead>0){
+      details+='\n'+t('session_worktree_remove_ahead_warning',status.ahead_behind.ahead);
+    }
+    if(status.dirty||status.untracked_count>0||(status.ahead_behind&&status.ahead_behind.ahead>0)){
+      showToast(t('session_worktree_remove_failed')+t('session_worktree_remove_unsafe_blocked'),0,'error');
+      await showConfirmDialog({
+        message:details,
+        confirmLabel:t('dialog_confirm_btn'),
+        danger:true,
+        focusCancel:true
+      });
+      return;
+    }
+  }
   const ok=await showConfirmDialog({
-    message:'Delete this conversation?',
-    confirmLabel:t('delete_title'),
+    message:details,
+    confirmLabel:t('session_worktree_remove_confirm_label'),
     danger:true
   });
   if(!ok)return;
   try{
-    await api('/api/session/delete',{method:'POST',body:JSON.stringify({session_id:sid})});
+    const result=await api('/api/session/worktree/remove',{
+      method:'POST',
+      body:JSON.stringify({session_id:session.session_id, force:false})
+    });
+    const warn=result.warnings&&result.warnings.length?(' '+result.warnings.join(' ')):'';
+    showToast(t('session_worktree_removed')+warn);
+    // Clear the worktree_path from cached session so menu doesn't show stale remove action
+    if(session.worktree_path){
+      session.worktree_path=null;
+    }
+    // Re-render the list if this is the active session
+    if(S.session&&S.session.session_id===session.session_id&&S.session.worktree_path){
+      S.session.worktree_path=null;
+    }
+    await renderSessionList();
+  }catch(e){
+    showToast(t('session_worktree_remove_failed')+e.message,0,'error');
+  }
+}
+
+async function deleteSession(sid){
+  const session=_sessionSnapshotById(sid);
+  const ok=await showConfirmDialog({
+    message:session&&session.worktree_path?t('session_delete_worktree_confirm',session.worktree_path):t('session_delete_confirm'),
+    confirmLabel:t('delete_title'),
+    danger:true
+  });
+  if(!ok)return;
+  let response=null;
+  try{
+    response=await api('/api/session/delete',{method:'POST',body:JSON.stringify({session_id:sid})});
     _clearHandoffStorageForSession(sid);
   }catch(e){setStatus(`Delete failed: ${e.message}`);return;}
   if(S.session&&S.session.session_id===sid){
@@ -2404,7 +3363,7 @@ async function deleteSession(sid){
       if(typeof syncAppTitlebar==='function') syncAppTitlebar();
     }
   }
-  showToast('Conversation deleted');
+  showToast(_sessionResponseRetainsWorktree(response,session)?t('session_deleted_worktree'):t('session_deleted'));
   await renderSessionList();
 }
 
@@ -2597,7 +3556,7 @@ function _showProjectContextMenu(e, proj, chip){
   const renameItem=document.createElement('div');
   renameItem.textContent='Rename';
   renameItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
-  renameItem.onmouseenter=()=>renameItem.style.background='var(--hover)';
+  renameItem.onmouseenter=()=>renameItem.style.background='var(--hover-bg)';
   renameItem.onmouseleave=()=>renameItem.style.background='';
   renameItem.onclick=()=>{menu.remove();_startProjectRename(proj,chip);};
   menu.appendChild(renameItem);
@@ -2626,7 +3585,7 @@ function _showProjectContextMenu(e, proj, chip){
   const delItem=document.createElement('div');
   delItem.textContent='Delete';
   delItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--error,#e94560);';
-  delItem.onmouseenter=()=>delItem.style.background='var(--hover)';
+  delItem.onmouseenter=()=>delItem.style.background='var(--hover-bg)';
   delItem.onmouseleave=()=>delItem.style.background='';
   delItem.onclick=()=>{menu.remove();_confirmDeleteProject(proj);};
   menu.appendChild(delItem);
