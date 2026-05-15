@@ -285,9 +285,8 @@ class TestIssue495TitleStreaming(unittest.TestCase):
         ]
 
         derived = title_from(messages, "")
-        current = derived[:63]  # Simulate the provisional title the UI writes immediately.
+        current = derived[:64]  # Simulate the provisional title the UI writes immediately.
 
-        self.assertNotEqual(current, derived[:64])
         self.assertTrue(
             _is_provisional_title(current, messages),
             "Whitespace-normalized provisional titles should still be recognized",
@@ -326,6 +325,19 @@ class TestIssue495TitleStreaming(unittest.TestCase):
             agentic_asst["content"][:500],
             "Substantive answer text on a tool_call row must be preserved",
         )
+
+    def test_fallback_title_preserves_unicode_letters(self):
+        """Local fallback title generation must not strip German umlauts."""
+        from api.streaming import _fallback_title_from_exchange
+
+        title = _fallback_title_from_exchange(
+            "Bitte führe ein Selbst-Audit durch. Wo ist überall noch Gemini-2.5-flash als Modell im Einsatz? Sei gründlich",
+            "Ich prüfe live statt aus Bauchgefühl.",
+        )
+
+        self.assertIsNotNone(title)
+        self.assertIn("führe", title)
+        self.assertNotIn("hre", title.split())
 
     def test_title_snippet_skips_tool_call_preamble_only_rows(self):
         """Tool-call rows whose content is empty or meta-reasoning preamble

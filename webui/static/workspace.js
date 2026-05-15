@@ -9,13 +9,20 @@ async function api(path,opts={}){
     try{
       const res=await fetch(url.href,{credentials:'include',headers:{'Content-Type':'application/json'},...opts});
       if(!res.ok){
-        // 401 means the auth session expired. Redirect destination depends on
-        // auth mode: neodomain mode returns {loginUrl: 'https://app.neowow.studio/...'},
-        // password mode just sends 401 → fall back to /login local page.
-        // (See ui.js _redirectIfUnauth for the canonical implementation; we
-        // duplicate the logic here because workspace.js predates that helper.)
+        // 401 means the auth session expired. Two redirect modes:
+        //   • Neodomain mode (Neowow distribution): server returns
+        //     {loginUrl: 'https://app.neowow.studio/...'} so we bounce
+        //     the user through OAuth.
+        //   • Password / no-auth mode (upstream default): plain 401 →
+        //     fall back to local /login page.
+        //
+        // Use a leading-slash-LESS fallback ('login?next=…') so subpath
+        // mounts (/hermes/ etc., upstream feature) and iOS PWA standalone
+        // both work. (See ui.js _redirectIfUnauth for the canonical
+        // implementation; we duplicate the logic here because workspace.js
+        // predates that helper.)
         if(res.status===401){
-          const fallback = '/login?next='+encodeURIComponent(window.location.pathname+window.location.search);
+          const fallback = 'login?next='+encodeURIComponent(window.location.pathname+window.location.search);
           try {
             const body = await res.clone().json().catch(() => null);
             window.location.href = (body && typeof body.loginUrl === 'string') ? body.loginUrl : fallback;
@@ -96,9 +103,9 @@ async function loadDir(path){
     }
     if(typeof clearPreview==='function'){
       if(typeof _previewDirty!=='undefined'&&_previewDirty){
-        showConfirmDialog({title:t('unsaved_confirm'),message:'',confirmLabel:'Discard',danger:true,focusCancel:true}).then(ok=>{if(ok)clearPreview();});
+        showConfirmDialog({title:t('unsaved_confirm'),message:'',confirmLabel:'Discard',danger:true,focusCancel:true}).then(ok=>{if(ok)clearPreview({keepPanelOpen:true});});
       }else{
-        clearPreview();
+        clearPreview({keepPanelOpen:true});
       }
     }
     // Fetch git info for workspace root (non-blocking)
@@ -348,7 +355,7 @@ function renderFileBreadcrumb(filePath) {
   const root = document.createElement('span');
   root.className = 'breadcrumb-seg breadcrumb-link';
   root.textContent = '~';
-  root.onclick = () => { clearPreview(); loadDir('.'); };
+  root.onclick = () => { loadDir('.'); };
   bar.appendChild(root);
 
   const parts = filePath.split('/');
@@ -365,7 +372,7 @@ function renderFileBreadcrumb(filePath) {
     if (i < parts.length - 1) {
       seg.className = 'breadcrumb-seg breadcrumb-link';
       const target = accumulated;
-      seg.onclick = () => { clearPreview(); loadDir(target); };
+      seg.onclick = () => { loadDir(target); };
     } else {
       seg.className = 'breadcrumb-seg breadcrumb-current';
     }
