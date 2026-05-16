@@ -384,6 +384,18 @@ def _workspace_candidates(raw: str | Path | None = None) -> list[Path]:
 
     add(home_workspace)
     add(STATE_DIR / "workspace")
+    # Docker volume-aware fallbacks. Our cloud images use:
+    #   • /opt/hermes/workspace  — image-layer dir owned by hermes user.
+    #     Survives container recreate, lost on image upgrade UNLESS the
+    #     compose bind-mounts it; either way it's writable from inside
+    #     the running container which is what we care about here.
+    #   • /tmp/hermes-workspace  — last-resort tmpfs that lets the
+    #     server BOOT even if every other candidate is read-only (e.g.
+    #     misconfigured volume permissions). Ephemeral; users will lose
+    #     workspace state on container restart, but at least the WebUI
+    #     starts and they can see the misconfig in /api/onboarding/status.
+    add("/opt/hermes/workspace")
+    add("/tmp/hermes-workspace")
     return candidates
 
 
@@ -400,14 +412,49 @@ def _ensure_workspace_dir(path: Path) -> bool:
 
 
 def resolve_default_workspace(raw: str | Path | None = None) -> Path:
-    """Return the first usable workspace path, creating it when possible."""
+    """Return the first usable workspace path, creating it when possible.
+
+    NEVER raises — boot-time import of api/config.py used to crash the
+    entire WebUI when no candidate was writable (commonly: a Docker
+    volume mounted on the parent dir with root-owned permissions
+    shadowed the chown'd image layer). Now we degrade gracefully to a
+    last-resort path under the running user's $TMPDIR or /tmp, leaving
+    a clear /api/onboarding/status diagnostic for the operator to fix
+    permissions on the real workspace mount.
+
+    Callers that explicitly want failure detection (e.g. operator
+    scripts) should check `path.is_dir() and os.access(path, W_OK)`
+    after this returns.
+    """
     for candidate in _workspace_candidates(raw):
         if _ensure_workspace_dir(candidate):
             return candidate
-    raise RuntimeError(
-        "Could not create or access any usable workspace directory. "
-        "Set HERMES_WEBUI_DEFAULT_WORKSPACE to a writable path."
+
+    # Last-resort fallback: tmpfs path. Always writable on a normal
+    # Linux container. The WebUI BOOTS and the user can see/repair the
+    # underlying permission issue via Settings; we log loudly so it's
+    # obvious in `docker logs` that this isn't normal.
+    import tempfile
+    fallback = Path(tempfile.gettempdir()) / "hermes-webui-workspace"
+    try:
+        fallback.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # If even /tmp is read-only the container is hopelessly broken;
+        # accept the original raise so the operator gets a clear error.
+        raise RuntimeError(
+            "Could not create or access any usable workspace directory "
+            "(even /tmp). Set HERMES_WEBUI_DEFAULT_WORKSPACE to a "
+            "writable path. Tried: "
+            + ", ".join(str(c) for c in _workspace_candidates(raw))
+        )
+    print(
+        f"[!!] WARNING: no writable workspace candidate found; "
+        f"falling back to ephemeral {fallback}. Set "
+        f"HERMES_WEBUI_DEFAULT_WORKSPACE in docker-compose.yml to "
+        f"a real volume-mounted path before relying on persistence.",
+        flush=True,
     )
+    return fallback
 
 
 

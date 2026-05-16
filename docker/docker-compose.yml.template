@@ -67,6 +67,15 @@ services:
       HERMES_WEBUI_PORT: 7891
       HERMES_WEBUI_FOREGROUND: "1"
       HERMES_WEBUI_STATE_DIR: /opt/hermes/.hermes/webui
+      # Explicit workspace path. Required as of upstream-sync db9721a:
+      # config.py walks HOME and STATE_DIR looking for a writable dir
+      # but the Docker volume mounted at /opt/hermes/.hermes is
+      # root-owned at first launch (volumes inherit root, not the
+      # image-layer chown), so the auto-detection fails and the WebUI
+      # boots into a /tmp/hermes-webui-workspace tmpfs fallback —
+      # ephemeral, loses sessions. Setting this var pins to a known
+      # writable path inside /opt/hermes (image layer, hermes-owned).
+      HERMES_WEBUI_DEFAULT_WORKSPACE: /opt/hermes/workspace
       # Override OAuth start URL if you self-host the dashboard. Default
       # points at app.neowow.studio. Empty/unset = use default.
       # HERMES_NEODOMAIN_OAUTH_START: https://your-dashboard.example.com/api/oauth/start

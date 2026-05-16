@@ -84,8 +84,15 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 # UID 1500 to avoid clashing with the default ubuntu user (UID 1000)
 # on host volumes.
 RUN useradd -r -m -u 1500 -d /opt/hermes -s /bin/bash hermes \
-    && mkdir -p /opt/hermes/.hermes \
+    && mkdir -p /opt/hermes/.hermes /opt/hermes/workspace \
     && chown -R hermes:hermes /opt/hermes
+# Note: /opt/hermes/workspace is created explicitly so api/config.py's
+# workspace discovery has a known-writable image-layer fallback. The
+# compose mounts /opt/hermes/.hermes as a named volume (root-owned at
+# init, hides the chown), but /opt/hermes/workspace stays from the
+# image — chown'd to hermes — so the auto-detection works without
+# requiring HERMES_WEBUI_DEFAULT_WORKSPACE to be set. We DO set the
+# env var in docker-compose.yml.template too as belt-and-suspenders.
 
 # ── Copy hermes-installer source ─────────────────────────────────────────────
 # We use COPY (not git clone) so the image build is reproducible from
