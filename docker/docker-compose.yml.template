@@ -55,7 +55,23 @@ services:
 
   # ── Hermes WebUI: pre-baked image with Hermes Agent + venv ───────────────
   hermes-webui:
-    image: ${HERMES_WEBUI_IMAGE:-registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui:latest}
+    # Default points at the personal-edition ACR where GitHub Actions
+    # build-image.yml actually pushes (see ALIYUN_ACR_REGISTRY +
+    # ALIYUN_ACR_NAMESPACE secrets in repo settings — the workflow
+    # tags as ${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}/hermes-
+    # webui:latest, which today resolves to
+    # crpi-cbjdiuh3frfb6zz6.cn-shanghai.personal.cr.aliyuncs.com/
+    # neowow/hermes-webui).
+    #
+    # Override HERMES_WEBUI_IMAGE in .env when:
+    #   • Using a private fork / your own ACR registry
+    #   • Pinning to a specific commit tag (e.g. main-86f85d0a) for
+    #     rollback or A/B testing
+    #   • Switching to an enterprise-edition ACR for VPC-internal pulls
+    #
+    # docker login crpi-cbjdiuh3frfb6zz6.cn-shanghai.personal.cr.aliyuncs.com
+    # is required before the first compose pull — image is private.
+    image: ${HERMES_WEBUI_IMAGE:-crpi-cbjdiuh3frfb6zz6.cn-shanghai.personal.cr.aliyuncs.com/neowow/hermes-webui:latest}
     container_name: hermes-webui
     restart: unless-stopped
     environment:
