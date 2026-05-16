@@ -692,23 +692,59 @@ def deploy(worker_name: str, workspace: str) -> dict:
 # in the cloud config so users can see what's not auto-applied yet.
 
 def _cloud_request(url: str, method: str = "GET") -> dict:
-    """Make an authenticated request to the dashboard with the saved
-    deploy-token. Returns the parsed JSON body. Raises:
-      • ValueError when no token is saved (caller's mistake — surface to UI)
-      • RuntimeError on HTTP/transport errors (caller decides how to display)
+    """Make an authenticated request to the dashboard. Returns the parsed
+    JSON body. Auth-source order:
+
+      1. JWT — preferred. Comes from the user's neoToken cookie via the
+         per-request threadlocal set by server.py
+         (set_request_jwt_from_cookie) in cloud mode, or from the
+         persisted neowow.json on desktop. Identifies the actual user;
+         endpoints downstream can do full-account operations.
+
+      2. Deploy token (nws_dt_*) — fallback. Lives in neowow.json's
+         `token` field. Scoped — typically just `chat:invoke`. Useful
+         when the user pasted a deploy token directly without OAuth-ing
+         in (e.g. headless CLI integration). Identifies the OWNER of
+         the token, not the live caller.
+
+    Either path produces an `Authorization: Bearer <token>` header for
+    the dashboard's resolveCaller (which now accepts both via the
+    cookie fallback in dashboard/src/lib/caller.ts:resolveCaller).
+
+    Raises:
+      • ValueError when neither auth source is available — surface to
+        UI so the user knows to log in or paste a deploy token.
+      • RuntimeError on HTTP / transport errors — caller decides how
+        to render.
     """
-    state = _read_state()
-    token = (state.get("token") or "").strip()
-    if not token:
+    # JWT first: get_jwt() prefers per-request threadlocal (cloud mode
+    # cookie), falls through to file-based state (desktop). Either way,
+    # if a JWT is present, use it.
+    jwt = get_jwt()
+    auth_token = jwt
+    auth_source = "jwt" if jwt else ""
+
+    # Deploy token as fallback. Some users have only a deploy token
+    # configured (no OAuth login on this WebUI yet) — keep their flow
+    # working.
+    if not auth_token:
+        state = _read_state()
+        deploy_token = (state.get("token") or "").strip()
+        if deploy_token:
+            auth_token = deploy_token
+            auth_source = "deploy_token"
+
+    if not auth_token:
         raise ValueError(
-            "No deploy token saved. Paste one in the Token field above first."
+            "Not signed in. Click the avatar to log in via Neodomain, "
+            "or paste a deploy token in Settings → Neowow Studio."
         )
 
     req = urllib.request.Request(
         url,
         headers={
-            "Authorization": f"Bearer {token}",
-            "User-Agent":    "Hermes/neowow-cloud-config",
+            "Authorization": f"Bearer {auth_token}",
+            "User-Agent":    f"Hermes/neowow-cloud-config (auth={auth_source})",
         },
         method=method,
     )
