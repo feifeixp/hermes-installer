@@ -3822,7 +3822,13 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/neowow/status":
         from api.neowow import get_status
         try:
-            return j(handler, get_status())
+            # Pass the handler so get_status can sniff the neoToken
+            # cookie under HERMES_WEBUI_AUTH_MODE=neodomain (cloud mode).
+            # Without this, the avatar UI is perpetually "logged out"
+            # even though the user authenticated via OAuth — the JWT
+            # was set in the cross-subdomain cookie but get_status
+            # only checked the local state file.
+            return j(handler, get_status(handler))
         except Exception as e:
             logger.exception("neowow status failed")
             return bad(handler, str(e), status=500)

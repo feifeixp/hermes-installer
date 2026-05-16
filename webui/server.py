@@ -115,6 +115,12 @@ from api.auth import check_auth
 from api.config import HOST, PORT, STATE_DIR, SESSION_DIR, DEFAULT_WORKSPACE
 from api.helpers import j, get_profile_cookie
 from api.profiles import set_request_profile, clear_request_profile
+# Phase β.16 cookie-as-JWT request scoping: in cloud auth mode
+# (HERMES_WEBUI_AUTH_MODE=neodomain) the JWT lives in the per-request
+# neoToken cookie, not on disk. We stash it into a threadlocal at
+# request start so api.neowow.get_jwt() picks it up transparently.
+# No-op when not in cloud mode.
+from api.neowow import set_request_jwt_from_cookie, clear_request_jwt
 from api.routes import handle_delete, handle_get, handle_patch, handle_post
 from api.startup import auto_install_agent_deps, fix_credential_permissions
 from api.updates import WEBUI_VERSION
@@ -245,6 +251,9 @@ class Handler(BaseHTTPRequestHandler):
         cookie_profile = get_profile_cookie(self)
         if cookie_profile:
             set_request_profile(cookie_profile)
+        # Per-request JWT context from neoToken cookie (cloud auth mode).
+        # No-op when not running with HERMES_WEBUI_AUTH_MODE=neodomain.
+        set_request_jwt_from_cookie(self)
         try:
             parsed = urlparse(self.path)
             if not check_auth(self, parsed): return
@@ -256,6 +265,7 @@ class Handler(BaseHTTPRequestHandler):
             return j(self, {'error': 'Internal server error'}, status=500)
         finally:
             clear_request_profile()
+            clear_request_jwt()
 
     def _handle_write(self, route_func) -> None:
         self._req_t0 = time.time()
@@ -263,6 +273,8 @@ class Handler(BaseHTTPRequestHandler):
         cookie_profile = get_profile_cookie(self)
         if cookie_profile:
             set_request_profile(cookie_profile)
+        # Per-request JWT context from neoToken cookie (cloud auth mode).
+        set_request_jwt_from_cookie(self)
         try:
             parsed = urlparse(self.path)
             # Stage-346 Opus SHOULD-FIX defense-in-depth: scope the CSP-report
@@ -282,6 +294,7 @@ class Handler(BaseHTTPRequestHandler):
             return j(self, {'error': 'Internal server error'}, status=500)
         finally:
             clear_request_profile()
+            clear_request_jwt()
 
     def do_POST(self) -> None:
         self._handle_write(handle_post)

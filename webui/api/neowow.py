@@ -250,7 +250,7 @@ def _write_state(state: dict) -> None:
         pass
 
 
-def get_status() -> dict:
+def get_status(handler=None) -> dict:
     """Return whatever the UI needs to render the integration panel.
 
     Never returns the full token / JWT. Masking shapes:
@@ -258,17 +258,63 @@ def get_status() -> dict:
       • JWT:          `eyJ…1234` (just enough to confirm presence)
     so the user can verify "yes that's the credential I saved" without
     copy-pasting it back out of a screenshot.
+
+    Phase β cloud mode: when HERMES_WEBUI_AUTH_MODE=neodomain (i.e.
+    chat.neowow.studio behind cross-subdomain `neoToken` cookie), the
+    JWT lives in the request cookie — NOT in the local state file. The
+    avatar UI was originally desktop-only and read only the file, which
+    made the avatar perpetually say "未登录" on the cloud deployment
+    even though chat itself worked (because the request cookie WAS
+    being honored by auth.py for everything else).
+
+    Pass `handler` (BaseHTTPRequestHandler) when calling from a route
+    so we can sniff the `neoToken` cookie and report the cloud session
+    too. When `handler` is None (e.g. an admin script calling this
+    function directly) we fall back to the file-only behavior.
     """
     state = _read_state()
     token = (state.get("token") or "").strip()
-    jwt   = (state.get("jwt") or "").strip()
+    file_jwt = (state.get("jwt") or "").strip()
+
+    # Cloud-mode JWT discovery — sniff the request's neoToken cookie.
+    cookie_jwt = ""
+    if handler is not None and _is_neodomain_mode():
+        try:
+            from api.auth import parse_neo_cookie
+            cookie_jwt = (parse_neo_cookie(handler) or "").strip()
+        except Exception:
+            # If cookie parsing throws (malformed header etc.) fall
+            # back to file-only — avatar is best-effort.
+            cookie_jwt = ""
+
+    # Cookie wins over file when both are present. They normally won't
+    # be — the file path is for desktop, the cookie path is for cloud.
+    effective_jwt = cookie_jwt or file_jwt
+    jwt_source = (
+        "cookie" if cookie_jwt
+        else ("file" if file_jwt else "")
+    )
+
     return {
         "hasToken":     bool(token),
         "maskedToken":  _mask_token(token) if token else "",
-        "hasJwt":       bool(jwt),
-        "maskedJwt":    _mask_jwt(jwt) if jwt else "",
+        "hasJwt":       bool(effective_jwt),
+        "maskedJwt":    _mask_jwt(effective_jwt) if effective_jwt else "",
+        # Lets the UI know WHERE the JWT came from. Cookie-mode means
+        # logout has to clear the cookie (server-side via dashboard),
+        # not just the local file.
+        "jwtSource":    jwt_source,
         "lastDeploy":   state.get("lastDeploy"),
     }
+
+
+def _is_neodomain_mode() -> bool:
+    """True iff the WebUI is running in cross-subdomain neoToken cookie
+    auth mode (the cloud chat.neowow.studio deployment). We read the
+    env var directly rather than importing get_auth_mode() to avoid a
+    circular dep — api/auth.py imports things from api/onboarding.py
+    which transitively imports things from here."""
+    return os.getenv("HERMES_WEBUI_AUTH_MODE", "").strip().lower() == "neodomain"
 
 
 def save_token(token: str) -> dict:
@@ -331,9 +377,70 @@ def clear_jwt() -> dict:
     return get_status()
 
 
+# ── Per-request JWT context (cloud mode) ────────────────────────────────────
+#
+# Cloud mode (HERMES_WEBUI_AUTH_MODE=neodomain — chat.neowow.studio): the
+# JWT lives in the per-request `neoToken` cookie, NOT in the local state
+# file. server.py calls `set_request_jwt_from_cookie(handler)` at the
+# start of every request (paired with clear in a finally), so any code
+# path that subsequently calls `get_jwt()` sees the cookie's JWT.
+#
+# Desktop mode (HERMES_WEBUI_AUTH_MODE unset or = password — local
+# pywebview / Tauri Hermes app): the JWT lives in neowow.json (file).
+# The context var stays empty; get_jwt() falls through to the file.
+#
+# Why threadlocal + threading.local() instead of contextvars.ContextVar:
+# the existing api/profiles.py pattern uses threadlocal (it predates
+# this code), and ThreadingHTTPServer is one-thread-per-request, so a
+# threadlocal is functionally equivalent. Reusing the pattern keeps the
+# server.py wrapper symmetric (set_request_*/clear_request_* pairs).
+
+import threading
+
+_request_tls = threading.local()
+
+
+def set_request_jwt_from_cookie(handler) -> None:
+    """Sniff the neoToken cookie on the current request and stash it
+    so get_jwt() picks it up. Called by server.py per-request. No-op
+    when not in neodomain mode, when handler is None, or when the
+    cookie is absent (cleanly degrades to file-based JWT)."""
+    if handler is None:
+        return
+    if os.getenv("HERMES_WEBUI_AUTH_MODE", "").strip().lower() != "neodomain":
+        return
+    try:
+        from api.auth import parse_neo_cookie
+        jwt = (parse_neo_cookie(handler) or "").strip()
+    except Exception:
+        jwt = ""
+    _request_tls.jwt = jwt
+
+
+def clear_request_jwt() -> None:
+    """Pair with set_request_jwt_from_cookie. Called in server.py's
+    finally block so the threadlocal doesn't bleed across requests
+    (matters with thread reuse in ThreadingHTTPServer)."""
+    _request_tls.jwt = None
+
+
 def get_jwt() -> str:
-    """Return the saved JWT or '' when none. Internal helper for the
-    /agent/* proxy paths that need a real user token."""
+    """Return the active JWT for the current request, or '' when none.
+
+    Resolution order:
+      1. Per-request context (set by server.py from neoToken cookie in
+         cloud mode). When present, ALWAYS wins.
+      2. Local state file (desktop mode or admin scripts running
+         outside a request).
+
+    All /agent/* proxy paths and avatar status calls go through here, so
+    chat.neowow.studio's per-request cookie automatically authenticates
+    every downstream call without each caller having to know about the
+    two modes.
+    """
+    req_jwt = getattr(_request_tls, "jwt", None)
+    if req_jwt:
+        return req_jwt
     state = _read_state()
     return (state.get("jwt") or "").strip()
 
