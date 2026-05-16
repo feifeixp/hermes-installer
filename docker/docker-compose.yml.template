@@ -97,6 +97,10 @@ services:
       # the same region as your bucket to avoid cross-region egress
       # cost.
       OSS_SYNC_ENABLED:        "${OSS_SYNC_ENABLED:-0}"
+      # Auth: either OSS_RAM_ROLE_NAME (Aliyun ECS, preferred — no
+      # static secrets) OR OSS_ACCESS_KEY_ID + OSS_ACCESS_KEY_SECRET
+      # (Tencent / non-Aliyun host). Set exactly one path.
+      OSS_RAM_ROLE_NAME:       "${OSS_RAM_ROLE_NAME:-}"
       OSS_ACCESS_KEY_ID:       "${OSS_ACCESS_KEY_ID:-}"
       OSS_ACCESS_KEY_SECRET:   "${OSS_ACCESS_KEY_SECRET:-}"
       OSS_ENDPOINT:            "${OSS_ENDPOINT:-oss-cn-hangzhou.aliyuncs.com}"

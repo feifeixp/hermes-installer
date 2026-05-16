@@ -69,16 +69,37 @@ if [[ "${OSS_SYNC_ENABLED:-0}" != "1" ]]; then
     exit 0
 fi
 
-# Required vars when sync IS enabled. Fail-fast — operator misconfig
-# silently producing "no backup" is the worst outcome we can imagine.
-if [[ -z "${OSS_ACCESS_KEY_ID:-}" ]] \
-   || [[ -z "${OSS_ACCESS_KEY_SECRET:-}" ]] \
-   || [[ -z "${OSS_USER_ID:-}" ]] \
-   || [[ -z "${OSS_BUCKET:-}" ]] \
-   || [[ -z "${OSS_ENDPOINT:-}" ]]; then
-    log "ERROR: OSS_SYNC_ENABLED=1 but missing OSS_ACCESS_KEY_ID / "
-    log "       OSS_ACCESS_KEY_SECRET / OSS_USER_ID / OSS_BUCKET / OSS_ENDPOINT."
+# Auth mode detection:
+#   1. OSS_RAM_ROLE_NAME set → Aliyun ECS RAM role (preferred, secrets-
+#      free). Requires the container to be running on an Aliyun ECS
+#      that has the named role attached.
+#   2. AK/SK pair set → static credentials (Tencent Cloud, non-Aliyun,
+#      or pre-RAM-role legacy deploys).
+#   3. Neither → hard error.
+#
+# RAM role mode is strongly preferred on Aliyun ECS because:
+#   • No long-lived secret in .env (rotation = role policy change)
+#   • Aliyun auto-rotates the short-lived STS token every ~hour
+#   • Compromised .env doesn't grant OSS access by itself
+USE_RAM_ROLE=0
+if [[ -n "${OSS_RAM_ROLE_NAME:-}" ]]; then
+    USE_RAM_ROLE=1
+    log "auth mode: ECS RAM role '${OSS_RAM_ROLE_NAME}' (no static AK/SK)"
+elif [[ -n "${OSS_ACCESS_KEY_ID:-}" ]] && [[ -n "${OSS_ACCESS_KEY_SECRET:-}" ]]; then
+    USE_RAM_ROLE=0
+    log "auth mode: static AK/SK (legacy / non-Aliyun host)"
+else
+    log "ERROR: OSS_SYNC_ENABLED=1 but no credentials configured."
+    log "       Set EITHER OSS_RAM_ROLE_NAME (on Aliyun ECS with the"
+    log "       role attached) OR OSS_ACCESS_KEY_ID + OSS_ACCESS_KEY_SECRET."
     log "       Refusing to silently skip — exit non-zero."
+    exit 2
+fi
+
+# Required vars regardless of auth mode.
+if [[ -z "${OSS_USER_ID:-}" ]] || [[ -z "${OSS_BUCKET:-}" ]] \
+   || [[ -z "${OSS_ENDPOINT:-}" ]]; then
+    log "ERROR: missing OSS_USER_ID / OSS_BUCKET / OSS_ENDPOINT."
     exit 2
 fi
 
@@ -90,19 +111,36 @@ fi
 OSS_PREFIX="${OSS_PREFIX:-users/${OSS_USER_ID}/hermes}"
 OSS_URI="oss://${OSS_BUCKET}/${OSS_PREFIX%/}"
 
-# Write ossutil credentials to a tmpfile every run — supports operator
-# rotating AK/SK between container restarts without rebuilding the
-# image. Cleaned up via trap.
+# Write ossutil credentials to a tmpfile every run. Two formats:
+#   • RAM role: mode=EcsRamRole + ramRoleName
+#   • AK/SK:   mode=AK (default) + accessKeyID + accessKeySecret
+#
+# Either way, the file lives in tmpfs and is unlink'd on exit via the
+# trap so it never persists across runs.
 OSSUTIL_CONFIG="$(mktemp)"
 chmod 600 "$OSSUTIL_CONFIG"  # don't leak creds via /tmp world-readable
 trap 'rm -f "$OSSUTIL_CONFIG"' EXIT
-cat > "$OSSUTIL_CONFIG" <<EOF
+
+if [[ "$USE_RAM_ROLE" == "1" ]]; then
+    # ossutil v2 reads the role's short-lived STS creds via Aliyun's
+    # instance metadata service (http://100.100.100.200) automatically
+    # when mode=EcsRamRole. We just have to name the role.
+    cat > "$OSSUTIL_CONFIG" <<EOF
+[Credentials]
+language=EN
+mode=EcsRamRole
+ramRoleName=${OSS_RAM_ROLE_NAME}
+endpoint=${OSS_ENDPOINT}
+EOF
+else
+    cat > "$OSSUTIL_CONFIG" <<EOF
 [Credentials]
 language=EN
 accessKeyID=${OSS_ACCESS_KEY_ID}
 accessKeySecret=${OSS_ACCESS_KEY_SECRET}
 endpoint=${OSS_ENDPOINT}
 EOF
+fi
 
 # ── Sync path definitions ───────────────────────────────────────────────────
 # Paths to sync, expressed as (local_subpath, oss_subpath, kind) triples.
