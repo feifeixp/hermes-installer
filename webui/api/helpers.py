@@ -37,16 +37,58 @@ def safe_resolve(root: Path, requested: str) -> Path:
 
 
 def _security_headers(handler):
-    """Add security headers to every response."""
+    """Add security headers to every response.
+
+    CSP note: the connect-src list must include `https://app.neowow.studio`
+    (and the configurable HERMES_NEODOMAIN_OAUTH_START host if it's a
+    different origin) so the WebUI's client-side code can reach the
+    dashboard's broker / coding-plan / OAuth endpoints — heartbeat.js's
+    /api/me/instance/heartbeat ping, the chat-landing /api/me/instance/
+    start call, and any "show me my coding-plan balance" fetch a future
+    UI may add.
+
+    The neowow.json-backed JWT travels in the cookie at Domain=.neowow.
+    studio, which the browser sends automatically when we fetch
+    app.neowow.studio (same eTLD+1). Without app.neowow.studio in CSP,
+    every cross-subdomain call from chat-<id>.neowow.studio errors out
+    with "Refused to connect" in console — quiet for the user but kills
+    Phase 2 heartbeat (instance gets stopped for "idle") and any future
+    in-browser coding-plan integrations.
+
+    If you change this list, also update the corresponding CSP set by
+    Caddy in docker/Caddyfile.template (Caddy injects its own CSP for
+    static asset responses).
+    """
     handler.send_header('X-Content-Type-Options', 'nosniff')
     handler.send_header('X-Frame-Options', 'DENY')
     handler.send_header('Referrer-Policy', 'same-origin')
+    # Discover the dashboard origin from the OAuth-start env var so a
+    # self-hosted deploy (HERMES_NEODOMAIN_OAUTH_START=https://your-dash/...)
+    # gets its own host in connect-src without a code change. Falls back to
+    # the public neowow.studio dashboard.
+    import os as _os
+    import urllib.parse as _up
+    _oauth_start = _os.getenv(
+        "HERMES_NEODOMAIN_OAUTH_START",
+        "https://app.neowow.studio/api/oauth/start",
+    ).strip()
+    _dash_origin = ""
+    try:
+        _p = _up.urlparse(_oauth_start)
+        if _p.scheme and _p.netloc:
+            _dash_origin = f"{_p.scheme}://{_p.netloc}"
+    except Exception:
+        pass
+    if not _dash_origin:
+        _dash_origin = "https://app.neowow.studio"
     handler.send_header(
         'Content-Security-Policy',
         "default-src 'self' https://*.cloudflareaccess.com; "
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://static.cloudflareinsights.com; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
-        "img-src 'self' data: https: blob:; font-src 'self' data: https://cdn.jsdelivr.net https://fonts.gstatic.com; connect-src 'self' https://cdn.jsdelivr.net; "
+        "img-src 'self' data: https: blob:; "
+        "font-src 'self' data: https://cdn.jsdelivr.net https://fonts.gstatic.com; "
+        f"connect-src 'self' {_dash_origin} https://cdn.jsdelivr.net; "
         "manifest-src 'self' https://*.cloudflareaccess.com; "
         "base-uri 'self'; form-action 'self'"
     )
