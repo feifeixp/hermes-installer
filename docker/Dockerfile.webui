@@ -94,6 +94,33 @@ RUN useradd -r -m -u 1500 -d /opt/hermes -s /bin/bash hermes \
 # requiring HERMES_WEBUI_DEFAULT_WORKSPACE to be set. We DO set the
 # env var in docker-compose.yml.template too as belt-and-suspenders.
 
+# ── ossutil for OSS state sync (Phase 2 M2) ──────────────────────────────────
+# Aliyun's single-binary OSS client. ~15 MB. We bake it into the image
+# so `docker/entrypoint-with-sync.sh` can call it without depending on
+# host-side install — works the same on Tencent Cloud, Aliyun ECS, or
+# `docker run` on a laptop.
+#
+# Pinning to v2.1.x — the v2 series ships ARM64 + AMD64 binaries from
+# the same URL pattern and has a stable CLI interface. Mid-2026 latest
+# is 2.1.1; if a newer version is required, bump here.
+#
+# We use the China-edge mirror (gosspublic.alicdn.com) for build speed
+# from CN-region CI runners. The ZIP unpack lands the binary at
+# /usr/local/bin/ossutil where it's on PATH for both root and hermes.
+RUN set -ex \
+    # dpkg --print-architecture returns "amd64" / "arm64" matching the
+    # ossutil release naming. Falls back via uname -m for non-debian
+    # bases just in case.
+    && OSSUTIL_VER=2.1.1 \
+    && ARCH=$(dpkg --print-architecture 2>/dev/null || case "$(uname -m)" in \
+            x86_64) echo amd64 ;; aarch64) echo arm64 ;; *) echo amd64 ;; esac) \
+    && curl -fsSL "https://gosspublic.alicdn.com/ossutil/v2/${OSSUTIL_VER}/ossutil-${OSSUTIL_VER}-linux-${ARCH}.zip" \
+       -o /tmp/ossutil.zip \
+    && unzip -j /tmp/ossutil.zip "ossutil-${OSSUTIL_VER}-linux-${ARCH}/ossutil" -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/ossutil \
+    && rm /tmp/ossutil.zip \
+    && /usr/local/bin/ossutil --version 2>&1 | head -1
+
 # ── Copy hermes-installer source ─────────────────────────────────────────────
 # We use COPY (not git clone) so the image build is reproducible from
 # whatever version is in the build context. CI sets context = repo
@@ -155,7 +182,9 @@ VOLUME ["/opt/hermes/.hermes"]
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
     CMD curl -fsS http://127.0.0.1:${HERMES_WEBUI_PORT}/health || exit 1
 
-# bash + start.sh chain: start.sh sources .env, picks Python, then
-# execs bootstrap.py which (with FOREGROUND=1) execs server.py.
-# Three layers but each is a single Python/bash call, no orphaning.
-CMD ["bash", "webui/start.sh"]
+# entrypoint-with-sync.sh wraps the start.sh chain with OSS state-sync
+# lifecycle hooks: pull-on-boot, periodic-push-every-N-sec, final-push-
+# on-SIGTERM. When OSS_SYNC_ENABLED=0 (or unset) it's a thin pass-
+# through that just execs start.sh, so the same image works for both
+# cloud (sync-enabled) and development (sync-disabled) deploys.
+CMD ["bash", "/opt/hermes/hermes-installer/docker/entrypoint-with-sync.sh"]

@@ -79,6 +79,30 @@ services:
       # Override OAuth start URL if you self-host the dashboard. Default
       # points at app.neowow.studio. Empty/unset = use default.
       # HERMES_NEODOMAIN_OAUTH_START: https://your-dashboard.example.com/api/oauth/start
+
+      # ── OSS state sync (Phase 2 M2) ───────────────────────────────────
+      # Backs the user's sessions / settings / skills / workspace to
+      # Aliyun OSS so server replacement (Tencent → Aliyun, image
+      # rebuild, ECS recreate) doesn't lose data. Lifecycle:
+      #   • container start → pull from OSS into the volume
+      #   • every OSS_SYNC_INTERVAL_SECS → push incremental
+      #   • SIGTERM (docker compose stop / docker stop) → final push
+      #
+      # Set these in /opt/hermes-docker/.env (NOT here in the template)
+      # so secrets stay out of git. docker compose reads .env adjacent
+      # to docker-compose.yml automatically.
+      #
+      # Required when enabled: OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET,
+      # OSS_BUCKET, OSS_USER_ID. Endpoint defaults to Hangzhou; pick
+      # the same region as your bucket to avoid cross-region egress
+      # cost.
+      OSS_SYNC_ENABLED:        "${OSS_SYNC_ENABLED:-0}"
+      OSS_ACCESS_KEY_ID:       "${OSS_ACCESS_KEY_ID:-}"
+      OSS_ACCESS_KEY_SECRET:   "${OSS_ACCESS_KEY_SECRET:-}"
+      OSS_ENDPOINT:            "${OSS_ENDPOINT:-oss-cn-hangzhou.aliyuncs.com}"
+      OSS_BUCKET:              "${OSS_BUCKET:-neowow-hermes-state}"
+      OSS_USER_ID:             "${OSS_USER_ID:-}"
+      OSS_SYNC_INTERVAL_SECS:  "${OSS_SYNC_INTERVAL_SECS:-300}"
     volumes:
       # Persistent state: sessions DB, configs, agent skills, OAuth state.
       # Survives container recreate / image upgrade.
