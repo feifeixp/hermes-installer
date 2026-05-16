@@ -63,6 +63,70 @@
   </script>
 </head>
 <body>
+<!-- ════════════════════════════════════════════════════════════════
+     BEGIN: Neowow integration — boot overlay  (custom; not from upstream)
+     Shown immediately on every page load. Self-hides as soon as the
+     Neowow auth status resolves (via neowow.js:neowowHideBootOverlay).
+     Inline styles + injected before any other rendering so we never
+     get a "未登录 flicker" of the rail avatar while /api/neowow/status
+     is in flight. On the desktop Hermes app this overlay self-hides
+     after ~300ms (no neoToken cookie → no auth dance needed).
+     ════════════════════════════════════════════════════════════════ -->
+<div id="neowowBootOverlay" style="position:fixed;inset:0;z-index:99999;background:radial-gradient(ellipse at top,#1a1330 0%,#0a0a0f 60%);color:#cbd5e1;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,-apple-system,'PingFang SC',sans-serif;opacity:1;transition:opacity 0.45s ease-out;pointer-events:auto;">
+  <!-- Spinner (visible during pending auth). Swapped with the success
+       checkmark by neowowHideBootOverlay() before fade-out. -->
+  <div id="neowowBootSpinner" style="width:48px;height:48px;border:3px solid rgba(139,141,248,0.18);border-top-color:#8b8df8;border-radius:50%;animation:neoBootSpin 0.85s linear infinite;margin-bottom:24px"></div>
+  <div id="neowowBootSuccess" style="display:none;width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#10b981 0%,#059669 100%);align-items:center;justify-content:center;margin-bottom:24px;box-shadow:0 0 32px rgba(16,185,129,0.45);animation:neoBootPop 0.55s cubic-bezier(0.34,1.56,0.64,1) both">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="animation:neoBootCheckDraw 0.45s ease-out 0.2s both">
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+  </div>
+  <div id="neowowBootTitle" style="font-size:17px;font-weight:600;color:#e2e8f0;margin-bottom:6px;letter-spacing:0.2px">Hermes Agent 正在登录 Neowow 账号</div>
+  <div id="neowowBootHint" style="font-size:13px;color:#94a3b8;line-height:1.55;max-width:320px;text-align:center;padding:0 16px">请稍等,正在验证您的 Neodomain 凭据并加载会话…</div>
+  <style>
+    @keyframes neoBootSpin { to { transform: rotate(360deg); } }
+    @keyframes neoBootPop {
+      0%   { transform: scale(0);   opacity: 0; }
+      60%  { transform: scale(1.1); opacity: 1; }
+      100% { transform: scale(1);   opacity: 1; }
+    }
+    @keyframes neoBootCheckDraw {
+      from { stroke-dashoffset: 28; stroke-dasharray: 28; }
+      to   { stroke-dashoffset: 0;  stroke-dasharray: 28; }
+    }
+    /* Anti-FOUC: keep the rail avatar hidden until overlay clears
+       (overlay's z-index handles it for everything else; the avatar
+       has its own positioning so we belt-and-suspenders this). */
+    body.neo-boot-pending .neowow-avatar-rail { visibility: hidden; }
+  </style>
+</div>
+<script>
+  // Tag body so CSS can suppress flicker on early-renderable widgets
+  // (the rail avatar specifically). Removed when overlay fades out.
+  document.body.classList.add('neo-boot-pending');
+  // Safety fallback: if for any reason neowow.js doesn't load or
+  // throws before calling neowowHideBootOverlay, kill the overlay
+  // after 8 seconds so the user isn't trapped.  8s is enough for
+  // even a slow 4G connection on a cold worker to resolve the
+  // /api/neowow/status round-trip.
+  setTimeout(function () {
+    var el = document.getElementById('neowowBootOverlay');
+    if (el && el.style.opacity !== '0') {
+      console.warn('[neowow-boot] overlay timeout fallback — hiding');
+      try {
+        if (typeof window.neowowHideBootOverlay === 'function') {
+          window.neowowHideBootOverlay({ success: false, reason: 'timeout' });
+        } else {
+          el.style.opacity = '0';
+          setTimeout(function () { el.remove(); }, 500);
+          document.body.classList.remove('neo-boot-pending');
+        }
+      } catch (e) { /* swallow */ }
+    }
+  }, 8000);
+</script>
+<!-- END: Neowow integration — boot overlay -->
+
 <header class="app-titlebar" role="banner">
   <button class="app-titlebar-hamburger has-tooltip has-tooltip--bottom" id="btnHamburger" onclick="toggleMobileSidebar()" type="button" data-tooltip="Menu" aria-label="Menu">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>

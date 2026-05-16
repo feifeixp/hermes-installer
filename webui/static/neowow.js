@@ -73,6 +73,131 @@
     btn.dataset.nickname = nickname || '';
   }
 
+  // ── Boot overlay control ──────────────────────────────────────────────
+  //
+  // The overlay element is injected directly in index.html (right after
+  // <body>) so it covers content the moment the page paints — before this
+  // script even loads. We're responsible for HIDING it once we know what
+  // state the user is in.
+  //
+  // States we resolve:
+  //   • Logged-in (cookie JWT validates, /api/neowow/status hasJwt=true)
+  //     → swap spinner → green checkmark + "登录成功" → fade out
+  //   • Logged-out / no cookie
+  //     → quickly fade out (no success animation — user sees the rail
+  //       avatar in its "click to login" state, which IS the expected UX
+  //       on desktop Hermes / fresh cloud session)
+  //   • Network error / API unreachable
+  //     → fade out anyway (don't trap user); console.warn for debugging
+  //
+  // Sequencing relative to refreshRailAvatar(): we run BOTH calls in
+  // parallel. The boot overlay shows for at least 600ms even on
+  // logged-in users so the success animation reads as deliberate (not
+  // a "flash and gone"). The avatar refresh happens in the background
+  // so it's ready when the overlay clears.
+  let _bootOverlayHidden = false;
+  async function neowowResolveBootOverlay() {
+    if (_bootOverlayHidden) return;
+    const overlay = document.getElementById('neowowBootOverlay');
+    if (!overlay) return; // already cleaned up
+
+    // Run status check + minimum-display-time in parallel.
+    const minDisplayMs = 600;
+    const t0 = Date.now();
+
+    let hasJwt = false;
+    let nickname = '';
+    let networkOk = true;
+    try {
+      const r = await fetch('/api/neowow/status', { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json();
+        hasJwt = !!(j && j.hasJwt);
+      }
+    } catch (_) {
+      networkOk = false;
+    }
+
+    // If logged-in, try fetching nickname for the success message.
+    if (hasJwt) {
+      try {
+        const r = await fetch('/api/neowow/whoami', { cache: 'no-store' });
+        if (r.ok) {
+          const j = await r.json();
+          nickname = (j && (j.nickname || j.contact || j.email)) || '';
+        }
+      } catch (_) { /* fall through with empty nickname */ }
+    }
+
+    // Pad to minimum display time
+    const elapsed = Date.now() - t0;
+    if (elapsed < minDisplayMs) {
+      await new Promise(r => setTimeout(r, minDisplayMs - elapsed));
+    }
+
+    neowowHideBootOverlay({ success: hasJwt, networkOk, nickname });
+  }
+
+  /**
+   * Hide the boot overlay. Exposed as window.neowowHideBootOverlay so
+   * the inline timeout-fallback script in index.html can also call it.
+   *
+   * @param {Object} opts
+   * @param {boolean} opts.success  — true → green checkmark animation,
+   *                                  false → straight fade-out
+   * @param {boolean} opts.networkOk — false → log a console.warn
+   * @param {string}  opts.nickname  — used in success title if present
+   * @param {string}  opts.reason   — used by the safety-timeout caller
+   */
+  window.neowowHideBootOverlay = function (opts) {
+    if (_bootOverlayHidden) return;
+    _bootOverlayHidden = true;
+    opts = opts || {};
+    const overlay = document.getElementById('neowowBootOverlay');
+    if (!overlay) {
+      document.body.classList.remove('neo-boot-pending');
+      return;
+    }
+    const spinner = document.getElementById('neowowBootSpinner');
+    const success = document.getElementById('neowowBootSuccess');
+    const title   = document.getElementById('neowowBootTitle');
+    const hint    = document.getElementById('neowowBootHint');
+
+    if (opts.reason === 'timeout') {
+      console.warn('[neowow-boot] safety timeout fired — overlay hidden without status resolution');
+    }
+    if (!opts.networkOk) {
+      console.warn('[neowow-boot] /api/neowow/status unreachable; proceeding without login confirmation');
+    }
+
+    if (opts.success) {
+      // Swap spinner → success animation, then fade
+      if (spinner) spinner.style.display = 'none';
+      if (success) success.style.display = 'flex';
+      if (title) {
+        title.textContent = opts.nickname
+          ? `欢迎回来，${opts.nickname}`
+          : '登录成功';
+      }
+      if (hint) hint.textContent = '即将进入对话…';
+      // Linger for the checkmark animation, then fade
+      setTimeout(function () {
+        overlay.style.opacity = '0';
+        setTimeout(function () {
+          overlay.remove();
+          document.body.classList.remove('neo-boot-pending');
+        }, 460);
+      }, 700);
+    } else {
+      // No success animation — straight fade-out
+      overlay.style.opacity = '0';
+      setTimeout(function () {
+        overlay.remove();
+        document.body.classList.remove('neo-boot-pending');
+      }, 460);
+    }
+  };
+
   window.neowowAvatarClick = async function (event) {
     if (event && event.preventDefault) event.preventDefault();
     if (event && event.stopPropagation) event.stopPropagation();
@@ -279,13 +404,24 @@
   });
 
   // Refresh on session change + first paint.
+  // Boot overlay sequencing: neowowResolveBootOverlay() runs alongside
+  // the avatar/account refresh — it does its own /api/neowow/status call
+  // (independent of refreshRailAvatar's) and enforces a minimum display
+  // time so the success animation actually reads. The two avatar/status
+  // calls hitting the same endpoint twice is wasteful but trivially
+  // cheap (~5ms server-side) and keeps the overlay's lifecycle
+  // self-contained.
   document.addEventListener('DOMContentLoaded', () => {
     void refreshRailAvatar();
     void refreshAccountBlock();
+    void neowowResolveBootOverlay();
   });
   window.addEventListener('neoSessionUpdated', () => {
     void refreshRailAvatar();
     void refreshAccountBlock();
+    // NOTE: don't re-trigger the boot overlay on session updates —
+    // those happen mid-session (login from popover, JWT refresh, etc.)
+    // and the user is already past boot at that point.
   });
   // First-render fallback if DOMContentLoaded already fired before this
   // script registered its listener (script lives inside an IIFE that
@@ -293,6 +429,7 @@
   if (document.readyState !== 'loading') {
     void refreshRailAvatar();
     void refreshAccountBlock();
+    void neowowResolveBootOverlay();
   }
 
   // ── Account block in Settings → Neowow Studio ─────────────────────────
