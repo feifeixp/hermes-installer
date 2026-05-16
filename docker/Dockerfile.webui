@@ -66,6 +66,7 @@ RUN apt-get update \
         ripgrep \
         ffmpeg \
         sudo \
+        unzip \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -108,12 +109,14 @@ RUN useradd -r -m -u 1500 -d /opt/hermes -s /bin/bash hermes \
 # from CN-region CI runners. The ZIP unpack lands the binary at
 # /usr/local/bin/ossutil where it's on PATH for both root and hermes.
 RUN set -ex \
-    # dpkg --print-architecture returns "amd64" / "arm64" matching the
-    # ossutil release naming. Falls back via uname -m for non-debian
-    # bases just in case.
     && OSSUTIL_VER=2.1.1 \
-    && ARCH=$(dpkg --print-architecture 2>/dev/null || case "$(uname -m)" in \
-            x86_64) echo amd64 ;; aarch64) echo arm64 ;; *) echo amd64 ;; esac) \
+    # Architecture: build-image.yml currently builds linux/amd64 only
+    # (QEMU is commented out — see workflow header). We could still
+    # parameterize on uname -m for future arm64 multi-arch builds, but
+    # the previous case-inside-$() construct caused the shell to fail
+    # parsing under buildkit. Simpler if/else here works reliably.
+    && _ARCH_KERNEL="$(uname -m)" \
+    && if [ "${_ARCH_KERNEL}" = "aarch64" ]; then ARCH=arm64; else ARCH=amd64; fi \
     && curl -fsSL "https://gosspublic.alicdn.com/ossutil/v2/${OSSUTIL_VER}/ossutil-${OSSUTIL_VER}-linux-${ARCH}.zip" \
        -o /tmp/ossutil.zip \
     && unzip -j /tmp/ossutil.zip "ossutil-${OSSUTIL_VER}-linux-${ARCH}/ossutil" -d /usr/local/bin/ \
