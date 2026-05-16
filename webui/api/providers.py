@@ -1476,6 +1476,16 @@ def get_providers() -> dict[str, Any]:
     # Add OAuth providers even if not in _PROVIDER_DISPLAY
     known_ids.update(_OAUTH_PROVIDERS)
 
+    # Phase β: HERMES_NEOWOW_ONLY=1 locks the WebUI to a single managed
+    # provider (Neowow Coding Plan). The /api/onboarding/status code
+    # path applies the same filter — see _build_setup_catalog() — but
+    # this endpoint (/api/providers, called by the Settings panel's
+    # loadProvidersPanel) was missing the gate, so the user saw the
+    # full multi-vendor list in Settings even though they were locked
+    # to coding-plan everywhere else. Filter here too.
+    if os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}:
+        known_ids = {pid for pid in known_ids if pid == "neowow-coding-plan"}
+
     for pid in sorted(known_ids):
         display_name = _PROVIDER_DISPLAY.get(pid, pid.replace("-", " ").title())
         is_oauth = _provider_is_oauth(pid)
