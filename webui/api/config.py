@@ -1009,6 +1009,24 @@ _PROVIDER_MODELS = {
         {"id": "claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
         {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
     ],
+    # Phase β cloud (HERMES_NEOWOW_ONLY=1) — chat.neowow.studio uses
+    # this provider id and dispatches via app.neowow.studio/api/me/chat/
+    # completions (the billed OpenAI-compatible proxy in front of
+    # ga.neodomain.cn). The model picker is exactly the neodomain
+    # gateway's catalog — same upstream — so we alias here rather than
+    # duplicate. Keep this binding to the same list ABOVE so a future
+    # ga.neodomain.cn model addition lands in both pickers via the
+    # single update site.
+    #
+    # The dashboard's /api/me/plan returns a user-specific WHITELIST
+    # (Trial sees just 2, Max sees ~18). The picker still SHOWS all
+    # plan-tier models so the user can see what an upgrade unlocks;
+    # dispatch enforcement is server-side via lib/billing.modelAllowed.
+    # If you want the picker to hide non-whitelisted models too, fetch
+    # plan whitelist in get_available_models and intersect — but the
+    # current behavior (show all, dispatch-time enforce) matches how
+    # the Settings panel works for other gateways.
+    "neowow-coding-plan": [],  # populated by _alias_neowow_models below
     "openai": [
         {"id": "gpt-5.5",      "label": "GPT-5.5"},
         {"id": "gpt-5.5-mini", "label": "GPT-5.5 Mini"},
@@ -1180,6 +1198,12 @@ _PROVIDER_MODELS = {
         {"id": "grok-4.20", "label": "Grok 4.20"},
     ],
 }
+
+# Alias: neowow-coding-plan reuses the neodomain catalog (same upstream
+# gateway, just with billing on top). Done after dict construction so
+# we get a true reference — adding a model to "neodomain" up there
+# automatically flows to "neowow-coding-plan" without manual duplication.
+_PROVIDER_MODELS["neowow-coding-plan"] = _PROVIDER_MODELS["neodomain"]
 
 
 _AMBIENT_GH_CLI_MARKERS = frozenset({"gh_cli", "gh auth token"})
