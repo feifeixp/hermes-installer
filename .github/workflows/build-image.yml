@@ -1,9 +1,11 @@
 name: build-image
 
-# Build the cloud-deploy Docker image and push to:
-#   - ghcr.io/feifeixp/hermes-webui (international users)
-#   - registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui (China users — much
-#     faster `docker pull` from Aliyun ECS / Tencent Cloud)
+# Build the cloud-deploy Docker image and push to up to three registries:
+#   - ghcr.io/feifeixp/hermes-webui                                  (international users — always)
+#   - registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui          (personal ACR — fast CN pulls)
+#   - zlxj-registry.cn-shanghai.cr.aliyuncs.com/zlxj/hermes-webui    (ENTERPRISE ACR — Path B,
+#                                                                    Aliyun-side build pipeline cooperation;
+#                                                                    only fires when ENTERPRISE_ACR_* secrets are set)
 #
 # Triggers:
 #   - main branch push (only when WebUI / agent code or Dockerfile changed)
@@ -16,15 +18,17 @@ name: build-image
 #
 # Setup required (one-time):
 #   1. Repository → Settings → Secrets and variables → Actions
-#   2. Add ALIYUN_ACR_USERNAME (your Aliyun container-registry username)
-#      and ALIYUN_ACR_PASSWORD (the password for that registry user, NOT
-#      your aliyun account password — see Aliyun ACR console for how to
-#      mint a registry-specific token).
-#   3. Aliyun ACR namespace: create `neowow` namespace + `hermes-webui`
-#      repo in cn-shanghai region (https://cr.console.aliyun.com/).
+#   2. Personal ACR (existing): ALIYUN_ACR_USERNAME + ALIYUN_ACR_PASSWORD secrets,
+#      ALIYUN_ACR_REGISTRY + ALIYUN_ACR_NAMESPACE variables (defaults work).
+#   3. Enterprise ACR (new, Path B): ENTERPRISE_ACR_USERNAME + ENTERPRISE_ACR_PASSWORD
+#      secrets (USE A CI SUB-ACCOUNT — never the master account weilikeji2021),
+#      and ENTERPRISE_ACR_REGISTRY + ENTERPRISE_ACR_NAMESPACE variables.
 #
-# If ALIYUN_ACR_* secrets aren't set, the Aliyun push step is skipped
-# (job still succeeds — ghcr.io push is enough for international use).
+# Both ACR targets are independently optional — if either set of credentials is
+# missing, that push is silently skipped (job still succeeds — ghcr.io alone
+# is enough for international use). Path B exists so the enterprise side's
+# Aliyun build pipeline can pull our same image (zlxj/hermes-webui:latest)
+# instead of rebuilding from source.
 
 on:
   push:
@@ -72,7 +76,7 @@ jobs:
       - name: Compute image tags
         id: meta
         env:
-          # Aliyun ACR registry URL. Two formats supported:
+          # Personal ACR (existing). Two formats supported:
           #   - Enterprise edition: registry.cn-shanghai.aliyuncs.com
           #   - Personal edition:   crpi-XXXXXXXX.cn-shanghai.personal.cr.aliyuncs.com
           # User sets ALIYUN_ACR_REGISTRY in repo secrets/variables to
@@ -84,6 +88,12 @@ jobs:
           # repositories don't materialize the namespace, you have to
           # create it manually first.
           ACR_NAMESPACE: ${{ vars.ALIYUN_ACR_NAMESPACE || 'neowow' }}
+          # Enterprise ACR (Path B — Aliyun-side build pipeline cooperation).
+          # No default — both vars must be explicitly set in repo Variables.
+          # When unset, enterprise_tags is empty and that push target gets
+          # skipped automatically in the tags-compose step below.
+          ENT_REGISTRY:  ${{ vars.ENTERPRISE_ACR_REGISTRY }}
+          ENT_NAMESPACE: ${{ vars.ENTERPRISE_ACR_NAMESPACE }}
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           # Newline-separated tag list, used by both push targets.
@@ -99,8 +109,22 @@ jobs:
             echo "${ACR_REGISTRY}/${ACR_NAMESPACE}/hermes-webui:main-${SHORT_SHA}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          # Also export ACR_REGISTRY so the login step can use it.
-          echo "acr_registry=${ACR_REGISTRY}" >> "$GITHUB_OUTPUT"
+          # Enterprise ACR tags — only emitted when both vars are set,
+          # so a missing var doesn't bake a literal "//hermes-webui:..."
+          # into the tag list. The tags-compose step gates the push on
+          # the credentials check, but generating sensible tags only
+          # when the registry/namespace are known is cleaner.
+          {
+            echo "enterprise_tags<<EOF"
+            if [[ -n "$ENT_REGISTRY" && -n "$ENT_NAMESPACE" ]]; then
+              echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/hermes-webui:latest"
+              echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/hermes-webui:main-${SHORT_SHA}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          # Also export registries so the login steps can reference them.
+          echo "acr_registry=${ACR_REGISTRY}"            >> "$GITHUB_OUTPUT"
+          echo "enterprise_registry=${ENT_REGISTRY}"     >> "$GITHUB_OUTPUT"
 
       # ── Login to both registries ─────────────────────────────────────
       # Login to ghcr.io first (always available — uses GITHUB_TOKEN);
@@ -136,15 +160,46 @@ jobs:
           username: ${{ secrets.ALIYUN_ACR_USERNAME }}
           password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
 
+      # ── Enterprise ACR (Path B) ────────────────────────────────────
+      # Mirrors the personal-ACR block above. Independent on/off:
+      # missing secrets/vars just skip this push target. The CI sub-
+      # account credentials live in ENTERPRISE_ACR_USERNAME / _PASSWORD
+      # (never the master account weilikeji2021 — sub-account so a
+      # leaked token can be revoked without nuking the org).
+      - name: Check Enterprise ACR credentials
+        id: check_enterprise_acr
+        run: |
+          if [[ -n "${{ secrets.ENTERPRISE_ACR_USERNAME }}" \
+             && -n "${{ secrets.ENTERPRISE_ACR_PASSWORD }}" \
+             && -n "${{ steps.meta.outputs.enterprise_registry }}" ]]; then
+            echo "have_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Enterprise ACR push skipped — set ENTERPRISE_ACR_USERNAME + ENTERPRISE_ACR_PASSWORD secrets and ENTERPRISE_ACR_REGISTRY + ENTERPRISE_ACR_NAMESPACE variables to enable Path B."
+          fi
+
+      - name: Login to Enterprise ACR
+        if: steps.check_enterprise_acr.outputs.have_creds == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.meta.outputs.enterprise_registry }}
+          username: ${{ secrets.ENTERPRISE_ACR_USERNAME }}
+          password: ${{ secrets.ENTERPRISE_ACR_PASSWORD }}
+
       - name: Compose final tag list
         id: tags
         run: |
-          # GHCR tags always included; ACR tags only if credentials are set.
+          # GHCR always; personal ACR + enterprise ACR each gated on
+          # their own credentials. buildx pushes the SAME built image
+          # to every tag in the union — single build, multi destination.
           {
             echo "all<<EOF"
             echo "${{ steps.meta.outputs.ghcr_tags }}"
             if [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
               echo "${{ steps.meta.outputs.acr_tags }}"
+            fi
+            if [[ "${{ steps.check_enterprise_acr.outputs.have_creds }}" == "true" ]]; then
+              echo "${{ steps.meta.outputs.enterprise_tags }}"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
@@ -182,12 +237,20 @@ jobs:
             echo "${{ steps.meta.outputs.ghcr_tags }}"
             echo '```'
             if [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
-              echo "**Aliyun ACR tags (China):**"
+              echo "**Aliyun ACR tags (personal / China):**"
               echo '```'
               echo "${{ steps.meta.outputs.acr_tags }}"
               echo '```'
             else
               echo "_Aliyun ACR push skipped — set \`ALIYUN_ACR_USERNAME\` + \`ALIYUN_ACR_PASSWORD\` secrets to enable._"
+            fi
+            if [[ "${{ steps.check_enterprise_acr.outputs.have_creds }}" == "true" ]]; then
+              echo "**Enterprise ACR tags (Path B):**"
+              echo '```'
+              echo "${{ steps.meta.outputs.enterprise_tags }}"
+              echo '```'
+            else
+              echo "_Enterprise ACR push skipped — set \`ENTERPRISE_ACR_USERNAME\` + \`ENTERPRISE_ACR_PASSWORD\` secrets and \`ENTERPRISE_ACR_REGISTRY\` + \`ENTERPRISE_ACR_NAMESPACE\` variables to enable Path B._"
             fi
             echo ""
             echo "**Deploy with:**"
