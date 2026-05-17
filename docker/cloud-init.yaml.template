@@ -251,6 +251,27 @@ runcmd:
   # ── Pull Caddy too while we're at it (so first compose up is fast).
   - [bash, -c, "docker pull caddy:2.8-alpine"]
 
+  # ── Seed /var/lib/hermes-state from the image, only when empty.
+  #
+  # The image's Dockerfile runs `python3 webui/bootstrap.py --install-only`
+  # at build time which clones hermes-agent INTO /opt/hermes/.hermes/
+  # hermes-agent/ and bakes it into the image layer.
+  #
+  # BUT docker-compose.yml mounts the host path /var/lib/hermes-state at
+  # /opt/hermes/.hermes via a BIND MOUNT. Bind mounts (unlike named
+  # volumes) DO NOT copy the image's contents into the mounted directory
+  # on first attach — they just hide the image's directory entirely.
+  #
+  # Symptom without this seed step: container starts, bootstrap.py runs,
+  # doesn't find hermes-agent (the bind mount is empty), tries to git
+  # clone it at runtime, hits `Permission denied` writing to
+  # /opt/hermes/.hermes/hermes-agent/.git, container exits 1 in a loop.
+  #
+  # The `-z "$(ls -A ...)"` guard makes this idempotent: if oss-sync
+  # already pulled state from OSS, we DON'T clobber it (the seed only
+  # fires on truly empty state directories — first-time spawn).
+  - [bash, -c, "if [ -z \"$(ls -A /var/lib/hermes-state 2>/dev/null)\" ]; then echo 'Seeding /var/lib/hermes-state from image baseline...'; docker run --rm -v /var/lib/hermes-state:/dst %IMAGE% bash -c 'cp -ar /opt/hermes/.hermes/. /dst/ 2>/dev/null && chown -R 1000:1000 /dst' && echo 'Seed complete.'; else echo 'hermes-state already populated, skipping image seed.'; fi"]
+
   # ── Bring the stack up. compose internally waits for hermes-webui
   # ── to be healthy before starting Caddy (depends_on condition).
   - [bash, -c, "cd /opt/hermes-docker && docker compose up -d"]
