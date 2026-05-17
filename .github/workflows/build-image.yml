@@ -150,6 +150,13 @@ jobs:
           fi
 
       - name: Login to Aliyun ACR
+        id: acr_login
+        # continue-on-error: a failed login to personal ACR (expired
+        # token, rate-limit, etc.) shouldn't block the enterprise push
+        # or the GHCR push. The downstream Compose-tag-list step
+        # gates inclusion on BOTH have_creds AND acr_login outcome,
+        # so a failed login cleanly drops just THIS target.
+        continue-on-error: true
         if: steps.check_acr.outputs.have_creds == 'true'
         uses: docker/login-action@v3
         with:
@@ -179,6 +186,8 @@ jobs:
           fi
 
       - name: Login to Enterprise ACR
+        id: ent_login
+        continue-on-error: true   # mirror the Aliyun ACR step — independent target
         if: steps.check_enterprise_acr.outputs.have_creds == 'true'
         uses: docker/login-action@v3
         with:
@@ -190,15 +199,18 @@ jobs:
         id: tags
         run: |
           # GHCR always; personal ACR + enterprise ACR each gated on
-          # their own credentials. buildx pushes the SAME built image
-          # to every tag in the union — single build, multi destination.
+          # BOTH the credentials check AND the login step's outcome.
+          # If a login step was skipped or failed (continue-on-error),
+          # its `outcome` is "skipped" / "failure" — only "success"
+          # earns inclusion. This keeps the buildx push from trying
+          # to push to a registry we never authenticated to.
           {
             echo "all<<EOF"
             echo "${{ steps.meta.outputs.ghcr_tags }}"
-            if [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
+            if [[ "${{ steps.acr_login.outcome }}" == "success" ]]; then
               echo "${{ steps.meta.outputs.acr_tags }}"
             fi
-            if [[ "${{ steps.check_enterprise_acr.outputs.have_creds }}" == "true" ]]; then
+            if [[ "${{ steps.ent_login.outcome }}" == "success" ]]; then
               echo "${{ steps.meta.outputs.enterprise_tags }}"
             fi
             echo "EOF"
@@ -236,19 +248,23 @@ jobs:
             echo '```'
             echo "${{ steps.meta.outputs.ghcr_tags }}"
             echo '```'
-            if [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
+            if [[ "${{ steps.acr_login.outcome }}" == "success" ]]; then
               echo "**Aliyun ACR tags (personal / China):**"
               echo '```'
               echo "${{ steps.meta.outputs.acr_tags }}"
               echo '```'
+            elif [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
+              echo "_⚠️ Aliyun ACR login FAILED — check ALIYUN_ACR_PASSWORD hasn't expired._"
             else
               echo "_Aliyun ACR push skipped — set \`ALIYUN_ACR_USERNAME\` + \`ALIYUN_ACR_PASSWORD\` secrets to enable._"
             fi
-            if [[ "${{ steps.check_enterprise_acr.outputs.have_creds }}" == "true" ]]; then
+            if [[ "${{ steps.ent_login.outcome }}" == "success" ]]; then
               echo "**Enterprise ACR tags (Path B):**"
               echo '```'
               echo "${{ steps.meta.outputs.enterprise_tags }}"
               echo '```'
+            elif [[ "${{ steps.check_enterprise_acr.outputs.have_creds }}" == "true" ]]; then
+              echo "_⚠️ Enterprise ACR login FAILED — check ENTERPRISE_ACR_PASSWORD hasn't expired._"
             else
               echo "_Enterprise ACR push skipped — set \`ENTERPRISE_ACR_USERNAME\` + \`ENTERPRISE_ACR_PASSWORD\` secrets and \`ENTERPRISE_ACR_REGISTRY\` + \`ENTERPRISE_ACR_NAMESPACE\` variables to enable Path B._"
             fi
