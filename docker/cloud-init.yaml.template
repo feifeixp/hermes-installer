@@ -233,7 +233,16 @@ runcmd:
   # ── Uses --password-stdin so the password never appears in process
   # ── list / cloud-init log file (cloud-init logs full runcmd output
   # ── otherwise — that's the kind of leak we want to avoid).
-  - [bash, -c, "if [ -n '%ACR_PULL_REGISTRY%' ] && [ -n '%ACR_PULL_USERNAME%' ]; then printf '%%s' '%ACR_PULL_PASSWORD%' | docker login '%ACR_PULL_REGISTRY%' -u '%ACR_PULL_USERNAME%' --password-stdin; fi"]
+  #
+  # NOTE: we use `printf '%s'` NOT `printf '%%s'` here. Earlier version
+  # used the latter thinking sed would unescape the double-% — sed doesn't,
+  # and printf interprets %% as an escape for literal `%`, so the actual
+  # value piped to docker login was the two-char string "%s" instead of
+  # the password. Caused 401 unauthorized + spent 3 spawn cycles debugging.
+  # Passwords containing literal single quotes still break this — none of
+  # ours do today, so deferred. Switch to write_files-based approach
+  # if a user's password ever contains '.
+  - [bash, -c, "if [ -n '%ACR_PULL_REGISTRY%' ] && [ -n '%ACR_PULL_USERNAME%' ]; then printf '%s' '%ACR_PULL_PASSWORD%' | docker login '%ACR_PULL_REGISTRY%' -u '%ACR_PULL_USERNAME%' --password-stdin; fi"]
 
   # ── Pull the Hermes image upfront (faster + clearer error than
   # ── waiting for compose to do it implicitly). ~1-3 min.
