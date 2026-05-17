@@ -16,6 +16,12 @@ __pycache__/
 .AppleDouble
 .LSOverride
 
+# Stray temp files from icon-converter tools (ICO Convert / RealFavicon
+# Generator / etc.) — they auto-name like "mdmse-XXXXX-001.ico" and
+# land alongside the real exports. The committed favicons live under
+# webui/static/.
+/mdmse-*.ico
+
 # IDE (only ignore common config dirs, keep launch.json for Claude)
 .claude/*
 !.claude/launch.json
