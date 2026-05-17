@@ -85,15 +85,44 @@ command -v jq     >/dev/null 2>&1 || { echo "❌ install jq first: brew install 
 
 DOMAIN="chat-${USER_ID}.neowow.studio"
 
+# Resolve ALIYUN_IMAGE_ID — if it ends in `_` or looks like a family
+# prefix (no .vhd, no date stamp), query DescribeImages for the latest
+# matching image. Aliyun expects an exact image ID at RunInstances time
+# (no SSM-style family resolution), so we have to ask. Cache the
+# resolved ID for the rest of the script.
+if [[ "$ALIYUN_IMAGE_ID" == *_ ]] || [[ "$ALIYUN_IMAGE_ID" != *.vhd ]]; then
+  echo "→ Looking up latest image matching '${ALIYUN_IMAGE_ID}*' in $REGION..."
+  RESOLVED=$(aliyun ecs DescribeImages \
+    --profile "$ALIYUN_PROFILE" --region "$REGION" \
+    --RegionId "$REGION" \
+    --OSType linux --Architecture x86_64 \
+    --ImageOwnerAlias system --PageSize 50 2>/dev/null \
+    | jq -r --arg p "${ALIYUN_IMAGE_ID}" '
+        [.Images.Image[]
+          | select(.ImageId | startswith($p))
+          | select(.ImageId | contains("with_") | not)
+          | select(.Size <= 20)
+          | {ImageId, CreationTime}]
+        | sort_by(.CreationTime) | reverse | .[0].ImageId // empty')
+  if [ -z "$RESOLVED" ]; then
+    echo "❌ No image matching '${ALIYUN_IMAGE_ID}*' in $REGION."
+    echo "   Browse available: aliyun ecs DescribeImages --profile $ALIYUN_PROFILE --region $REGION --ImageOwnerAlias system --PageSize 50 | jq '.Images.Image[] | .ImageId' | head"
+    exit 1
+  fi
+  ALIYUN_IMAGE_ID="$RESOLVED"
+  echo "→ Resolved: $ALIYUN_IMAGE_ID"
+fi
+
 echo ""
 echo "──────────────────────────────────────────────────────────────"
 echo "  Spawning Hermes instance"
 echo "──────────────────────────────────────────────────────────────"
-echo "  user:    $USER_ID"
-echo "  domain:  $DOMAIN"
-echo "  region:  $REGION"
-echo "  image:   $HERMES_WEBUI_IMAGE"
-echo "  type:    $ALIYUN_INSTANCE_TYPE"
+echo "  user:     $USER_ID"
+echo "  domain:   $DOMAIN"
+echo "  region:   $REGION"
+echo "  image:    $ALIYUN_IMAGE_ID"
+echo "  container:$HERMES_WEBUI_IMAGE"
+echo "  type:     $ALIYUN_INSTANCE_TYPE"
 echo "──────────────────────────────────────────────────────────────"
 echo ""
 
