@@ -4045,8 +4045,15 @@ _SETTINGS_DEFAULTS = {
     "sync_to_insights": False,  # mirror WebUI token usage to state.db for /insights
     "check_for_updates": True,  # check if webui/agent repos are behind upstream
     "whats_new_summary_enabled": False,  # show an LLM-written What's New summary before diff links
-    "theme": "dark",  # light | dark | system
-    "skin": "default",  # accent color skin: default | ares | mono | slate | poseidon | sisyphus | charizard
+    # Appearance defaults — Neowow distribution: follow system + Sienna.
+    # Upstream Hermes ships dark + default; we override here because the
+    # Neowow audience expects light/dark to track the OS preference and
+    # Sienna's warm-earth palette reads better as the brand accent than
+    # the original gold. Existing users with explicit choices in
+    # settings.json are unaffected (the merge in load_settings only fills
+    # in missing keys — see _normalize_appearance).
+    "theme": "system",  # light | dark | system
+    "skin": "sienna",  # accent color skin: default | ares | mono | slate | poseidon | sisyphus | charizard | sienna
     "font_size": "default",  # small | default | large | xlarge
     "session_jump_buttons": False,  # show Start/End transcript jump pills
     "session_endless_scroll": False,  # auto-load older transcript pages while scrolling upward
@@ -4078,6 +4085,12 @@ _SETTINGS_SKIN_VALUES = {
     "poseidon",
     "sisyphus",
     "charizard",
+    # Sienna — warm clay/sand accent. Already defined in static/style.css,
+    # boot.js _SKINS, and the Settings skin picker. Adding here was a
+    # latent bug: server-side validation would silently reject "sienna"
+    # and rewrite it to "default" on every settings save, breaking the
+    # picker for anyone who selected it.
+    "sienna",
 }
 _SETTINGS_LEGACY_THEME_MAP = {
     # Legacy full themes now map onto the closest supported theme + accent skin pair.
