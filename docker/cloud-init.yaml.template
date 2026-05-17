@@ -10,6 +10,13 @@
 #   %DOMAIN%                full subdomain (e.g. chat-31046663.neowow.studio)
 #   %ACME_EMAIL%            email for LetsEncrypt registration
 #   %IMAGE%                 Docker image ref (resolved per registry availability)
+#   %ACR_PULL_REGISTRY%     Docker registry hostname for login (e.g.
+#                           zlxj-registry-vpc.cn-shanghai.cr.aliyuncs.com).
+#                           Empty string = skip docker login (anonymous /
+#                           public image — Hermes' image is private, so
+#                           this should usually be set).
+#   %ACR_PULL_USERNAME%     ACR sub-account with read-only pull permission
+#   %ACR_PULL_PASSWORD%     companion password
 #   %OSS_ACCESS_KEY_ID%     Aliyun OSS AK for state sync (M2)
 #   %OSS_ACCESS_KEY_SECRET% companion secret (M2)
 #   %OSS_ENDPOINT%          e.g. oss-cn-hangzhou.aliyuncs.com (M2)
@@ -219,6 +226,14 @@ runcmd:
   # ── /opt/hermes/.hermes
   - [bash, -c, "mkdir -p /var/lib/hermes-state"]
   - [bash, -c, "/opt/hermes-docker/oss-sync.sh pull"]
+
+  # ── Docker login to private registry (Aliyun ACR Enterprise edition).
+  # ── Conditional: only run when ACR_PULL_* placeholders are filled in.
+  # ── Empty string means "image is anonymous / public", skip the login.
+  # ── Uses --password-stdin so the password never appears in process
+  # ── list / cloud-init log file (cloud-init logs full runcmd output
+  # ── otherwise — that's the kind of leak we want to avoid).
+  - [bash, -c, "if [ -n '%ACR_PULL_REGISTRY%' ] && [ -n '%ACR_PULL_USERNAME%' ]; then printf '%%s' '%ACR_PULL_PASSWORD%' | docker login '%ACR_PULL_REGISTRY%' -u '%ACR_PULL_USERNAME%' --password-stdin; fi"]
 
   # ── Pull the Hermes image upfront (faster + clearer error than
   # ── waiting for compose to do it implicitly). ~1-3 min.
