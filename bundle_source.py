@@ -15,6 +15,22 @@ import pathlib
 import sys
 import shutil
 
+# Force UTF-8 stdout/stderr. On Windows runners (GitHub Actions
+# `windows-latest`, Python 3.13) the default stdout encoding is
+# cp1252 — the moment a print() tries to emit '→' (U+2192) or any
+# Chinese character the build fails with `UnicodeEncodeError:
+# 'charmap' codec can't encode character`. reconfigure() is a no-op
+# on POSIX where the encoding is already utf-8.
+#
+# Belt-and-suspenders: also set PYTHONIOENCODING for any child
+# Python subprocesses we spawn (none today, but cheap insurance).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # pragma: no cover — defensive for older Python
+    pass
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
 REPO_PATH = "NousResearch/hermes-agent"
 
 # Mirror list — tried in order until one succeeds
