@@ -1,17 +1,11 @@
 name: build-image
 
-# Build the cloud-deploy Docker image and push to two registries:
+# Build the cloud-deploy Docker image and push to up to three registries:
 #   - ghcr.io/feifeixp/hermes-webui                                  (international users — always)
 #   - registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui          (personal ACR — fast CN pulls)
-#
-# Enterprise ACR (zlxj/hermes-webui) is handled by Aliyun's OWN build pipeline,
-# not this workflow — see Aliyun ACR Enterprise console → 镜像仓库 →
-# zlxj/hermes-webui → 构建. That pipeline pulls source directly from GitHub
-# and builds in Aliyun's VPC, so we don't need public-internet access from
-# GitHub Runner → enterprise ACR endpoint. Net: no enterprise creds in
-# GitHub Secrets, no IP whitelist juggling, no DNS issues. The trade-off
-# is a few extra minutes for the Aliyun-side build to complete after each
-# main push; in practice it's running in parallel with this workflow.
+#   - zlxj-registry.cn-shanghai.cr.aliyuncs.com/zlxj/hermes-webui    (ENTERPRISE ACR — Path B,
+#                                                                    Aliyun-side build pipeline cooperation;
+#                                                                    only fires when ENTERPRISE_ACR_* secrets are set)
 #
 # Triggers:
 #   - main branch push (only when WebUI / agent code or Dockerfile changed)
@@ -24,11 +18,17 @@ name: build-image
 #
 # Setup required (one-time):
 #   1. Repository → Settings → Secrets and variables → Actions
-#   2. Personal ACR: ALIYUN_ACR_USERNAME + ALIYUN_ACR_PASSWORD secrets,
+#   2. Personal ACR (existing): ALIYUN_ACR_USERNAME + ALIYUN_ACR_PASSWORD secrets,
 #      ALIYUN_ACR_REGISTRY + ALIYUN_ACR_NAMESPACE variables (defaults work).
+#   3. Enterprise ACR (new, Path B): ENTERPRISE_ACR_USERNAME + ENTERPRISE_ACR_PASSWORD
+#      secrets (USE A CI SUB-ACCOUNT — never the master account weilikeji2021),
+#      and ENTERPRISE_ACR_REGISTRY + ENTERPRISE_ACR_NAMESPACE variables.
 #
-# If ALIYUN_ACR_* aren't set, the Aliyun push is silently skipped — job
-# still succeeds with just the ghcr.io push.
+# Both ACR targets are independently optional — if either set of credentials is
+# missing, that push is silently skipped (job still succeeds — ghcr.io alone
+# is enough for international use). Path B exists so the enterprise side's
+# Aliyun build pipeline can pull our same image (zlxj/hermes-webui:latest)
+# instead of rebuilding from source.
 
 on:
   push:
@@ -88,6 +88,12 @@ jobs:
           # repositories don't materialize the namespace, you have to
           # create it manually first.
           ACR_NAMESPACE: ${{ vars.ALIYUN_ACR_NAMESPACE || 'neowow' }}
+          # Enterprise ACR (Path B — Aliyun-side build pipeline cooperation).
+          # No default — both vars must be explicitly set in repo Variables.
+          # When unset, enterprise_tags is empty and that push target gets
+          # skipped automatically in the tags-compose step below.
+          ENT_REGISTRY:  ${{ vars.ENTERPRISE_ACR_REGISTRY }}
+          ENT_NAMESPACE: ${{ vars.ENTERPRISE_ACR_NAMESPACE }}
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           # Newline-separated tag list, used by both push targets.
@@ -103,8 +109,22 @@ jobs:
             echo "${ACR_REGISTRY}/${ACR_NAMESPACE}/hermes-webui:main-${SHORT_SHA}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          # Also export ACR_REGISTRY so the login step can use it.
-          echo "acr_registry=${ACR_REGISTRY}" >> "$GITHUB_OUTPUT"
+          # Enterprise ACR tags — only emitted when both vars are set,
+          # so a missing var doesn't bake a literal "//hermes-webui:..."
+          # into the tag list. The tags-compose step gates the push on
+          # the credentials check, but generating sensible tags only
+          # when the registry/namespace are known is cleaner.
+          {
+            echo "enterprise_tags<<EOF"
+            if [[ -n "$ENT_REGISTRY" && -n "$ENT_NAMESPACE" ]]; then
+              echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/hermes-webui:latest"
+              echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/hermes-webui:main-${SHORT_SHA}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          # Also export registries so the login steps can reference them.
+          echo "acr_registry=${ACR_REGISTRY}"            >> "$GITHUB_OUTPUT"
+          echo "enterprise_registry=${ENT_REGISTRY}"     >> "$GITHUB_OUTPUT"
 
       # ── Login to both registries ─────────────────────────────────────
       # Login to ghcr.io first (always available — uses GITHUB_TOKEN);
@@ -130,6 +150,13 @@ jobs:
           fi
 
       - name: Login to Aliyun ACR
+        id: acr_login
+        # continue-on-error: a failed login to personal ACR (expired
+        # token, rate-limit, etc.) shouldn't block the enterprise push
+        # or the GHCR push. The downstream Compose-tag-list step
+        # gates inclusion on BOTH have_creds AND acr_login outcome,
+        # so a failed login cleanly drops just THIS target.
+        continue-on-error: true
         if: steps.check_acr.outputs.have_creds == 'true'
         uses: docker/login-action@v3
         with:
@@ -140,15 +167,51 @@ jobs:
           username: ${{ secrets.ALIYUN_ACR_USERNAME }}
           password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
 
+      # ── Enterprise ACR (Path B) ────────────────────────────────────
+      # Mirrors the personal-ACR block above. Independent on/off:
+      # missing secrets/vars just skip this push target. The CI sub-
+      # account credentials live in ENTERPRISE_ACR_USERNAME / _PASSWORD
+      # (never the master account weilikeji2021 — sub-account so a
+      # leaked token can be revoked without nuking the org).
+      - name: Check Enterprise ACR credentials
+        id: check_enterprise_acr
+        run: |
+          if [[ -n "${{ secrets.ENTERPRISE_ACR_USERNAME }}" \
+             && -n "${{ secrets.ENTERPRISE_ACR_PASSWORD }}" \
+             && -n "${{ steps.meta.outputs.enterprise_registry }}" ]]; then
+            echo "have_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Enterprise ACR push skipped — set ENTERPRISE_ACR_USERNAME + ENTERPRISE_ACR_PASSWORD secrets and ENTERPRISE_ACR_REGISTRY + ENTERPRISE_ACR_NAMESPACE variables to enable Path B."
+          fi
+
+      - name: Login to Enterprise ACR
+        id: ent_login
+        continue-on-error: true   # mirror the Aliyun ACR step — independent target
+        if: steps.check_enterprise_acr.outputs.have_creds == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.meta.outputs.enterprise_registry }}
+          username: ${{ secrets.ENTERPRISE_ACR_USERNAME }}
+          password: ${{ secrets.ENTERPRISE_ACR_PASSWORD }}
+
       - name: Compose final tag list
         id: tags
         run: |
-          # GHCR tags always included; ACR tags only if credentials are set.
+          # GHCR always; personal ACR + enterprise ACR each gated on
+          # BOTH the credentials check AND the login step's outcome.
+          # If a login step was skipped or failed (continue-on-error),
+          # its `outcome` is "skipped" / "failure" — only "success"
+          # earns inclusion. This keeps the buildx push from trying
+          # to push to a registry we never authenticated to.
           {
             echo "all<<EOF"
             echo "${{ steps.meta.outputs.ghcr_tags }}"
-            if [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
+            if [[ "${{ steps.acr_login.outcome }}" == "success" ]]; then
               echo "${{ steps.meta.outputs.acr_tags }}"
+            fi
+            if [[ "${{ steps.ent_login.outcome }}" == "success" ]]; then
+              echo "${{ steps.meta.outputs.enterprise_tags }}"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
@@ -185,16 +248,26 @@ jobs:
             echo '```'
             echo "${{ steps.meta.outputs.ghcr_tags }}"
             echo '```'
-            if [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
-              echo "**Aliyun ACR tags (China):**"
+            if [[ "${{ steps.acr_login.outcome }}" == "success" ]]; then
+              echo "**Aliyun ACR tags (personal / China):**"
               echo '```'
               echo "${{ steps.meta.outputs.acr_tags }}"
               echo '```'
+            elif [[ "${{ steps.check_acr.outputs.have_creds }}" == "true" ]]; then
+              echo "_⚠️ Aliyun ACR login FAILED — check ALIYUN_ACR_PASSWORD hasn't expired._"
             else
               echo "_Aliyun ACR push skipped — set \`ALIYUN_ACR_USERNAME\` + \`ALIYUN_ACR_PASSWORD\` secrets to enable._"
             fi
-            echo ""
-            echo "_Enterprise ACR (\`zlxj/hermes-webui\`) is built by Aliyun's own pipeline — not pushed here._"
+            if [[ "${{ steps.ent_login.outcome }}" == "success" ]]; then
+              echo "**Enterprise ACR tags (Path B):**"
+              echo '```'
+              echo "${{ steps.meta.outputs.enterprise_tags }}"
+              echo '```'
+            elif [[ "${{ steps.check_enterprise_acr.outputs.have_creds }}" == "true" ]]; then
+              echo "_⚠️ Enterprise ACR login FAILED — check ENTERPRISE_ACR_PASSWORD hasn't expired._"
+            else
+              echo "_Enterprise ACR push skipped — set \`ENTERPRISE_ACR_USERNAME\` + \`ENTERPRISE_ACR_PASSWORD\` secrets and \`ENTERPRISE_ACR_REGISTRY\` + \`ENTERPRISE_ACR_NAMESPACE\` variables to enable Path B._"
+            fi
             echo ""
             echo "**Deploy with:**"
             echo '```bash'
