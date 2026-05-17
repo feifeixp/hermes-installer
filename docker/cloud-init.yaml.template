@@ -270,7 +270,17 @@ runcmd:
   # The `-z "$(ls -A ...)"` guard makes this idempotent: if oss-sync
   # already pulled state from OSS, we DON'T clobber it (the seed only
   # fires on truly empty state directories — first-time spawn).
-  - [bash, -c, "if [ -z \"$(ls -A /var/lib/hermes-state 2>/dev/null)\" ]; then echo 'Seeding /var/lib/hermes-state from image baseline...'; docker run --rm -v /var/lib/hermes-state:/dst %IMAGE% bash -c 'cp -ar /opt/hermes/.hermes/. /dst/ 2>/dev/null && chown -R 1000:1000 /dst' && echo 'Seed complete.'; else echo 'hermes-state already populated, skipping image seed.'; fi"]
+  # IMPORTANT: --user root inside the docker run. The Hermes image's
+  # default USER is `hermes` (non-root). Without --user root, the cp
+  # can't write into /dst because the host's bind-mount target is
+  # root-owned (created by `mkdir -p` above). With --user root, cp
+  # writes succeed, and the trailing chown re-owns everything to the
+  # hermes uid/gid so the main container can read it back.
+  #
+  # We use `id -u hermes:id -g hermes` instead of hardcoding 1000:1000
+  # — the image actually uses uid 1500 / gid 999 (not the typical 1000),
+  # and may shift again on future image rebuilds. Auto-detect is safer.
+  - [bash, -c, "if [ -z \"$(ls -A /var/lib/hermes-state 2>/dev/null)\" ]; then echo 'Seeding /var/lib/hermes-state from image baseline...'; docker run --rm --user root -v /var/lib/hermes-state:/dst %IMAGE% bash -c 'UID_H=$(id -u hermes); GID_H=$(id -g hermes); cp -ar /opt/hermes/.hermes/. /dst/ && chown -R ${UID_H}:${GID_H} /dst && echo \"chowned to ${UID_H}:${GID_H}\"' && echo 'Seed complete.'; else echo 'hermes-state already populated, skipping image seed.'; fi"]
 
   # ── Bring the stack up. compose internally waits for hermes-webui
   # ── to be healthy before starting Caddy (depends_on condition).
