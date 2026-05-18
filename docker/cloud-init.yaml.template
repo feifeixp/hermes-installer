@@ -205,9 +205,22 @@ write_files:
       WantedBy=shutdown.target
 
 runcmd:
-  # ── Install Docker via the official one-liner. Faster than the apt
-  # ── debian-keyring dance + works on any reasonable Linux. ~60s.
-  - [bash, -c, "curl -fsSL https://get.docker.com | sh"]
+  # ── Install Docker via APT (Aliyun's mirror, ECS already configured
+  # ── to use it). We previously used `curl get.docker.com | sh` which
+  # ── is the Docker docs-recommended method but Aliyun's 云安全中心
+  # ── (Cloud Security Center) flags it as a worm/intrusion pattern —
+  # ── "curl remote + pipe to shell" matches generic worm signatures
+  # ── even though our use is the legitimate Docker install path. Every
+  # ── new broker spawn was triggering a security alert on the operator's
+  # ── dashboard. Switching to APT eliminates the false-positive at the
+  # ── cost of ~30 seconds more install time (downloading the GPG key +
+  # ── adding the repo + apt update). Net total: still ~90 seconds.
+  - [bash, -c, "apt-get update -qq"]
+  - [bash, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg lsb-release"]
+  - [bash, -c, "install -m 0755 -d /etc/apt/keyrings"]
+  - [bash, -c, "curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc"]
+  - [bash, -c, "echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://mirrors.aliyun.com/docker-ce/linux/ubuntu jammy stable' > /etc/apt/sources.list.d/docker.list"]
+  - [bash, -c, "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"]
   - systemctl enable --now docker
 
   # ── M2: download ossutil + the oss-sync.sh script.
