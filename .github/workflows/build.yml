@@ -8,6 +8,23 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Workflow-level permissions for the GITHUB_TOKEN. Required so the
+# `softprops/action-gh-release` step can upload artifacts + call
+# generate-release-notes on tag-triggered runs. Without this we got:
+#   "Resource not accessible by integration" on the generate-release-
+#   notes API call (read-only token is the default for forked/PR runs
+#   on some repos, and for any repo where Settings → Actions → General
+#   → Workflow permissions is "Read repository contents only").
+#
+# `contents: write` covers BOTH: creating/updating the release row
+# AND uploading the asset files. `pull-requests: read` lets
+# generate-release-notes enumerate PRs since the last tag for the
+# auto-changelog. Both are safe — neither lets the workflow modify
+# unrelated code.
+permissions:
+  contents: write
+  pull-requests: read
+
 jobs:
   # ═══════════════════════════════════════════════════════════════════════
   # macOS — .dmg
