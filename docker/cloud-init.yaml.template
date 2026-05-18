@@ -21,6 +21,10 @@
 #   %OSS_ACCESS_KEY_SECRET% companion secret (M2)
 #   %OSS_ENDPOINT%          e.g. oss-cn-hangzhou.aliyuncs.com (M2)
 #   %OSS_BUCKET%            usually neowow-hermes-state (M2)
+#   %CLOUDFLARE_API_TOKEN%  Caddy uses this for DNS-01 challenge to
+#                           bypass HTTP-01 (which gets intercepted by
+#                           the *.neowow.studio wildcard CNAME proxied
+#                           through cf-proxy worker, returning 503).
 #
 # Boot timeline (first run):
 #   00:00  Cloud-init starts (after kernel + cloud-init framework)
@@ -58,9 +62,26 @@ write_files:
     content: |
       services:
         caddy:
-          image: caddy:2.8-alpine
+          # slothcroissant/caddy-cloudflaredns is stock Caddy + the
+          # github.com/caddy-dns/cloudflare plugin already compiled in.
+          # We need this plugin because:
+          #   • LE HTTP-01/ALPN-01 challenges fail when
+          #     *.neowow.studio's wildcard CNAME (proxied through
+          #     cf-proxy worker) intercepts validator HTTP traffic →
+          #     returns 503 from cf-proxy fall-through.
+          #   • DNS-01 sidesteps the entire HTTP path: Caddy uses the
+          #     Cloudflare API to write a _acme-challenge TXT record,
+          #     LE checks it via DNS — no port 80/443 traffic needed.
+          # Tried xcaddy local-build first but caddy 2.8.4 + latest
+          # zap/exp/zapslog have an incompat (`undefined: zapslog.HandlerOptions`).
+          # Community image bypasses that — it's pinned to a known-good combo.
+          image: slothcroissant/caddy-cloudflaredns:latest
           container_name: hermes-caddy
           restart: unless-stopped
+          # Compose interpolates ${CLOUDFLARE_API_TOKEN} from the
+          # /opt/hermes-docker/.env file (written below by cloud-init).
+          environment:
+            CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN}"
           ports:
             - "80:80"
             - "443:443"
@@ -128,6 +149,16 @@ write_files:
       }
 
       %DOMAIN% {
+          # DNS-01 challenge via Cloudflare. See docker-compose.yml
+          # for the why — TLDR: Cloudflare's wildcard CNAME for
+          # *.neowow.studio intercepts HTTP-01 / ALPN-01 challenges
+          # and returns 503 from cf-proxy, so we use DNS-01 instead.
+          # {env.CLOUDFLARE_API_TOKEN} pulls from the compose env,
+          # which interpolates from /opt/hermes-docker/.env.
+          tls {
+              dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+              resolvers 1.1.1.1
+          }
           reverse_proxy hermes-webui:7891 {
               header_up X-Forwarded-Proto {scheme}
               header_up X-Forwarded-Host  {host}
@@ -141,6 +172,16 @@ write_files:
               format console
           }
       }
+
+  # ── docker compose .env — interpolated into both services ───────────
+  # docker-compose.yml above uses ${CLOUDFLARE_API_TOKEN} interpolation.
+  # Compose reads this file from the same directory as the YAML, so a
+  # plain KEY=value line is enough — no docker/quotes/escaping shenanigans.
+  - path: /opt/hermes-docker/.env
+    permissions: '0600'
+    owner: root:root
+    content: |
+      CLOUDFLARE_API_TOKEN=%CLOUDFLARE_API_TOKEN%
 
   # Hourly auto-update cron — same as Phase 1 chat.neowow.studio.
   - path: /etc/cron.d/hermes-auto-update
@@ -262,7 +303,7 @@ runcmd:
   - [bash, -c, "docker pull %IMAGE%"]
 
   # ── Pull Caddy too while we're at it (so first compose up is fast).
-  - [bash, -c, "docker pull caddy:2.8-alpine"]
+  - [bash, -c, "docker pull slothcroissant/caddy-cloudflaredns:latest"]
 
   # ── Seed /var/lib/hermes-state from the image, only when empty.
   #
