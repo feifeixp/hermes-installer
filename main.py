@@ -240,7 +240,7 @@ def _free_port(port: int) -> bool:
 # ══════════════════════════════════════════════════════════════════════════
 # Native window — pywebview (macOS cocoa + Windows edgechromium)
 # ══════════════════════════════════════════════════════════════════════════
-def _open_native_window(title: str, url: str, on_close=None):
+def _open_native_window(title: str, url: str, on_close=None, current_mode: str = "local"):
     """Open URL in a native window using pywebview.
     macOS  → WKWebView via cocoa backend
     Windows → Edge WebView2 via edgechromium backend
@@ -249,6 +249,10 @@ def _open_native_window(title: str, url: str, on_close=None):
     closed.  This is the only reliable cleanup hook on macOS — the cocoa
     backend's ``NSApp.terminate`` exits the process without returning from
     ``webview.start()``, so ``finally`` / ``atexit`` may never run.
+
+    *current_mode* is `"local"` or `"remote"`, used by the menu bar to
+    mark which Mode item is currently selected. Caller passes whatever
+    it read from gateway.json before deciding which run path to take.
     """
     try:
         import webview
@@ -282,7 +286,20 @@ def _open_native_window(title: str, url: str, on_close=None):
                 window.events.closed += _on_closing
             except Exception as exc:
                 log.debug("could not attach window close handler: %s", exc)
-        webview.start(gui=gui, debug=False)
+
+        # Build the top-level native menu bar (账号 / 模式 / 视图 / 帮助).
+        # Menu items run callbacks that talk back to the embedded WebUI
+        # via window.evaluate_js, write gateway.json, or open external
+        # URLs in the default browser. See desktop_menu.py for the full
+        # layout + each action's behavior.
+        menu_items = []
+        try:
+            import desktop_menu
+            menu_items = desktop_menu.build_menu(window, current_mode)
+        except Exception as exc:
+            log.warning("could not build native menu: %s", exc)
+
+        webview.start(gui=gui, debug=False, menu=menu_items)
         log.info("native window closed")
     except Exception as exc:
         log.exception("pywebview %s failed: %s", gui, exc)
@@ -399,7 +416,7 @@ def _run_remote_mode(url: str, label: str = ""):
     title = f"Hermes · {label}" if label else "Hermes (远程)"
     log.info("Remote mode: opening %s as %s", url, title)
     try:
-        _open_native_window(title, url, on_close=None)
+        _open_native_window(title, url, on_close=None, current_mode="remote")
     except Exception as exc:
         log.exception("remote-mode pywebview failed: %s", exc)
         _alert("Hermes Installer",
@@ -551,7 +568,7 @@ def main():
     log.info("Opening WebUI: %s (server ready=%s)", url, ready)
 
     try:
-        _open_native_window(title, url, on_close=_cleanup_servers)
+        _open_native_window(title, url, on_close=_cleanup_servers, current_mode="local")
     finally:
         # Defense-in-depth: also clean up if we somehow get here. On macOS
         # this rarely runs because cocoa terminates the process directly;
