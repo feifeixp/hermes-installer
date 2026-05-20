@@ -3,9 +3,10 @@ name: build-image
 # Build the cloud-deploy Docker image and push to up to three registries:
 #   - ghcr.io/feifeixp/hermes-webui                                  (international users — always)
 #   - registry.cn-shanghai.aliyuncs.com/neowow/hermes-webui          (personal ACR — fast CN pulls)
-#   - zlxj-registry.cn-shanghai.cr.aliyuncs.com/zlxj/hermes-webui    (ENTERPRISE ACR — Path B,
+#   - zlxj-registry.ap-southeast-1.cr.aliyuncs.com/hermes/hermes     (ENTERPRISE ACR — Path B,
 #                                                                    Aliyun-side build pipeline cooperation;
-#                                                                    only fires when ENTERPRISE_ACR_* secrets are set)
+#                                                                    only fires when ENTERPRISE_ACR_* secrets are set;
+#                                                                    repo name configurable via vars.ENTERPRISE_ACR_REPO)
 #
 # Triggers:
 #   - main branch push (only when WebUI / agent code or Dockerfile changed)
@@ -92,8 +93,15 @@ jobs:
           # No default — both vars must be explicitly set in repo Variables.
           # When unset, enterprise_tags is empty and that push target gets
           # skipped automatically in the tags-compose step below.
+          #
+          # ENTERPRISE_ACR_REPO is the repo name inside the namespace; defaults
+          # to `hermes-webui` for backward compat with the cn-shanghai zlxj
+          # repo. Override in repo Variables if your Enterprise ACR org uses a
+          # different repo name (e.g. ENTERPRISE_ACR_REPO=hermes when the path
+          # is `${REG}/hermes/hermes:latest`).
           ENT_REGISTRY:  ${{ vars.ENTERPRISE_ACR_REGISTRY }}
           ENT_NAMESPACE: ${{ vars.ENTERPRISE_ACR_NAMESPACE }}
+          ENT_REPO:      ${{ vars.ENTERPRISE_ACR_REPO || 'hermes-webui' }}
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           # Newline-separated tag list, used by both push targets.
@@ -117,8 +125,8 @@ jobs:
           {
             echo "enterprise_tags<<EOF"
             if [[ -n "$ENT_REGISTRY" && -n "$ENT_NAMESPACE" ]]; then
-              echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/hermes-webui:latest"
-              echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/hermes-webui:main-${SHORT_SHA}"
+              echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/${ENT_REPO}:latest"
+              echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/${ENT_REPO}:main-${SHORT_SHA}"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
