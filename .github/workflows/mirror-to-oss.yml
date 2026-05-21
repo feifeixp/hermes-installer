@@ -85,10 +85,13 @@ jobs:
 
       - name: Install ossutil
         run: |
+          # ossutil 1.7.x doesn't have a `version` subcommand — use --version
+          # flag instead. Pin the version explicitly so a surprise 2.x bump
+          # (different CLI) doesn't break us silently.
           curl -fsSL https://gosspublic.alicdn.com/ossutil/1.7.18/ossutil64 \
             -o /usr/local/bin/ossutil
           chmod +x /usr/local/bin/ossutil
-          ossutil version
+          ossutil --version
 
       - name: Configure ossutil
         env:
