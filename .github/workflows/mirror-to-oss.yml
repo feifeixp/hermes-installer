@@ -1,0 +1,155 @@
+name: mirror-release-to-oss
+
+# Mirror release assets to Aliyun OSS for fast China downloads.
+#
+# GitHub release CDN is slow / blocked for many Chinese users. Mirroring
+# DMG / EXE / ZIP to oss://neowow/hermes/* (cn-hangzhou) gives:
+#   - direct ~MB/s downloads from CN ISPs (vs <100KB/s GitHub via CDN)
+#   - stable /hermes/latest/* aliases so the landing page never needs an
+#     update when we cut a new release
+#   - fallback to GitHub still works for international users
+#
+# Triggers:
+#   - release: { types: [published] }  — auto-mirror on every new release
+#   - workflow_dispatch                 — manual backfill of an old tag
+#
+# Required Variables (Settings → Variables):
+#   OSS_BUCKET    (default: neowow)
+#   OSS_ENDPOINT  (default: oss-cn-hangzhou.aliyuncs.com)
+#
+# Required Secrets (Settings → Secrets):
+#   OSS_ACCESS_KEY_ID
+#   OSS_ACCESS_KEY_SECRET
+#   (Or fall back to ALIBABA_CLOUD_ACCESS_KEY_ID / _SECRET if present.)
+#
+# Bucket setup (one-time, manual in OSS console):
+#   1. neowow bucket exists already (used by dashboard for cover images)
+#   2. ACL on the `hermes/` prefix → 公共读 (Public Read)
+#      OSS 控制台 → neowow → 文件管理 → hermes/ → 设置文件 ACL → 公共读
+#      (Or use a Bucket Policy: Allow oss:GetObject on neowow/hermes/*
+#      for principal *)
+#
+# Output URLs:
+#   Versioned: https://neowow.oss-cn-hangzhou.aliyuncs.com/hermes/v1.3.1/Hermes-Installer-macOS.dmg
+#   Latest:    https://neowow.oss-cn-hangzhou.aliyuncs.com/hermes/latest/Hermes-Installer-macOS.dmg
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to mirror (e.g. v1.3.1). Leave empty to use the latest release.'
+        required: false
+        type: string
+
+permissions:
+  contents: read       # gh release view + download
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Resolve target tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ -n "$RELEASE_TAG" ]]; then
+            TAG="$RELEASE_TAG"
+            echo "Triggered by release publish: $TAG"
+          elif [[ -n "$INPUT_TAG" ]]; then
+            TAG="$INPUT_TAG"
+            echo "Manual dispatch with tag: $TAG"
+          else
+            TAG=$(gh release list --repo "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName')
+            echo "Manual dispatch, no tag → using latest: $TAG"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p assets
+          cd assets
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern '*'
+          echo "=== Downloaded ==="
+          ls -lh
+
+      - name: Install ossutil
+        run: |
+          curl -fsSL https://gosspublic.alicdn.com/ossutil/1.7.18/ossutil64 \
+            -o /usr/local/bin/ossutil
+          chmod +x /usr/local/bin/ossutil
+          ossutil version
+
+      - name: Configure ossutil
+        env:
+          # Prefer scoped OSS_* creds; fall back to platform-wide AK so existing
+          # secret setups keep working without adding new entries.
+          OSS_AK: ${{ secrets.OSS_ACCESS_KEY_ID    || secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          OSS_SK: ${{ secrets.OSS_ACCESS_KEY_SECRET || secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          OSS_EP: ${{ vars.OSS_ENDPOINT || 'oss-cn-hangzhou.aliyuncs.com' }}
+        run: |
+          if [[ -z "$OSS_AK" || -z "$OSS_SK" ]]; then
+            echo "::error::Missing OSS credentials. Set OSS_ACCESS_KEY_ID + OSS_ACCESS_KEY_SECRET (or ALIBABA_CLOUD_ACCESS_KEY_ID + _SECRET) in repo Secrets."
+            exit 1
+          fi
+          ossutil config \
+            -e "$OSS_EP" \
+            -i "$OSS_AK" \
+            -k "$OSS_SK"
+          # Verify by listing the bucket — fail fast on wrong creds / bucket.
+          ossutil ls "oss://${{ vars.OSS_BUCKET || 'neowow' }}/" --limited-num 1 >/dev/null
+
+      - name: Upload to versioned prefix
+        env:
+          BUCKET: ${{ vars.OSS_BUCKET || 'neowow' }}
+          TAG:    ${{ steps.tag.outputs.tag }}
+        run: |
+          DEST="oss://${BUCKET}/hermes/${TAG}/"
+          echo "Uploading assets to $DEST"
+          # --update: only upload if size/mtime differ → idempotent re-runs are cheap
+          # --force:  overwrite same-name files (e.g. manual re-mirror after edits)
+          # --meta:   set Content-Disposition so browsers download with sensible filenames
+          ossutil cp -r -f --update assets/ "$DEST" \
+            --meta="Cache-Control:public, max-age=86400"
+
+      - name: Mirror to /latest/ alias
+        env:
+          BUCKET: ${{ vars.OSS_BUCKET || 'neowow' }}
+          TAG:    ${{ steps.tag.outputs.tag }}
+        run: |
+          DEST="oss://${BUCKET}/hermes/latest/"
+          echo "Refreshing /latest/ alias → $DEST"
+          # Wipe old files first so renamed assets don't leave stale copies.
+          # (Use --recursive + delete-only — we replace with same-name uploads next.)
+          ossutil rm -r -f "$DEST" || true
+          ossutil cp -r -f --update assets/ "$DEST" \
+            --meta="Cache-Control:public, max-age=300"
+
+      - name: Print download URLs
+        env:
+          BUCKET:   ${{ vars.OSS_BUCKET || 'neowow' }}
+          ENDPOINT: ${{ vars.OSS_ENDPOINT || 'oss-cn-hangzhou.aliyuncs.com' }}
+          TAG:      ${{ steps.tag.outputs.tag }}
+        run: |
+          BASE="https://${BUCKET}.${ENDPOINT}/hermes"
+          echo "::notice::Mirror complete. Versioned: ${BASE}/${TAG}/"
+          echo "::notice::Latest alias: ${BASE}/latest/"
+          echo ""
+          echo "Files:"
+          for f in assets/*; do
+            name=$(basename "$f")
+            # URL-encode spaces in filenames (e.g. "Hermes.Installer.exe" — though most have no spaces)
+            encoded=$(echo "$name" | sed 's/ /%20/g')
+            echo "  ${BASE}/${TAG}/${encoded}"
+            echo "  ${BASE}/latest/${encoded}"
+          done
