@@ -133,6 +133,19 @@ RUN set -ex \
 # the layer stays small.
 COPY --chown=hermes:hermes . /opt/hermes/hermes-installer/
 
+# ── Bake version into image ───────────────────────────────────────────────────
+# .git is excluded by .dockerignore, so api/updates.py can't run
+# `git describe` at runtime — it falls back to api/_version.py if it exists,
+# or "unknown" if it doesn't. We write _version.py here so ?v= cache-busting
+# on static assets gets a real value instead of "unknown".
+#
+# CI passes: --build-arg HERMES_VERSION=main-<sha7>  (for main-branch builds)
+# Tag builds: --build-arg HERMES_VERSION=v1.2.3      (for release tags)
+# Local builds that omit the arg get "dev-local" as the fallback.
+ARG HERMES_VERSION=dev-local
+RUN echo "__version__ = '${HERMES_VERSION}'" \
+    > /opt/hermes/hermes-installer/webui/api/_version.py
+
 # ── Install Hermes Agent + Python deps ────────────────────────────────────────
 # This is the SLOW step: ~10 minutes for fresh install (clone agent,
 # create venv, uv pip install -e .[all] downloads ~700 MB of wheels).

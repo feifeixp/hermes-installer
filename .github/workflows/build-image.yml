@@ -104,6 +104,7 @@ jobs:
           ENT_REPO:      ${{ vars.ENTERPRISE_ACR_REPO || 'hermes-webui' }}
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           # Newline-separated tag list, used by both push targets.
           {
             echo "ghcr_tags<<EOF"
@@ -241,6 +242,9 @@ jobs:
           # SAME built image to all listed tags — single build, multi
           # destination. ~half the time of "build, push, build, push".
           tags: ${{ steps.tags.outputs.all }}
+          # Bake the commit SHA into api/_version.py so ?v= cache-busting
+          # on static assets gets a real value instead of "unknown".
+          build-args: HERMES_VERSION=main-${{ steps.meta.outputs.short_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false   # cleaner image; no SBOM/attestation file

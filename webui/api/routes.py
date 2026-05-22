@@ -6072,6 +6072,7 @@ _TEXT_MIME_TYPES = {"text/css", "application/javascript", "text/html", "image/sv
 
 
 def _serve_static(handler, parsed):
+    import gzip as _gzip
     static_root = (Path(__file__).parent.parent / "static").resolve()
     # Strip the leading '/static/' prefix, then resolve and sandbox
     rel = parsed.path[len("/static/") :]
@@ -6085,13 +6086,35 @@ def _serve_static(handler, parsed):
     ext = static_file.suffix.lower()
     ct = _STATIC_MIME.get(ext.lstrip("."), "text/plain")
     ct_header = f"{ct}; charset=utf-8" if ct in _TEXT_MIME_TYPES else ct
+
+    # Cache policy: versioned assets get a 1-year immutable cache;
+    # unversioned (or v=unknown fallback) get no-cache so the browser
+    # revalidates but can still serve a 304 without re-downloading.
+    # no-store was wrong here — it forces a full download on every visit.
+    ver = parse_qs(parsed.query).get("v", [""])[0]
+    if ver and ver != "unknown":
+        cache_header = "public, max-age=31536000, immutable"
+    else:
+        cache_header = "no-cache"
+
+    raw = static_file.read_bytes()
+
+    # Gzip compression for text-based types > 1 KB when client supports it.
+    # JS/CSS/SVG compress ~70%, saving significant cross-ocean transfer time.
+    accept_enc = getattr(handler.headers, "get", lambda k, d="": handler.headers.get(k) or d)("Accept-Encoding", "")
+    use_gzip = "gzip" in accept_enc and ct in _TEXT_MIME_TYPES and len(raw) > 1024
+
     handler.send_response(200)
     handler.send_header("Content-Type", ct_header)
-    handler.send_header("Cache-Control", "no-store")
-    raw = static_file.read_bytes()
-    handler.send_header("Content-Length", str(len(raw)))
+    handler.send_header("Cache-Control", cache_header)
+    if use_gzip:
+        body = _gzip.compress(raw, compresslevel=6)
+        handler.send_header("Content-Encoding", "gzip")
+    else:
+        body = raw
+    handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
-    handler.wfile.write(raw)
+    handler.wfile.write(body)
     return True
 
 
