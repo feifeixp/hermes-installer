@@ -1394,6 +1394,22 @@
               <div id="neowowSkillsListBox" style="display:none;margin-top:10px;padding:10px;background:var(--code-bg);border:1px solid var(--border2);border-radius:6px;font-size:12px"></div>
             </div>
           </div>
+            <!-- ── OSS Backup ──────────────────────────────────────── -->
+            <!-- Only visible on cloud instances (oss-sync.sh present). -->
+            <!-- Shows last sync time + manual backup button.           -->
+            <div class="settings-field" id="neowowBackupSection" style="display:none;margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+              <label>数据备份（OSS 同步）</label>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.6">
+                聊天记录每 5 分钟自动备份到云端（Aliyun OSS）。
+                手动备份会立即同步最新数据，并更新 Dashboard 上的下载包。
+              </div>
+              <div id="neowowBackupStatus" style="font-size:12px;color:var(--muted);margin-bottom:8px">加载中…</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn-tiny" id="neowowBackupPushBtn" onclick="neowowBackupPush()">☁️ 立即备份</button>
+              </div>
+              <div id="neowowBackupResult" style="font-size:12px;margin-top:8px;line-height:1.6"></div>
+            </div>
+
           <!-- ════════════════════════════════════════════════════════════════
                END: Neowow integration — settings pane
                ════════════════════════════════════════════════════════════════ -->

@@ -1454,3 +1454,80 @@ def _utc_now_iso() -> str:
     """ISO-8601 UTC stamp — same shape the dashboard uses, easy to diff."""
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+# ── OSS backup helpers ────────────────────────────────────────────────────────
+
+_OSS_SYNC_SCRIPT = "/opt/hermes-docker/oss-sync.sh"
+_OSS_SYNC_LOG    = "/var/log/hermes-oss-sync.log"
+
+
+def oss_backup_push() -> dict:
+    """Manually trigger oss-sync.sh push.
+
+    Runs synchronously (typical duration: 2–10 s depending on session size).
+    Returns {ok, duration_ms, message}.
+    Raises RuntimeError on script failure.
+    """
+    import subprocess, time
+    if not os.path.isfile(_OSS_SYNC_SCRIPT):
+        raise RuntimeError("OSS sync not available on this instance (script not found)")
+
+    t0 = time.monotonic()
+    result = subprocess.run(
+        [_OSS_SYNC_SCRIPT, "push"],
+        capture_output=True, text=True, timeout=120,
+    )
+    elapsed = int((time.monotonic() - t0) * 1000)
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"oss-sync.sh push exited {result.returncode}: "
+            f"{(result.stderr or result.stdout or '').strip()[:300]}"
+        )
+
+    return {
+        "ok":          True,
+        "duration_ms": elapsed,
+        "message":     "备份成功",
+        "ts":          _utc_now_iso(),
+    }
+
+
+def oss_backup_status() -> dict:
+    """Read the last sync timestamp from the OSS sync log.
+
+    Returns {available, lastPush, lastPushTs} where:
+      available  — False when the script/log is absent (not a cloud instance)
+      lastPush   — human-readable last line from the log (may be empty)
+      lastPushTs — ISO timestamp of the last "push: ok" entry, or ""
+    """
+    if not os.path.isfile(_OSS_SYNC_SCRIPT):
+        return {"available": False, "lastPush": "", "lastPushTs": ""}
+
+    last_push_ts = ""
+    last_line    = ""
+    try:
+        if os.path.isfile(_OSS_SYNC_LOG):
+            with open(_OSS_SYNC_LOG, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            # Walk backwards to find the last "push: ok" line
+            for raw in reversed(lines):
+                line = raw.strip()
+                if line:
+                    last_line = last_line or line
+                if "push: ok" in line:
+                    # Line format: [2026-05-22T13:00:00+0000] push: ok
+                    import re
+                    m = re.match(r"\[([^\]]+)\]", line)
+                    if m:
+                        last_push_ts = m.group(1)
+                    break
+    except Exception:
+        pass
+
+    return {
+        "available":  True,
+        "lastPush":   last_line,
+        "lastPushTs": last_push_ts,
+    }

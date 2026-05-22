@@ -3981,6 +3981,17 @@ def handle_get(handler, parsed) -> bool:
             logger.exception("neowow skills/local-status failed")
             return bad(handler, str(e), status=500)
 
+    # OSS backup status — last push timestamp + availability flag.
+    # Returns {available, lastPush, lastPushTs}. Never makes a network
+    # call — reads only the local log file.
+    if parsed.path == "/api/neowow/backup/status":
+        try:
+            from api.neowow import oss_backup_status
+            return j(handler, oss_backup_status())
+        except Exception as e:
+            logger.exception("neowow backup/status failed")
+            return bad(handler, str(e), status=500)
+
     # Cloud preview — proxies the dashboard's /api/me/skills with the
     # saved deploy-token. Returns metadata only (content stripped) for
     # the "list of cloud subscriptions" UI.
@@ -6019,6 +6030,18 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e), status=502)
         except Exception as e:
             logger.exception("neowow skills/restore failed")
+            return bad(handler, str(e), status=500)
+
+    # Manually trigger an OSS backup push (cloud instances only).
+    # Returns {ok, duration_ms, message, ts} or 503 if OSS not available.
+    if parsed.path == "/api/neowow/backup/push":
+        try:
+            from api.neowow import oss_backup_push
+            return j(handler, oss_backup_push())
+        except RuntimeError as e:
+            return bad(handler, str(e), status=503)
+        except Exception as e:
+            logger.exception("neowow backup/push failed")
             return bad(handler, str(e), status=500)
 
     # ════════════════════════════════════════════════════════════════════

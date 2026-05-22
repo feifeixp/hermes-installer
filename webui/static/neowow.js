@@ -1718,4 +1718,71 @@
 
   // Expose for testing / manual trigger in devtools
   window.neowowCheckUpdateNotice = _neowowCheckUpdateNotice;
+
+  // ── OSS Backup ────────────────────────────────────────────────────────────
+
+  async function _neowowLoadBackupStatus() {
+    const section = $('neowowBackupSection');
+    const statusEl = $('neowowBackupStatus');
+    if (!section || !statusEl) return;
+    try {
+      const r = await fetch('/api/neowow/backup/status', { cache: 'no-store' });
+      const d = await r.json();
+      if (!d.available) {
+        // Not a cloud instance — hide the whole section
+        section.style.display = 'none';
+        return;
+      }
+      section.style.display = 'block';
+      if (d.lastPushTs) {
+        // Format timestamp for display
+        let ts = d.lastPushTs;
+        try {
+          const dt = new Date(ts);
+          if (!isNaN(dt.getTime())) {
+            ts = dt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai',
+              month: 'numeric', day: 'numeric',
+              hour: '2-digit', minute: '2-digit' });
+          }
+        } catch (_) { /* use raw string */ }
+        statusEl.innerHTML = `上次同步：<strong>${escapeHtml(ts)}</strong>`;
+      } else {
+        statusEl.textContent = '暂无同步记录';
+      }
+    } catch (e) {
+      // Silently hide — may be on a local instance without OSS
+      if (section) section.style.display = 'none';
+    }
+  }
+
+  window.neowowBackupPush = async function () {
+    const btn = $('neowowBackupPushBtn');
+    const out = $('neowowBackupResult');
+    if (!btn || !out) return;
+    const wasLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '备份中…';
+    out.innerHTML = '';
+    try {
+      const r = await fetch('/api/neowow/backup/push', { method: 'POST', cache: 'no-store' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      out.innerHTML = `<span style="color:var(--accent)">✓ ${escapeHtml(d.message || '备份成功')} · ${d.duration_ms || 0} ms</span>`;
+      // Refresh status line
+      void _neowowLoadBackupStatus();
+    } catch (e) {
+      out.innerHTML = `<span style="color:#ef4444">❌ 备份失败：${escapeHtml(e.message)}</span>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = wasLabel;
+    }
+  };
+
+  // Load backup status when the neowow settings pane opens.
+  // Piggyback on the existing DOMContentLoaded listener by calling it
+  // alongside the other init calls.
+  document.addEventListener('DOMContentLoaded', () => {
+    void _neowowLoadBackupStatus();
+  });
+
 })();

@@ -145,6 +145,22 @@ cmd_push() {
             "${OSS_URI}/_meta/last-synced.txt" --force >/dev/null 2>&1 \
         || true
 
+    # Create a full-archive zip for one-click download from the dashboard.
+    # Uploaded as sessions_backup.zip alongside the incremental files.
+    # Failures are non-fatal — the incremental sync already succeeded.
+    _ZIP_TMP="$(mktemp /tmp/hermes-backup-XXXXXX.zip)"
+    if (cd "$LOCAL_PATH" && zip -qr "$_ZIP_TMP" sessions/ 2>/dev/null); then
+        if "$OSSUTIL" -c "$OSSUTIL_CONFIG" cp "$_ZIP_TMP" \
+                "${OSS_URI}/sessions_backup.zip" --force >/dev/null 2>&1; then
+            log "push: backup zip uploaded"
+        else
+            log "push: backup zip upload failed (non-fatal)"
+        fi
+    else
+        log "push: backup zip creation failed (non-fatal)"
+    fi
+    rm -f "$_ZIP_TMP"
+
     log "push: ok"
 }
 
