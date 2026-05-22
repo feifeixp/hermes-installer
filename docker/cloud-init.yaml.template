@@ -279,17 +279,15 @@ runcmd:
   # ── dashboard. Switching to APT eliminates the false-positive at the
   # ── cost of ~30 seconds more install time (downloading the GPG key +
   # ── adding the repo + apt update). Net total: still ~90 seconds.
-  - [bash, -c, "apt-get update -qq"]
-  - [bash, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg lsb-release"]
-  - [bash, -c, "install -m 0755 -d /etc/apt/keyrings"]
-  - [bash, -c, "curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc"]
-  - [bash, -c, "echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://mirrors.aliyun.com/docker-ce/linux/ubuntu jammy stable' > /etc/apt/sources.list.d/docker.list"]
-  - [bash, -c, "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"]
+  - [bash, -c, "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg lsb-release"]
+  - [bash, -c, "install -m 0755 -d /etc/apt/keyrings && curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc && echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://mirrors.aliyun.com/docker-ce/linux/ubuntu jammy stable' > /etc/apt/sources.list.d/docker.list"]
+  - [bash, -c, "_docker_ok=false; for _try in 1 2 3; do apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && _docker_ok=true && break; echo \"Docker install attempt ${_try}/3 failed, waiting 15s...\"; sleep 15; done; $_docker_ok || { echo 'FATAL: Docker CE install failed after 3 attempts'; exit 1; }"]
   - systemctl enable --now docker
+  - [bash, -c, "docker --version || { echo 'FATAL: docker binary not found after install'; exit 1; }"]
 
   # ── M2: download ossutil + the oss-sync.sh script.
   # ── ossutil is a single Go binary; ~20 MB; we host on Aliyun CDN.
-  - [bash, -c, "curl -fsSL --retry 3 https://gosspublic.alicdn.com/ossutil/v2/2.0.5/ossutil-2.0.5-linux-amd64.zip -o /tmp/ossutil.zip && cd /tmp && unzip -o ossutil.zip && mv -f ossutil-*/ossutil /usr/local/bin/ossutil && chmod +x /usr/local/bin/ossutil"]
+  - [bash, -c, "curl -fsSL --retry 3 https://gosspublic.alicdn.com/ossutil/v2/2.1.1/ossutil-2.1.1-linux-amd64.zip -o /tmp/ossutil.zip && cd /tmp && unzip -o ossutil.zip && cp -f ossutil-2.1.1-linux-amd64/ossutil /usr/local/bin/ossutil && chmod +x /usr/local/bin/ossutil"]
   - [bash, -c, "curl -fsSL --retry 3 https://raw.githubusercontent.com/feifeixp/hermes-installer/main/docker/oss-sync.sh -o /opt/hermes-docker/oss-sync.sh && chmod +x /opt/hermes-docker/oss-sync.sh"]
 
   # ── M2: probe OSS access (fail-fast if creds wrong) + pull existing state.
