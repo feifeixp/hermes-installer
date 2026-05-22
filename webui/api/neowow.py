@@ -919,17 +919,29 @@ def apply_active_cloud_config() -> dict:
         skipped_fields.append("model.default (cloud config has empty model name)")
 
     # ── systemPrompt → agent.system_prompt ───────────────────────────
+    # We save the raw base prompt via skills.save_base_prompt() which
+    # persists it as _base_prompt.txt, then calls rebuild_skills_system_prompt()
+    # to merge it with the skills appendix (_skills_prompt.txt) before
+    # writing to config.yaml. This prevents the skills layer from being
+    # silently overwritten every time a cloud config sync runs.
     new_prompt = (blob.get("systemPrompt") or "").strip()
-    if new_prompt:
-        existing.setdefault("agent", {})
-        existing["agent"]["system_prompt"] = new_prompt
-        applied_fields.append("agent.system_prompt")
-    else:
-        # Empty prompt is a legitimate choice (preset 通用助理 ships ''),
-        # so we DO clear an existing one when the cloud says empty.
-        if "agent" in existing and "system_prompt" in (existing["agent"] or {}):
-            existing["agent"].pop("system_prompt", None)
-            applied_fields.append("agent.system_prompt (cleared)")
+    try:
+        from api.skills import save_base_prompt as _save_base_prompt
+        _save_base_prompt(new_prompt)
+        # rebuild_skills_system_prompt() is called inside save_base_prompt,
+        # so config.yaml is updated automatically — skip the direct write below.
+        applied_fields.append("agent.system_prompt (via skills layer)")
+    except Exception as _sp_err:
+        # skills module unavailable or write failed — fall back to direct write
+        logger.warning("[neowow] save_base_prompt failed (%s), falling back", _sp_err)
+        if new_prompt:
+            existing.setdefault("agent", {})
+            existing["agent"]["system_prompt"] = new_prompt
+            applied_fields.append("agent.system_prompt")
+        else:
+            if "agent" in existing and "system_prompt" in (existing["agent"] or {}):
+                existing["agent"].pop("system_prompt", None)
+                applied_fields.append("agent.system_prompt (cleared)")
 
     # ── Full blob → neowow_cloud: (audit-trail; not auto-applied) ────
     existing["neowow_cloud"] = {

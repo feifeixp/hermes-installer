@@ -453,6 +453,40 @@ def main() -> None:
         print(f'  Remote access: ssh -N -L {PORT}:127.0.0.1:{PORT} <user>@<your-server>', flush=True)
     print(f'  Then open:     {scheme}://localhost:{PORT}', flush=True)
     print('', flush=True)
+
+    # ── Startup skill sync (background, non-blocking) ──────────────────────
+    # After the server is listening, kick off a one-time sync of the user's
+    # subscriptions + platform-default skills. Runs in a daemon thread so it
+    # never delays the WebUI from accepting requests. Requires a saved token
+    # (neodomain cloud instances always have one; bare local installs may not).
+    import threading as _threading
+    def _startup_skill_sync():
+        try:
+            from api.neowow import _read_state as _rs
+            if not (_rs().get("token") or "").strip():
+                return  # no token → skip silently
+            from api.skills import sync_all_skills
+            result = sync_all_skills()
+            added   = len(result.get("added", []))
+            skipped = len(result.get("skipped_dismissed", []))
+            logger.info(
+                "[startup] skills sync complete: +%d updated=%d removed=%d skipped=%d",
+                added,
+                len(result.get("updated", [])),
+                len(result.get("removed", [])),
+                skipped,
+            )
+            if added:
+                print(
+                    f'  [skills] Installed {added} skill(s) '
+                    f'({skipped} skipped by user preference)',
+                    flush=True,
+                )
+        except Exception as exc:
+            logger.warning("[startup] skills sync failed (non-fatal): %s", exc)
+
+    _threading.Thread(target=_startup_skill_sync, daemon=True, name="startup-skill-sync").start()
+
     try:
         httpd.serve_forever()
     finally:

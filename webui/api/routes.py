@@ -5972,15 +5972,13 @@ def handle_post(handler, parsed) -> bool:
             logger.exception("neowow cloud-push failed")
             return bad(handler, str(e), status=500)
 
-    # Sync subscribed skills from the dashboard into
-    # ~/.hermes/skills/_neowow/. Idempotent (re-running after no
-    # cloud changes is a no-op + bookkeeping refresh). Returns a
-    # summary {added: [...], updated: [...], removed: [...], unchanged: int}
-    # the UI uses to render the result.
+    # Sync subscribed skills + platform defaults from the dashboard into
+    # ~/.hermes/skills/_neowow/. Idempotent. Returns a summary:
+    # {added, updated, removed, skipped_dismissed, unchanged}
     if parsed.path == "/api/neowow/skills/sync":
-        from api.skills import sync_subscribed_skills
+        from api.skills import sync_all_skills
         try:
-            return j(handler, sync_subscribed_skills())
+            return j(handler, sync_all_skills())
         except ValueError as e:
             return bad(handler, str(e))
         except RuntimeError as e:
@@ -5988,6 +5986,41 @@ def handle_post(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("neowow skills/sync failed")
             return bad(handler, str(e), status=500)
+
+    # Dismiss a platform-default skill so it's not reinstalled on next sync.
+    # Body: { "id": "skill-abc123" }
+    # Regular subscription skills are unaffected by dismiss.
+    if parsed.path == "/api/neowow/skills/dismiss":
+        sid = (body or {}).get("id", "")
+        if not sid:
+            return bad(handler, "id is required")
+        try:
+            from api.skills import dismiss_skill
+            dismiss_skill(sid)
+            return j(handler, {"ok": True, "id": sid})
+        except ValueError as e:
+            return bad(handler, str(e))
+        except Exception as e:
+            logger.exception("neowow skills/dismiss failed")
+            return bad(handler, str(e), status=500)
+
+    # Restore a previously dismissed default skill.
+    # Body: { "id": "skill-abc123" }
+    if parsed.path == "/api/neowow/skills/restore":
+        sid = (body or {}).get("id", "")
+        if not sid:
+            return bad(handler, "id is required")
+        try:
+            from api.skills import restore_skill
+            return j(handler, restore_skill(sid))
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow skills/restore failed")
+            return bad(handler, str(e), status=500)
+
     # ════════════════════════════════════════════════════════════════════
     # END: Neowow integration — POST routes
     # ════════════════════════════════════════════════════════════════════
