@@ -117,13 +117,34 @@ write_files:
             # may flip this off if the user explicitly wants to BYO
             # provider, but cloud is hard-locked.
             HERMES_NEOWOW_ONLY: "1"
+            # ── Fast PyPI mirror ─────────────────────────────────────
+            # uv (used in docker_init.bash) reads UV_INDEX_URL so
+            # pip installs hit the Aliyun mirror instead of pypi.org.
+            # From HK/Shanghai ECS the Aliyun mirror is ~10× faster —
+            # cuts initial dependency install from ~4 min to ~30 s.
+            # UV_EXTRA_INDEX_URL is a fallback for any package not yet
+            # mirrored (rare). UV_CACHE_DIR points at the named volume
+            # hermes_uv_cache (mounted below) so downloaded wheels
+            # survive container recreation and subsequent installs are
+            # near-instant even on first boot after an hourly pull.
+            UV_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/"
+            UV_EXTRA_INDEX_URL: "https://pypi.org/simple/"
+            UV_CACHE_DIR: /uv_cache
           # M2: bind-mount (NOT named volume) so oss-sync.sh on the host
           # can read/write the same bytes the WebUI sees. Named volumes
           # live inside the Docker overlay storage and can't be ergonomically
           # rsync'd. /var/lib/hermes-state is created by cloud-init's
           # runcmd before this container starts.
+          #
+          # hermes_venv and hermes_uv_cache are named volumes that persist
+          # across container recreations (hourly `docker compose up -d`).
+          # hermes_venv keeps the .deps_installed flag alive so docker_init.bash
+          # skips the full pip install on every restart; hermes_uv_cache keeps
+          # the downloaded wheel files so even a forced reinstall is fast.
           volumes:
             - /var/lib/hermes-state:/opt/hermes/.hermes
+            - hermes_venv:/app/venv
+            - hermes_uv_cache:/uv_cache
           expose: ["7891"]
           networks: [hermes]
           healthcheck:
@@ -134,8 +155,10 @@ write_files:
             retries: 5
 
       volumes:
-        caddy_data:   {}
-        caddy_config: {}
+        caddy_data:      {}
+        caddy_config:    {}
+        hermes_venv:     {}   # Python venv — survives hourly docker compose up -d
+        hermes_uv_cache: {}   # uv wheel cache — speeds up reinstalls
 
       networks:
         hermes:
