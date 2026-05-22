@@ -75,6 +75,61 @@ _CLOUD_LIST_URL    = f"{_NEOWOW_BASE}/api/me/hermes-configs"
 _CLOUD_ACTIVE_URL  = f"{_NEOWOW_BASE}/api/me/hermes-configs/active"
 _WHOAMI_URL        = f"{_NEOWOW_BASE}/api/me/whoami"
 
+# ── Managed-update notice ────────────────────────────────────────────────────
+#
+# When HERMES_NEOWOW_ONLY=1 all native git-based self-updates are disabled.
+# Instead Hermes polls this public endpoint which the Neowow admin controls
+# via POST /api/admin/update-notice on the dashboard. The response is cached
+# locally (30 min TTL) to avoid hammering the dashboard on every page load.
+_UPDATE_NOTICE_URL  = f"{_NEOWOW_BASE}/api/public/update-notice"
+_UPDATE_NOTICE_TTL  = 1800          # seconds; same as native update cache
+_update_notice_cache: dict = {}     # {data: dict, fetched_at: float}
+
+
+def _neowow_only() -> bool:
+    return os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}
+
+
+def get_update_notice() -> dict:
+    """Fetch the Neowow-managed update notice (cached 30 min).
+
+    Returns a dict with at least:
+      available   bool   — True when a new version is ready
+      version     str    — e.g. "0.52.0" (empty when not available)
+      message     str    — admin-authored release note (may be empty)
+      downloadUrl str    — link to download / changelogs page
+      publishedAt str    — ISO timestamp when admin published the notice
+    Returns {"available": False} on network error / not configured.
+    """
+    import time
+    now = time.time()
+    if _update_notice_cache and now - _update_notice_cache.get("fetched_at", 0) < _UPDATE_NOTICE_TTL:
+        return _update_notice_cache["data"]
+
+    try:
+        req = urllib.request.Request(
+            _UPDATE_NOTICE_URL,
+            headers={"User-Agent": "hermes-webui/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode())
+        if not isinstance(data, dict):
+            data = {}
+    except Exception as exc:
+        logger.debug("update-notice fetch failed: %s", exc)
+        data = {}
+
+    result = {
+        "available":    bool(data.get("available")),
+        "version":      str(data.get("version") or ""),
+        "message":      str(data.get("message") or ""),
+        "downloadUrl":  str(data.get("downloadUrl") or ""),
+        "publishedAt":  str(data.get("publishedAt") or ""),
+    }
+    _update_notice_cache["data"]       = result
+    _update_notice_cache["fetched_at"] = now
+    return result
+
 
 # ── OAuth-callback bridge HTML ───────────────────────────────────────────────
 #
@@ -305,6 +360,11 @@ def get_status(handler=None) -> dict:
         # not just the local file.
         "jwtSource":    jwt_source,
         "lastDeploy":   state.get("lastDeploy"),
+        # Tells the frontend whether native git-based updates are disabled
+        # and replaced by Neowow-managed notices. Used by neowow.js to
+        # decide whether to show the Neowow update banner vs. the
+        # upstream git update banner.
+        "neowowOnly":   _neowow_only(),
     }
 
 

@@ -3995,6 +3995,18 @@ def handle_get(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("neowow skills/cloud-list failed")
             return bad(handler, str(e), status=500)
+    # Managed update notice — only meaningful when HERMES_NEOWOW_ONLY=1.
+    # Fetches the Neowow-published update notice from the dashboard and
+    # caches it locally (30 min). The frontend polls this instead of the
+    # native /api/updates/check when neowowOnly=true.
+    if parsed.path == "/api/neowow/update-notice":
+        from api.neowow import get_update_notice
+        try:
+            return j(handler, get_update_notice())
+        except Exception as e:
+            logger.exception("neowow update-notice failed")
+            return j(handler, {"available": False})
+
     # ════════════════════════════════════════════════════════════════════
     # END: Neowow integration — GET routes
     # ════════════════════════════════════════════════════════════════════
@@ -4069,6 +4081,13 @@ def handle_get(handler, parsed) -> bool:
         return j(handler, {"commands": list_commands()})
 
     if parsed.path == "/api/updates/check":
+        # ── NEOWOW_ONLY: native git self-update is disabled ──────────────
+        # Updates are managed by Neowow. The client polls
+        # /api/neowow/update-notice instead. Return a sentinel that
+        # neowow.js detects to switch into managed-update mode.
+        from api.neowow import _neowow_only
+        if _neowow_only():
+            return j(handler, {"disabled": True, "managed_by": "neowow"})
         settings = load_settings()
         if not settings.get("check_for_updates", True):
             return j(handler, {"disabled": True})
@@ -5649,6 +5668,18 @@ def handle_post(handler, parsed) -> bool:
         return _handle_session_import(handler, body)
 
     # ── Self-update (POST) ──
+    if parsed.path in ("/api/updates/apply", "/api/updates/force"):
+        # NEOWOW_ONLY: updates are managed centrally by Neowow.
+        # Block all client-initiated git pulls — they would overwrite
+        # our Neowow customizations on the running server.
+        from api.neowow import _neowow_only
+        if _neowow_only():
+            return j(handler, {
+                "ok": False,
+                "managed_by": "neowow",
+                "message": "自动更新已关闭。请等待 Neowow 发布更新通知后按提示操作。",
+            })
+
     if parsed.path == "/api/updates/apply":
         target = body.get("target", "")
         if target not in ("webui", "agent"):

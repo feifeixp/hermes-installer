@@ -1587,4 +1587,135 @@
       });
     }
   });
+
+  // ── Neowow-managed update notice ────────────────────────────────────
+  //
+  // When HERMES_NEOWOW_ONLY=1 the native git self-update is disabled.
+  // Instead we poll /api/neowow/update-notice (which proxies the
+  // dashboard's /api/public/update-notice). When the admin publishes a
+  // new version notice the user sees a Neowow-branded banner.
+  //
+  // We also hide the upstream "Check for updates" toggle in Settings
+  // because it would just say "disabled" and confuse users.
+
+  let _neowowOnly = false;   // set after first status fetch
+
+  async function _neowowCheckUpdateNotice() {
+    if (!_neowowOnly) return;
+    try {
+      const r = await fetch('/api/neowow/update-notice', { cache: 'no-store' });
+      if (!r.ok) return;
+      const data = await r.json();
+      if (!data.available) { _hideNeowowUpdateBanner(); return; }
+      _showNeowowUpdateBanner(data);
+    } catch (_) { /* ignore — offline or server not ready */ }
+  }
+
+  function _showNeowowUpdateBanner(data) {
+    let banner = $('neowowUpdateBanner');
+    if (!banner) {
+      // Insert above the existing upstream update-banner so it sits at
+      // the very top of the chat column.
+      banner = document.createElement('div');
+      banner.id = 'neowowUpdateBanner';
+      banner.style.cssText = [
+        'display:none',
+        'position:relative',
+        'align-items:center',
+        'gap:12px',
+        'padding:10px 16px',
+        'background:linear-gradient(90deg,rgba(94,96,206,0.18) 0%,rgba(94,96,206,0.10) 100%)',
+        'border-bottom:1px solid rgba(94,96,206,0.35)',
+        'font-size:13px',
+        'color:var(--text)',
+        'z-index:100',
+      ].join(';');
+      const upstream = $('updateBanner');
+      if (upstream && upstream.parentNode) {
+        upstream.parentNode.insertBefore(banner, upstream);
+      } else {
+        // Fallback: prepend to body
+        document.body.prepend(banner);
+      }
+    }
+
+    const versionLabel = data.version ? `v${data.version}` : '新版本';
+    const msg          = data.message ? ` — ${data.message}` : '';
+    const url          = data.downloadUrl || 'https://app.neowow.studio/agent';
+
+    banner.innerHTML = `
+      <span style="font-size:18px;flex-shrink:0">🚀</span>
+      <span style="flex:1;min-width:0">
+        <strong style="color:var(--accent,#5e60ce)">Neowow Hermes ${versionLabel}</strong>
+        已发布${msg}。请<a href="${url}" target="_blank" rel="noopener"
+          style="color:var(--accent,#5e60ce);text-decoration:underline">前往下载页</a>更新。
+      </span>
+      <button onclick="document.getElementById('neowowUpdateBanner').style.display='none';
+                       sessionStorage.setItem('neowow-update-dismissed','${data.version||''}');"
+        style="flex-shrink:0;padding:4px 10px;border-radius:5px;border:1px solid rgba(94,96,206,0.4);
+               background:transparent;color:var(--text);cursor:pointer;font-size:12px">稍后</button>
+    `;
+    // Respect "稍后" across page refreshes for the same version
+    const dismissed = sessionStorage.getItem('neowow-update-dismissed');
+    if (dismissed && dismissed === String(data.version || '')) return;
+    banner.style.display = 'flex';
+  }
+
+  function _hideNeowowUpdateBanner() {
+    const b = $('neowowUpdateBanner');
+    if (b) b.style.display = 'none';
+  }
+
+  function _applyNeowowOnlyUI(isNeowowOnly) {
+    // Hide the native "Check for updates" toggle row when NEOWOW_ONLY
+    // because native updates are disabled — showing the toggle just
+    // confuses users ("why can't I turn this on?").
+    const checkUpdatesField = (() => {
+      const cb = $('settingsCheckUpdates');
+      return cb ? cb.closest('.settings-field') : null;
+    })();
+    const checkUpdatesBlock = $('checkUpdatesBlock');
+    if (isNeowowOnly) {
+      if (checkUpdatesField) checkUpdatesField.style.display = 'none';
+      if (checkUpdatesBlock) checkUpdatesBlock.style.display = 'none';
+      // Also suppress the upstream update banner entirely — it would
+      // never show (updates/check returns disabled) but hide the DOM
+      // node so its CSS transition can't accidentally flash.
+      const upstreamBanner = $('updateBanner');
+      if (upstreamBanner) upstreamBanner.style.display = 'none';
+    }
+  }
+
+  // Hook into the existing refreshRailAvatar flow — it already calls
+  // /api/neowow/status on DOMContentLoaded and on neoSessionUpdated.
+  // We piggyback on that fetch to read `neowowOnly` without a second
+  // round-trip.
+  const _origRefreshRailAvatar = window.refreshRailAvatar;
+  async function _patchedRefreshRailAvatar() {
+    // Run the original first
+    if (typeof _origRefreshRailAvatar === 'function') {
+      await _origRefreshRailAvatar();
+    }
+    // Read status again (cached by the browser — no extra network hit
+    // because it was just fetched above).
+    try {
+      const r = await fetch('/api/neowow/status', { cache: 'no-store' });
+      if (r.ok) {
+        const s = await r.json();
+        _neowowOnly = !!s.neowowOnly;
+        _applyNeowowOnlyUI(_neowowOnly);
+        await _neowowCheckUpdateNotice();
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    // Delay slightly so the main boot flow finishes first
+    setTimeout(_patchedRefreshRailAvatar, 800);
+    // Re-check every 30 minutes in long-running tabs
+    setInterval(_neowowCheckUpdateNotice, 30 * 60 * 1000);
+  });
+
+  // Expose for testing / manual trigger in devtools
+  window.neowowCheckUpdateNotice = _neowowCheckUpdateNotice;
 })();
