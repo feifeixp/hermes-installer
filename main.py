@@ -30,7 +30,21 @@ import logging
 from pathlib import Path
 
 # ── Log file ────────────────────────────────────────────────────────────────
-_LOG_PATH = Path(os.environ.get("TEMP", os.environ.get("TMPDIR", "/tmp"))) / "hermes-installer.log"
+# On Windows: %APPDATA%\Hermes\hermes-startup.log  (user-visible location)
+# On macOS:   ~/Library/Logs/Hermes/hermes-startup.log
+# Elsewhere:  /tmp/hermes/hermes-startup.log
+try:
+    if sys.platform == "win32":
+        _LOG_DIR = Path(os.environ.get("APPDATA", os.environ.get("TEMP", "C:\\Temp"))) / "Hermes"
+    elif sys.platform == "darwin":
+        _LOG_DIR = Path.home() / "Library" / "Logs" / "Hermes"
+    else:
+        _LOG_DIR = Path(os.environ.get("TMPDIR", "/tmp")) / "hermes"
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _LOG_PATH = _LOG_DIR / "hermes-startup.log"
+except Exception:
+    _LOG_PATH = Path(os.environ.get("TEMP", os.environ.get("TMPDIR", "/tmp"))) / "hermes-installer.log"
+
 logging.basicConfig(
     filename=str(_LOG_PATH),
     level=logging.DEBUG,
@@ -48,11 +62,23 @@ def _alert(title: str, msg: str):
     print(f"[ERROR] {title}: {msg}", file=sys.stderr)
     if sys.platform == "darwin":
         try:
+            esc_msg   = msg.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+            esc_title = title.replace('\\', '\\\\').replace('"', '\\"')
             subprocess.Popen(
                 ["osascript", "-e",
-                 f'display dialog "{msg}" with title "{title}" buttons {{"OK"}} default button "OK" with icon stop'],
+                 f'display dialog "{esc_msg}" with title "{esc_title}" buttons {{"OK"}} default button "OK" with icon stop'],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
+        except Exception:
+            pass
+    elif sys.platform == "win32":
+        # PyInstaller hides the console window, so stderr is invisible.
+        # Use a native MessageBox so the user ALWAYS sees the error.
+        try:
+            import ctypes
+            MB_OK        = 0x0
+            MB_ICONERROR = 0x10
+            ctypes.windll.user32.MessageBoxW(0, msg, title, MB_OK | MB_ICONERROR)
         except Exception:
             pass
 
@@ -238,6 +264,112 @@ def _free_port(port: int) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Crash reporting helpers
+# ══════════════════════════════════════════════════════════════════════════
+
+def _get_app_version() -> str:
+    """Read version from pyproject.toml (dev) or version.txt (frozen)."""
+    try:
+        if getattr(sys, "frozen", False):
+            ver_file = BASE_DIR / "version.txt"
+            if ver_file.exists():
+                return ver_file.read_text(encoding="utf-8").strip()
+        else:
+            pyproj = Path(__file__).parent / "pyproject.toml"
+            if pyproj.exists():
+                for line in pyproj.read_text(encoding="utf-8").splitlines():
+                    if line.lstrip().startswith("version"):
+                        return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _send_crash_report(phase: str, error: str, extra: "dict | None" = None) -> None:
+    """Fire-and-forget POST to admin backend. All errors are swallowed.
+
+    The report is stored server-side under the user's usr_ journey row
+    (if a JWT is cached) so admins see it in /admin → 云实例. Even
+    without a userId, the server logs it to CF console for manual review.
+    """
+    import json as _json
+    import urllib.request
+    payload: dict = {
+        "app":      "hermes-installer",
+        "version":  _get_app_version(),
+        "platform": sys.platform,
+        "phase":    phase,
+        "error":    str(error)[:500],
+    }
+    if extra:
+        payload.update(extra)
+
+    headers = {"Content-Type": "application/json"}
+    # Try to attach userId so the admin row gets updated
+    try:
+        jwt_path = Path.home() / ".hermes" / "webui" / "neowow.json"
+        if jwt_path.exists():
+            data = _json.loads(jwt_path.read_text(encoding="utf-8"))
+            jwt = (data.get("jwt") or data.get("accessToken")
+                   or data.get("authorization") or "")
+            if isinstance(jwt, str) and jwt.count(".") == 2:
+                headers["Authorization"] = f"Bearer {jwt}"
+    except Exception:
+        pass
+
+    try:
+        body = _json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            "https://app.neowow.studio/api/client-log",
+            data=body, headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            log.info("crash report sent: HTTP %s", resp.status)
+    except Exception as exc:
+        log.debug("crash report send failed: %s", exc)
+
+
+def _check_webview2_windows() -> "str | None":
+    """Return None if WebView2 Runtime is installed, or an error string if missing.
+
+    WebView2 is required by pywebview's edgechromium backend. When absent,
+    webview.start() crashes with a cryptic DLL-load error. We check the
+    registry first and show a helpful download URL instead.
+
+    Returns None on non-Windows or if the registry check itself fails
+    (we don't want to block launch if winreg behaves unexpectedly).
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+        # WebView2 Runtime is registered under this GUID regardless of version
+        wv2_guid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+        key_paths = [
+            (winreg.HKEY_LOCAL_MACHINE,
+             rf"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{wv2_guid}"),
+            (winreg.HKEY_LOCAL_MACHINE,
+             rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{wv2_guid}"),
+            (winreg.HKEY_CURRENT_USER,
+             rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{wv2_guid}"),
+        ]
+        for hive, path in key_paths:
+            try:
+                with winreg.OpenKey(hive, path) as k:
+                    version = winreg.QueryValueEx(k, "pv")[0]
+                    if version and version != "0.0.0.0":
+                        log.info("WebView2 Runtime found: v%s", version)
+                        return None
+            except OSError:
+                continue
+        # Checked all paths — not found
+        return "WebView2 Runtime 未找到 (未安装)"
+    except Exception as exc:
+        log.debug("WebView2 registry check failed: %s", exc)
+        return None  # Don't block if the check itself errors
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Native window — pywebview (macOS cocoa + Windows edgechromium)
 # ══════════════════════════════════════════════════════════════════════════
 def _open_native_window(title: str, url: str, on_close=None, current_mode: str = "local"):
@@ -254,10 +386,29 @@ def _open_native_window(title: str, url: str, on_close=None, current_mode: str =
     mark which Mode item is currently selected. Caller passes whatever
     it read from gateway.json before deciding which run path to take.
     """
+    # ── WebView2 check (Windows only) ────────────────────────────────
+    # Must run BEFORE importing webview so the error is actionable
+    # (if WebView2 is absent, webview.start() would crash with a
+    # cryptic DLL error that gives the user no clue what to do).
+    wv2_err = _check_webview2_windows()
+    if wv2_err:
+        log.error("WebView2 Runtime missing: %s", wv2_err)
+        _send_crash_report("startup_webview2_missing", wv2_err)
+        _alert(
+            "缺少必要组件：Edge WebView2 Runtime",
+            "Hermes 需要 Microsoft Edge WebView2 Runtime 才能显示界面。\n\n"
+            "请访问以下地址免费下载安装（约 2MB）：\n"
+            "https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n"
+            "安装完成后重新启动 Hermes 即可。\n\n"
+            f"错误日志保存在：\n{_LOG_PATH}",
+        )
+        sys.exit(1)
+
     try:
         import webview
     except ImportError:
         log.warning("pywebview not installed — falling back to browser")
+        _send_crash_report("startup_pywebview_missing", "pywebview ImportError")
         import webbrowser
         webbrowser.open(url)
         _alert("Hermes Installer",
@@ -302,13 +453,20 @@ def _open_native_window(title: str, url: str, on_close=None, current_mode: str =
         webview.start(gui=gui, debug=False, menu=menu_items)
         log.info("native window closed")
     except Exception as exc:
+        import traceback as _tb
+        tb = _tb.format_exc()
         log.exception("pywebview %s failed: %s", gui, exc)
+        _send_crash_report("startup_pywebview_failed", str(exc), {"traceback": tb[:2000]})
         if on_close is not None:
             try:
                 on_close()
             except Exception:
                 pass
-        _alert("Hermes Installer", f"原生窗口启动失败：{exc}")
+        _alert(
+            "Hermes 窗口启动失败",
+            f"原生窗口启动失败：\n{exc}\n\n"
+            f"错误日志保存在：\n{_LOG_PATH}",
+        )
         sys.exit(1)
 
 
@@ -577,4 +735,22 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise   # normal exit codes must propagate
+    except Exception as exc:
+        import traceback as _tb
+        tb = _tb.format_exc()
+        log.exception("Unhandled exception in main: %s", exc)
+        try:
+            _send_crash_report("main_unhandled", str(exc), {"traceback": tb[:2000]})
+        except Exception:
+            pass
+        _alert(
+            "Hermes 遇到意外错误",
+            f"应用启动时遇到未处理的错误：\n\n{exc}\n\n"
+            f"错误日志保存在：\n{_LOG_PATH}\n\n"
+            "请截图此对话框后联系支持团队。",
+        )
+        sys.exit(1)
