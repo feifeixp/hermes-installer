@@ -236,6 +236,28 @@
   :root[data-skin="marvis"] .suggestion:hover{border-color:var(--accent);color:var(--accent-text);background:var(--accent-bg);}
   :root[data-skin="marvis"] .suggestion svg{opacity:0.65;flex-shrink:0;}
   :root[data-skin="marvis"] .suggestion span{line-height:1.45;}
+  /* Marvis sidebar collapse / expand toggle buttons */
+  /* Collapse btn: sits in .sidebar-header, hidden on non-marvis skins */
+  .sidebar-collapse-btn{display:none;}
+  :root[data-skin="marvis"] .sidebar-collapse-btn{
+    display:inline-flex;align-items:center;justify-content:center;
+    margin-left:auto;flex-shrink:0;
+    width:26px;height:26px;border:none;border-radius:6px;
+    background:transparent;color:var(--muted);cursor:pointer;
+    transition:background .15s,color .15s;
+  }
+  :root[data-skin="marvis"] .sidebar-collapse-btn:hover{background:var(--hover-bg);color:var(--text);}
+  /* Expand btn: in app-titlebar, shown only in Marvis when sidebar is collapsed */
+  .sidebar-expand-btn{display:none;-webkit-app-region:no-drag;}
+  :root[data-skin="marvis"] body:has(.layout.sidebar-collapsed) .sidebar-expand-btn{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:32px;height:32px;border:none;border-radius:8px;
+    background:transparent;color:var(--muted);cursor:pointer;flex-shrink:0;
+    transition:background .15s,color .15s;
+  }
+  :root[data-skin="marvis"] body:has(.layout.sidebar-collapsed) .sidebar-expand-btn:hover{background:var(--hover-bg);color:var(--text);}
+  /* Keep topbar balanced when expand btn appears */
+  :root[data-skin="marvis"] body:has(.layout.sidebar-collapsed) .app-titlebar-spacer{display:flex;}
 
   /* #594: app-dialog light mode overrides — base styles use hardcoded dark gradients */
   :root:not(.dark) .app-dialog{
