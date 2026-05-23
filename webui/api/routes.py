@@ -4410,6 +4410,22 @@ def handle_get(handler, parsed) -> bool:
             logger.exception("rollback/diff failed")
             return bad(handler, str(e), status=500)
 
+    # ── Backup ──────────────────────────────────────────────────────────────
+    if parsed.path == "/api/backup/local-summary":
+        try:
+            from api.backup import local_summary
+            return j(handler, local_summary())
+        except Exception:
+            logger.exception("backup local-summary failed")
+            return j(handler, {"error": "internal_error"}, status=500)
+
+    if parsed.path == "/api/backup/list":
+        try:
+            from api.backup import list_backups
+            return j(handler, list_backups())
+        except Exception as e:
+            return j(handler, {"error": str(e), "backups": []})
+
     return False  # 404
 
 
@@ -6072,6 +6088,56 @@ def handle_post(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("gateway/config POST failed")
             return bad(handler, str(e), status=500)
+
+    # ── Backup ──────────────────────────────────────────────────────────────
+    if parsed.path == "/api/backup/create":
+        try:
+            from api.backup import create_backup
+            body     = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))))
+            label    = str(body.get("label", "")).strip()[:200]
+            contents = body.get("contents", [])
+            result   = create_backup(label, contents)
+            return j(handler, result)
+        except Exception as e:
+            logger.exception("backup create failed")
+            return j(handler, {"error": str(e)}, status=500)
+
+    if parsed.path == "/api/backup/restore-local":
+        try:
+            from api.backup import restore_local
+            body      = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))))
+            backup_id = body.get("backupId", "")
+            if not backup_id:
+                return j(handler, {"error": "backupId required"}, status=400)
+            result = restore_local(backup_id)
+            return j(handler, result)
+        except Exception as e:
+            logger.exception("backup restore-local failed")
+            return j(handler, {"error": str(e)}, status=500)
+
+    if parsed.path == "/api/backup/restore-cloud":
+        try:
+            from api.backup import restore_cloud
+            body      = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))))
+            backup_id = body.get("backupId", "")
+            if not backup_id:
+                return j(handler, {"error": "backupId required"}, status=400)
+            result = restore_cloud(backup_id)
+            return j(handler, result)
+        except Exception as e:
+            return j(handler, {"error": str(e)}, status=500)
+
+    if parsed.path == "/api/backup/delete-proxy":
+        try:
+            from api.backup import delete_backup
+            body      = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))))
+            backup_id = body.get("backupId", "")
+            if not backup_id:
+                return j(handler, {"error": "backupId required"}, status=400)
+            result = delete_backup(backup_id)
+            return j(handler, result)
+        except Exception as e:
+            return j(handler, {"error": str(e)}, status=500)
 
     return False  # 404
 
