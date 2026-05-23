@@ -232,7 +232,7 @@
   :root[data-skin="marvis"] .empty-state h2{font-size:26px;font-weight:700;letter-spacing:-0.02em;margin-top:8px;}
   :root[data-skin="marvis"] .empty-state>p{font-size:15px;color:var(--muted);max-width:380px;text-align:center;line-height:1.6;}
   :root[data-skin="marvis"] .suggestion-grid{grid-template-columns:repeat(2,1fr);gap:10px;max-width:500px;margin-top:28px;}
-  :root[data-skin="marvis"] .suggestion{flex-direction:column;align-items:flex-start;gap:5px;padding:14px 16px;border-radius:12px;text-align:left;font-size:13px;font-weight:500;border:1px solid var(--border);background:var(--surface);color:var(--muted);height:auto;min-height:72px;}
+  :root[data-skin="marvis"] .suggestion{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:14px 16px;border-radius:12px;text-align:left;font-size:13px;font-weight:500;border:1px solid var(--border);background:var(--surface);color:var(--muted);height:auto;min-height:72px;}
   :root[data-skin="marvis"] .suggestion:hover{border-color:var(--accent);color:var(--accent-text);background:var(--accent-bg);}
   :root[data-skin="marvis"] .suggestion svg{opacity:0.65;flex-shrink:0;}
   :root[data-skin="marvis"] .suggestion span{line-height:1.45;}
