@@ -559,6 +559,407 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
+# ── New Skills Market / Subscribe API ────────────────────────────────────────
+
+def _get_auth_header(handler=None) -> str:
+    """Return 'Bearer <token>' from JWT (cookie > file) or deploy token.
+
+    Raises ValueError when no credentials are saved.
+    """
+    state = _read_state()
+    file_jwt = (state.get("jwt") or "").strip()
+    token    = (state.get("token") or "").strip()
+
+    cookie_jwt = ""
+    if handler is not None:
+        try:
+            from api.neowow import _is_neodomain_mode
+            if _is_neodomain_mode():
+                from api.auth import parse_neo_cookie
+                cookie_jwt = (parse_neo_cookie(handler) or "").strip()
+        except Exception:
+            pass
+
+    auth = cookie_jwt or file_jwt or token
+    if not auth:
+        raise ValueError(
+            "No auth token. Please log in to neowow.studio first "
+            "(Settings → Neowow Studio → 登录)."
+        )
+    return f"Bearer {auth}"
+
+
+def get_market_skills() -> dict[str, Any]:
+    """GET /api/public/skills — public, no auth required."""
+    url = f"{_NEOWOW_BASE}/api/public/skills"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Hermes/neowow-skills-market"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")
+            err = json.loads(body).get("error") or body
+        except Exception:
+            err = body or str(e)
+        raise RuntimeError(f"market API error ({e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach neowow.studio: {e.reason}")
+
+
+def get_market_skill_detail(skill_id: str) -> dict[str, Any]:
+    """GET /api/public/skills/{id} — public, no auth required."""
+    if not _is_valid_skill_id(skill_id):
+        raise ValueError(f"Invalid skill id: {skill_id!r}")
+    url = f"{_NEOWOW_BASE}/api/public/skills/{skill_id}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Hermes/neowow-skills-market"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")
+            err = json.loads(body).get("error") or body
+        except Exception:
+            err = body or str(e)
+        raise RuntimeError(f"market API error ({e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach neowow.studio: {e.reason}")
+
+
+def get_mine_skills(handler=None) -> list[dict[str, Any]]:
+    """GET /api/me/skills — authenticated, returns user's subscriptions."""
+    auth = _get_auth_header(handler)  # raises ValueError if no token
+    req = urllib.request.Request(
+        _CLOUD_SKILLS_URL,
+        headers={
+            "Authorization": auth,
+            "User-Agent": "Hermes/neowow-skills-mine",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")
+            err = json.loads(body).get("error") or body
+        except Exception:
+            err = body or str(e)
+        raise RuntimeError(f"neowow API error ({e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach neowow.studio: {e.reason}")
+
+    skills = data.get("skills") if isinstance(data, dict) else None
+    if not isinstance(skills, list):
+        raise RuntimeError("Unexpected response shape (no `skills` array)")
+
+    nd = _neowow_dir()
+    local_ids: set[str] = (
+        {c.name for c in nd.iterdir() if c.is_dir() and _is_valid_skill_id(c.name)}
+        if nd.exists() else set()
+    )
+    dismissed = read_dismissed()
+
+    out: list[dict[str, Any]] = []
+    for s in skills:
+        sid = str(s.get("id") or "")
+        out.append({
+            "id":             sid,
+            "name":           str(s.get("name") or ""),
+            "description":    str(s.get("description") or ""),
+            "version":        int(s.get("version") or 1),
+            "displayName":    str(s.get("displayName") or ""),
+            "tags":           s.get("tags") if isinstance(s.get("tags"), list) else [],
+            "isDefault":      bool(s.get("isDefault")),
+            "subscriberCount": int(s.get("subscriberCount") or 0),
+            "updatedAt":      int(s.get("updatedAt") or 0),
+            "isLocal":        sid in local_ids,
+            "isDismissed":    sid in dismissed,
+        })
+    return out
+
+
+def _refresh_skills_prompt() -> None:
+    """Rebuild _skills_prompt.txt from currently installed local skills."""
+    root = _neowow_dir()
+    if not root.exists():
+        return
+    installed: list[dict[str, Any]] = []
+    for child in sorted(root.iterdir()):
+        if child.is_dir() and _is_valid_skill_id(child.name):
+            m = _read_local_meta(child)
+            if m:
+                installed.append(m)
+    skills_prompt = _build_skills_prompt(installed)
+    try:
+        (root / _SKILLS_PROMPT_FILE).write_text(skills_prompt, encoding="utf-8")
+    except Exception as e:
+        logger.warning("[skills] could not write %s: %s", _SKILLS_PROMPT_FILE, e)
+
+
+def _inject_skill_to_active_personality(skill_name: str, skill_desc: str) -> None:
+    """Append a skill notice to the currently active personality in config.yaml."""
+    try:
+        import yaml  # type: ignore[import-not-found]
+        from api.profiles import get_active_hermes_home  # type: ignore[import-not-found]
+        config_path = get_active_hermes_home() / "hermes-agent" / "config.yaml"
+    except Exception:
+        return
+    if not config_path.exists():
+        return
+    try:
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return
+
+    display = cfg.get("display") or {}
+    active_personality = (display.get("personality") or "").strip()
+    if not active_personality:
+        return
+
+    agent = cfg.get("agent") or {}
+    personalities = agent.get("personalities") or {}
+    if active_personality not in personalities:
+        return
+
+    current_text = str(personalities[active_personality] or "")
+    marker = f"[已订阅技能：{skill_name}]"
+    if marker in current_text:
+        return  # Already injected
+
+    suffix = f" — {skill_desc}" if skill_desc else ""
+    new_text = current_text.rstrip() + f"\n\n{marker}{suffix}"
+    personalities[active_personality] = new_text
+    agent["personalities"] = personalities
+    cfg["agent"] = agent
+
+    try:
+        config_path.write_text(
+            yaml.dump(cfg, allow_unicode=True, default_flow_style=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("[skills] could not update personality: %s", e)
+
+
+def _remove_skill_from_active_personality(skill_name: str) -> None:
+    """Remove a skill notice from the currently active personality in config.yaml."""
+    try:
+        import yaml  # type: ignore[import-not-found]
+        from api.profiles import get_active_hermes_home  # type: ignore[import-not-found]
+        config_path = get_active_hermes_home() / "hermes-agent" / "config.yaml"
+    except Exception:
+        return
+    if not config_path.exists():
+        return
+    try:
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return
+
+    display = cfg.get("display") or {}
+    active_personality = (display.get("personality") or "").strip()
+    if not active_personality:
+        return
+
+    agent = cfg.get("agent") or {}
+    personalities = agent.get("personalities") or {}
+    if active_personality not in personalities:
+        return
+
+    current_text = str(personalities[active_personality] or "")
+    import re as _re
+    pattern = rf"\n\n\[已订阅技能：{_re.escape(skill_name)}\][^\n]*"
+    new_text = _re.sub(pattern, "", current_text).rstrip()
+    if new_text == current_text.rstrip():
+        return  # Nothing changed
+
+    personalities[active_personality] = new_text
+    agent["personalities"] = personalities
+    cfg["agent"] = agent
+    try:
+        config_path.write_text(
+            yaml.dump(cfg, allow_unicode=True, default_flow_style=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("[skills] could not update personality: %s", e)
+
+
+def subscribe_skill(skill_id: str, handler=None) -> dict[str, Any]:
+    """Subscribe to a market skill: POST to neowow API, write locally, rebuild prompt."""
+    if not _is_valid_skill_id(skill_id):
+        raise ValueError(f"Invalid skill id: {skill_id!r}")
+
+    auth = _get_auth_header(handler)
+
+    # 1. Subscribe on neowow.studio
+    subscribe_url = f"{_NEOWOW_BASE}/api/me/skills/{skill_id}/subscribe"
+    req = urllib.request.Request(
+        subscribe_url,
+        data=b"{}",
+        headers={
+            "Authorization":  auth,
+            "Content-Type":   "application/json",
+            "User-Agent":     "Hermes/neowow-skills-subscribe",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            json.loads(resp.read().decode("utf-8"))  # consume response
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")
+            err = json.loads(body).get("error") or body
+        except Exception:
+            err = body or str(e)
+        raise RuntimeError(f"subscribe error ({e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach neowow.studio: {e.reason}")
+
+    # 2. Fetch skill detail (content may now be accessible after subscribing)
+    detail_url = f"{_NEOWOW_BASE}/api/public/skills/{skill_id}"
+    req2 = urllib.request.Request(
+        detail_url,
+        headers={"Authorization": auth, "User-Agent": "Hermes/neowow-skills"},
+        method="GET",
+    )
+    skill_data: dict[str, Any] = {}
+    try:
+        with urllib.request.urlopen(req2, timeout=30) as resp2:
+            skill_data = json.loads(resp2.read().decode("utf-8"))
+    except Exception as e:
+        logger.warning("[skills] could not fetch detail after subscribe: %s", e)
+
+    # 3. Write locally
+    if skill_data and skill_data.get("id"):
+        try:
+            _write_skill(skill_data)
+        except Exception as e:
+            logger.warning("[skills] could not write skill %s: %s", skill_id, e)
+
+    # 4. Rebuild system prompt
+    _refresh_skills_prompt()
+    rebuild_skills_system_prompt()
+
+    # 5. Inject into active personality
+    _inject_skill_to_active_personality(
+        str(skill_data.get("name") or skill_id),
+        str(skill_data.get("description") or ""),
+    )
+
+    return {
+        "ok":   True,
+        "id":   skill_id,
+        "name": str(skill_data.get("name") or skill_id),
+    }
+
+
+def unsubscribe_skill(skill_id: str, handler=None) -> dict[str, Any]:
+    """Unsubscribe from a skill: POST to neowow API, remove locally, rebuild prompt."""
+    if not _is_valid_skill_id(skill_id):
+        raise ValueError(f"Invalid skill id: {skill_id!r}")
+
+    auth = _get_auth_header(handler)
+
+    # Read name before deleting local copy
+    meta = _read_local_meta(_neowow_dir() / skill_id) or {}
+    name = str(meta.get("name") or skill_id)
+
+    # 1. Unsubscribe on neowow.studio
+    unsub_url = f"{_NEOWOW_BASE}/api/me/skills/{skill_id}/unsubscribe"
+    req = urllib.request.Request(
+        unsub_url,
+        data=b"{}",
+        headers={
+            "Authorization": auth,
+            "Content-Type":  "application/json",
+            "User-Agent":    "Hermes/neowow-skills-unsubscribe",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")
+            err = json.loads(body).get("error") or body
+        except Exception:
+            err = body or str(e)
+        raise RuntimeError(f"unsubscribe error ({e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach neowow.studio: {e.reason}")
+
+    # 2. Remove locally
+    _delete_local(skill_id)
+
+    # 3. Rebuild
+    _refresh_skills_prompt()
+    rebuild_skills_system_prompt()
+
+    # 4. Remove from active personality
+    _remove_skill_from_active_personality(name)
+
+    return {"ok": True, "id": skill_id}
+
+
+def toggle_local_skill(name: str, enabled: bool) -> dict[str, Any]:
+    """Enable or disable a local skill by updating config.yaml skills.disabled list."""
+    try:
+        import yaml  # type: ignore[import-not-found]
+        from api.profiles import get_active_hermes_home  # type: ignore[import-not-found]
+        config_path = get_active_hermes_home() / "hermes-agent" / "config.yaml"
+    except Exception as e:
+        raise RuntimeError(f"Cannot locate hermes config.yaml: {e}")
+
+    if not config_path.exists():
+        raise RuntimeError(f"config.yaml not found at {config_path}")
+
+    try:
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        raise RuntimeError(f"Cannot parse config.yaml: {e}")
+
+    skills_cfg = cfg.setdefault("skills", {})
+    disabled_set: set[str] = set(skills_cfg.get("disabled", []))
+
+    if enabled:
+        disabled_set.discard(name)
+    else:
+        disabled_set.add(name)
+
+    skills_cfg["disabled"] = sorted(disabled_set)
+    cfg["skills"] = skills_cfg
+
+    try:
+        config_path.write_text(
+            yaml.dump(cfg, allow_unicode=True, default_flow_style=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        raise RuntimeError(f"Cannot write config.yaml: {e}")
+
+    rebuild_skills_system_prompt()
+    return {"ok": True, "name": name, "enabled": enabled}
+
+
 __all__ = (
     "list_cloud_skills",
     "sync_all_skills",
@@ -569,6 +970,13 @@ __all__ = (
     "read_dismissed",
     "save_base_prompt",
     "rebuild_skills_system_prompt",
+    # New market/subscribe API
+    "get_market_skills",
+    "get_market_skill_detail",
+    "get_mine_skills",
+    "subscribe_skill",
+    "unsubscribe_skill",
+    "toggle_local_skill",
 )
 
 _unused_iter: Iterable[Any] = ()
