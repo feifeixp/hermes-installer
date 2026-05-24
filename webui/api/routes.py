@@ -5983,6 +5983,8 @@ def handle_post(handler, parsed) -> bool:
                 "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
                 "model": model,
             })
+        except ValueError as e:
+            return bad(handler, str(e))
         except Exception as e:
             logger.warning("[activate-provider] failed: %s", e)
             return bad(handler, str(e), status=500)
