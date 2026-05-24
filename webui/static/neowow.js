@@ -272,6 +272,9 @@
       overlay.addEventListener('transitionend', () => {
         overlay.style.display = 'none';
       }, { once: true });
+      // Safety fallback: force hidden 550ms after transition starts
+      // in case transitionend never fires (e.g. no CSS transition in tests)
+      setTimeout(() => { overlay.style.display = 'none'; }, 550);
     }, 800);
   }
 
