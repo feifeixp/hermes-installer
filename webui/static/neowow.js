@@ -26,7 +26,8 @@
   // Refreshes on `neoSessionUpdated` (fired by /api/neowow/jwt POST + by
   // logout) and on DOMContentLoaded.  Tolerates the API being briefly
   // unavailable — the avatar just stays in its current state until the
-  // next refresh.
+  // next refresh.  The same event also triggers _neowowCompleteOnboarding
+  // to dismiss the first-launch login overlay when it is visible.
 
   async function refreshRailAvatar() {
     const disc    = $('neowowAvatarDisc');
@@ -161,6 +162,9 @@
     }
 
     neowowHideBootOverlay({ success: hasJwt, networkOk, nickname });
+    if (!hasJwt && networkOk) {
+      _neowowShowOnboarding();
+    }
   }
 
   /**
@@ -222,6 +226,56 @@
       }, 460);
     }
   };
+
+  // ── Neowow login onboarding overlay (first-launch, no JWT) ───────────────
+  //
+  // _neowowShowOnboarding()    — reveals #neoLoginOverlay after boot clears
+  // _neowowCompleteOnboarding() — called by neoSessionUpdated when user logs in
+  //
+  // Element IDs: #neoLoginOverlay, #neoLoginBtn, #neoLoginBtnIcon, #neoLoginBtnText
+
+  let _neoLoginOverlayShown = false;
+
+  function _neowowShowOnboarding() {
+    if (_neoLoginOverlayShown) return;
+    _neoLoginOverlayShown = true;
+    const overlay = document.getElementById('neoLoginOverlay');
+    if (!overlay) return;
+    overlay.style.display = 'flex';
+    overlay.style.opacity = '1';
+  }
+
+  function _neowowCompleteOnboarding() {
+    const overlay = document.getElementById('neoLoginOverlay');
+    if (!overlay || overlay.style.display === 'none') return;
+
+    // Immediately update button to success state
+    const btn = document.getElementById('neoLoginBtn');
+    const btnIcon = document.getElementById('neoLoginBtnIcon');
+    const btnText = document.getElementById('neoLoginBtnText');
+    if (btn) {
+      btn.style.pointerEvents = 'none';
+      btn.style.background = 'linear-gradient(135deg,#10b981 0%,#059669 100%)';
+      btn.style.boxShadow = '0 4px 24px rgba(16,185,129,0.35)';
+    }
+    if (btnIcon) btnIcon.textContent = '✓';
+    if (btnText) btnText.textContent = '已就绪，正在启动...';
+
+    // Fire-and-forget: activate the neowow-coding-plan provider
+    fetch('/api/neowow/activate-provider', { method: 'POST' })
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })
+      .catch(err => console.warn('[onboarding] activate-provider failed:', err));
+
+    // Fade out after 800ms regardless of API result
+    setTimeout(() => {
+      overlay.style.opacity = '0';
+      overlay.addEventListener('transitionend', () => {
+        overlay.style.display = 'none';
+      }, { once: true });
+    }, 800);
+  }
+
+  window._neowowCompleteOnboarding = _neowowCompleteOnboarding;
 
   window.neowowAvatarClick = async function (event) {
     if (event && event.preventDefault) event.preventDefault();
@@ -457,6 +511,7 @@
   window.addEventListener('neoSessionUpdated', () => {
     void refreshRailAvatar();
     void refreshAccountBlock();
+    _neowowCompleteOnboarding();
     // NOTE: don't re-trigger the boot overlay on session updates —
     // those happen mid-session (login from popover, JWT refresh, etc.)
     // and the user is already past boot at that point.
