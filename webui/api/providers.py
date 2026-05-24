@@ -1373,6 +1373,52 @@ def get_provider_quota(provider_id: str | None = None, *, refresh: bool = False)
     if provider in _ACCOUNT_USAGE_PROVIDERS:
         return _provider_account_usage_status(provider, display_name, refresh=refresh)
 
+    if provider == "neowow-coding-plan":
+        try:
+            from api.neowow import get_coding_plan
+            plan = get_coding_plan()
+            credits_remaining = plan.get("creditsRemaining")
+            credits_limit = plan.get("creditsLimit")
+            credits_used = plan.get("creditsUsed")
+            plan_name = plan.get("planName") or display_name
+            cycle_end = (plan.get("cycleEndAt") or "")[:10]
+
+            details: list[str] = []
+            if credits_remaining is not None:
+                details.append(f"剩余 {credits_remaining:,} credits")
+            if credits_used is not None and credits_limit is not None:
+                details.append(f"已用 {credits_used:,} / {credits_limit:,}")
+            if cycle_end:
+                details.append(f"周期结束：{cycle_end}")
+
+            account_limits: dict[str, Any] = {
+                "available": True,
+                "plan": plan_name,
+                "details": details,
+                "windows": [],
+            }
+            return {
+                "ok": True,
+                "provider": provider,
+                "display_name": display_name,
+                "supported": True,
+                "status": "available",
+                "label": f"{plan_name} credits",
+                "quota": None,
+                "account_limits": account_limits,
+                "message": f"{display_name} 用量已加载。",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "provider": provider,
+                "display_name": display_name,
+                "supported": True,
+                "status": "unavailable",
+                "quota": None,
+                "message": f"{display_name} 用量刷新失败：{e}",
+            }
+
     if provider != "openrouter":
         detail = "OpenAI/Anthropic rate-limit headers are a follow-up once WebUI captures provider response metadata."
         return {
