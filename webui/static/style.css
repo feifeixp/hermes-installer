@@ -3997,7 +3997,7 @@ main.main.showing-logs > #mainLogs{display:flex;}
 .skills-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
+  background: var(--sidebar);
   flex-shrink: 0;
   padding: 0 12px;
 }
@@ -4013,7 +4013,7 @@ main.main.showing-logs > #mainLogs{display:flex;}
   transition: color .15s, border-color .15s;
   font-family: inherit;
 }
-.skills-tab-btn:hover { color: var(--fg); }
+.skills-tab-btn:hover { color: var(--text); }
 .skills-tab-btn.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
@@ -4035,7 +4035,7 @@ main.main.showing-logs > #mainLogs{display:flex;}
   margin-bottom: 4px;
   transition: background .12s;
 }
-.skills-list-item:hover { background: var(--hover); }
+.skills-list-item:hover { background: var(--hover-bg); }
 .skills-list-item-info { flex: 1; min-width: 0; }
 .skills-list-item-name { font-size: 13px; font-weight: 500; }
 .skills-list-item-desc {
@@ -4079,7 +4079,7 @@ main.main.showing-logs > #mainLogs{display:flex;}
   padding: 2px 0;
 }
 .skills-market-card {
-  background: var(--bg-input, var(--bg-panel));
+  background: var(--bg-input, var(--surface));
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
@@ -4100,7 +4100,7 @@ main.main.showing-logs > #mainLogs{display:flex;}
 .skills-market-card-badge {
   font-size: 10px;
   color: var(--muted);
-  background: var(--hover);
+  background: var(--hover-bg);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -4123,7 +4123,7 @@ main.main.showing-logs > #mainLogs{display:flex;}
 .skills-market-card-count { font-size: 11px; color: var(--muted); margin-right: 4px; }
 .skills-tag {
   font-size: 10px;
-  background: var(--hover);
+  background: var(--hover-bg);
   color: var(--muted);
   padding: 2px 6px;
   border-radius: 10px;
@@ -4272,7 +4272,7 @@ main.main.showing-logs > #mainLogs{display:flex;}
   justify-content: center;
 }
 .skills-login-modal-box {
-  background: var(--bg-panel);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 20px 24px;
