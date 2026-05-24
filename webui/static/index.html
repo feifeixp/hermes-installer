@@ -282,13 +282,11 @@
     <!-- Skills panel -->
     <div class="panel-view" id="panelSkills">
       <div class="panel-head">
-        <span data-i18n="tab_skills">Skills</span>
-        <div class="panel-head-actions">
-          <button class="panel-head-btn has-tooltip has-tooltip--bottom" onclick="openSkillCreate()" data-tooltip="New skill" data-i18n-title="new_skill" aria-label="New skill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-        </div>
+        <span>技能</span>
       </div>
-      <div class="skills-search sidebar-search"><svg class="sidebar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><input id="skillsSearch" placeholder="Search skills..." data-i18n-placeholder="search_skills" oninput="filterSkills()"></div>
-      <div class="skills-list" id="skillsList"><div style="padding:12px;color:var(--muted);font-size:12px" data-i18n="loading">Loading...</div></div>
+      <div style="padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.6">
+        在技能市场订阅技能，或管理本地已安装的技能。
+      </div>
     </div>
     <!-- Memory panel -->
     <div class="panel-view" id="panelMemory">
@@ -810,20 +808,54 @@
     </div>
     </div><!-- /#mainChat -->
     <div id="mainSkills" class="main-view">
-      <div class="main-view-header">
-        <div class="main-view-title" id="skillDetailTitle"></div>
-        <div class="main-view-actions">
-          <button id="btnEditSkillDetail" class="panel-head-btn has-tooltip has-tooltip--bottom" data-tooltip="Edit" data-i18n-title="skills_edit" onclick="editCurrentSkill()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
-          <button id="btnDeleteSkillDetail" class="panel-head-btn has-tooltip has-tooltip--bottom" data-tooltip="Delete" data-i18n-title="skills_delete" onclick="deleteCurrentSkill()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
-          <button id="btnCancelSkillDetail" class="panel-head-btn has-tooltip has-tooltip--bottom" data-tooltip="Cancel" data-i18n-title="cancel" onclick="cancelSkillForm()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-          <button id="btnSaveSkillDetail" class="panel-head-btn primary has-tooltip has-tooltip--bottom" data-tooltip="Save" data-i18n-title="save" onclick="saveSkillForm()" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+      <!-- Tab bar -->
+      <div class="skills-tabs" id="skillsTabBar">
+        <button class="skills-tab-btn active" data-tab="list" onclick="skillsSwitchTab('list')">技能列表</button>
+        <button class="skills-tab-btn" data-tab="market" onclick="skillsSwitchTab('market')">技能市场</button>
+        <button class="skills-tab-btn" data-tab="mine" onclick="skillsSwitchTab('mine')">我的技能</button>
+      </div>
+      <!-- Tab content panes -->
+      <div class="skills-tab-content" id="skillsTabContent">
+        <div class="skills-tab-pane" id="skillsPaneList">
+          <div id="skillsListBody"><div class="skills-loading">加载中...</div></div>
+        </div>
+        <div class="skills-tab-pane" id="skillsPaneMarket" style="display:none">
+          <div id="skillsMarketBody"><div class="skills-loading">加载中...</div></div>
+        </div>
+        <div class="skills-tab-pane" id="skillsPaneMine" style="display:none">
+          <div id="skillsMineBody"><div class="skills-loading">加载中...</div></div>
         </div>
       </div>
-      <div class="main-view-body" id="skillDetailBody" style="display:none"></div>
-      <div class="main-view-empty" id="skillDetailEmpty">
-        <svg class="main-view-empty-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-        <div class="main-view-empty-title" data-i18n="skills_empty_title">Select a skill</div>
-        <div class="main-view-empty-sub" data-i18n="skills_empty_sub">Pick a skill from the sidebar to view its contents, or create a new one.</div>
+      <!-- Detail overlay (hides tabs) -->
+      <div class="skills-detail-view" id="skillsDetailView" style="display:none">
+        <div class="skills-detail-back">
+          <button onclick="skillsCloseDetail()" class="skills-back-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+            返回
+          </button>
+        </div>
+        <div class="skills-detail-layout">
+          <div class="skills-detail-main">
+            <div class="skills-detail-header">
+              <div class="skills-detail-title-row">
+                <div class="skills-detail-icon" id="skillsDetailIcon">🧩</div>
+                <div style="flex:1;min-width:0">
+                  <div class="skills-detail-name" id="skillsDetailName"></div>
+                  <div class="skills-detail-meta" id="skillsDetailMeta"></div>
+                </div>
+                <button class="skills-subscribe-btn" id="skillsDetailSubscribeBtn" onclick="skillsToggleSubscribe()">订阅</button>
+              </div>
+              <div class="skills-detail-desc" id="skillsDetailDesc"></div>
+              <div class="skills-detail-tags" id="skillsDetailTags"></div>
+            </div>
+            <div class="skills-detail-body" id="skillsDetailBody"></div>
+          </div>
+          <div class="skills-detail-sidebar">
+            <div class="skills-sidebar-title">技能信息</div>
+            <div id="skillsDetailSidebarInfo"></div>
+            <button class="skills-sidebar-subscribe-btn" id="skillsSidebarSubscribeBtn" onclick="skillsToggleSubscribe()">订阅</button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="mainMemory" class="main-view">
