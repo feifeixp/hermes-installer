@@ -168,6 +168,7 @@
     <button class="rail-btn nav-tab has-tooltip" data-panel="insights" onclick="switchPanel('insights',{fromRailClick:true})" data-tooltip="Insights" data-i18n-title="tab_insights" aria-label="Insights"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg></button>
     <button class="rail-btn nav-tab dashboard-link has-tooltip" id="dashboardRailBtn" data-dashboard-link style="display:none" onclick="openHermesDashboard(event)" data-tooltip="Hermes Dashboard" data-i18n-title="tab_dashboard" aria-label="Hermes Dashboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg><span class="dashboard-external-badge" aria-hidden="true"></span></button>
     <button class="rail-btn nav-tab has-tooltip" data-panel="logs" onclick="switchPanel('logs',{fromRailClick:true})" data-tooltip="Logs" data-i18n-title="tab_logs" aria-label="Logs"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/></svg></button>
+    <button class="rail-btn has-tooltip" onclick="window.open('/static/backup.html','_blank')" data-tooltip="备份管理" aria-label="备份管理"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
     <div class="rail-spacer"></div>
     <!-- BEGIN: Neowow integration — auth avatar rail button (custom; not from upstream) -->
     <!-- One-click Neodomain login.  Sits above the gear icon in the rail -->
@@ -225,6 +226,10 @@
       <button class="nav-tab has-tooltip has-tooltip--bottom" data-panel="insights" data-label="Insights" onclick="switchPanel('insights',{fromRailClick:true})" data-tooltip="Insights" data-i18n-title="tab_insights"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg><span class="nav-tab-label">统计</span></button>
       <button class="nav-tab dashboard-link has-tooltip has-tooltip--bottom" id="dashboardMobileBtn" data-dashboard-link data-label="Dashboard" style="display:none" onclick="openHermesDashboard(event)" data-tooltip="Hermes Dashboard" data-i18n-title="tab_dashboard"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg><span class="dashboard-external-badge" aria-hidden="true"></span><span class="nav-tab-label">控制台</span></button>
       <button class="nav-tab has-tooltip has-tooltip--bottom" data-panel="logs" data-label="Logs" onclick="switchPanel('logs',{fromRailClick:true})" data-tooltip="Logs" data-i18n-title="tab_logs"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/></svg><span class="nav-tab-label">日志</span></button>
+      <button class="nav-tab has-tooltip has-tooltip--bottom" onclick="window.open('/static/backup.html','_blank')" data-tooltip="备份管理" aria-label="备份管理"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span class="nav-tab-label">备份</span></button>
+      <!-- BEGIN: Neowow integration — sidebar avatar (mirrors #neowowAvatarRail; shown only in Marvis skin via CSS) -->
+      <button class="nav-tab neowow-sidebar-btn has-tooltip has-tooltip--bottom" id="neowowAvatarSidebar" type="button" onclick="neowowAvatarClick(event)" data-tooltip="点击登录 Neodomain" aria-label="Neowow account"><svg id="neowowAvatarSvg2" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span class="neowow-avatar-disc" id="neowowAvatarDisc2" style="display:none;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--accent,#5e60ce);color:#fff;font-weight:700;font-size:11px;line-height:1"><span id="neowowAvatarInitial2">?</span></span><span class="nav-tab-label">登录账号</span></button>
+      <!-- END: Neowow integration — sidebar avatar -->
       <!-- Settings button mirrored here for mobile (rail is desktop-only via @media >=768px). Keep in sync with rail entry. -->
       <button class="nav-tab has-tooltip has-tooltip--bottom" data-panel="settings" onclick="switchPanel('settings',{fromRailClick:true})" data-tooltip="Settings" data-i18n-title="tab_settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span class="nav-tab-label">设置</span></button>
     </div>
@@ -857,11 +862,19 @@
           <button class="panel-head-btn has-tooltip has-tooltip--bottom" id="btnKanbanCreateBoard" onclick="openKanbanCreateBoard()" data-tooltip="New board" data-i18n-title="kanban_new_board" aria-label="New board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><line x1="17.5" y1="14" x2="17.5" y2="21"/><line x1="14" y1="17.5" x2="21" y2="17.5"/></svg></button>
           <button class="panel-head-btn has-tooltip has-tooltip--bottom kanban-nudge-dispatch-btn" id="btnKanbanPreviewDispatcher" onclick="nudgeKanbanDispatcher()" data-tooltip="Preview dispatcher (dry-run)" data-i18n-title="kanban_nudge_dispatcher" aria-label="Preview dispatcher (dry-run)">▶</button>
           <button class="panel-head-btn has-tooltip has-tooltip--bottom kanban-run-dispatch-btn" id="btnKanbanRunDispatcher" onclick="runKanbanDispatcher()" data-tooltip="Run dispatcher — claim Ready tasks" data-i18n-title="kanban_run_dispatcher" aria-label="Run dispatcher"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg></button>
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" id="btnNeuralOffice" style="width:auto;padding:0 8px;gap:5px;font-size:11px;font-weight:600;white-space:nowrap;" onclick="toggleNeuralOffice()" data-tooltip="神经办公室 · 点击内嵌/关闭" aria-label="神经办公室" aria-pressed="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="19" cy="7" r="2"/><path d="M19 13a3 3 0 0 1 3 3v2"/></svg>神经办公室</button>
         </div>
       </div>
-      <div class="kanban-task-preview" id="kanbanTaskPreview" style="display:none"></div>
-      <div class="kanban-board-wrap">
-        <div class="kanban-board" id="kanbanBoard"><div style="padding:16px;color:var(--muted);font-size:13px" data-i18n="loading">Loading...</div></div>
+      <div id="kanbanBodyRow" style="display:flex;flex:1;min-height:0;overflow:hidden;">
+        <div id="neuralOfficePanel" style="display:none;width:60%;flex-shrink:0;border-right:1px solid var(--border);overflow:hidden;">
+          <iframe id="neuralOfficeFrame" src="" style="width:100%;height:100%;border:none;display:block;" allow="autoplay"></iframe>
+        </div>
+        <div id="kanbanBoardSide" style="flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;">
+          <div class="kanban-task-preview" id="kanbanTaskPreview" style="display:none"></div>
+          <div class="kanban-board-wrap">
+            <div class="kanban-board" id="kanbanBoard"><div style="padding:16px;color:var(--muted);font-size:13px" data-i18n="loading">Loading...</div></div>
+          </div>
+        </div>
       </div>
     </div>
     <div id="mainWorkspaces" class="main-view">
@@ -1683,6 +1696,26 @@
 <script src="static/heartbeat.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/onboarding.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/boot.js?v=__WEBUI_VERSION__" defer></script>
+<script>
+function toggleNeuralOffice(){
+  const panel=document.getElementById('neuralOfficePanel');
+  const frame=document.getElementById('neuralOfficeFrame');
+  const btn=document.getElementById('btnNeuralOffice');
+  const open=panel.style.display==='none'||panel.style.display==='';
+  if(open){
+    panel.style.display='flex';
+    if(!frame.src.includes('neural-office.html'))frame.src='/static/neural-office.html';
+    btn.style.background='var(--accent-bg)';
+    btn.style.color='var(--accent-text)';
+    btn.setAttribute('aria-pressed','true');
+  }else{
+    panel.style.display='none';
+    btn.style.background='';
+    btn.style.color='';
+    btn.setAttribute('aria-pressed','false');
+  }
+}
+</script>
 
 <!-- Kanban: create/rename board modal — used for both flows. -->
 <div class="kanban-modal-overlay" id="kanbanBoardModal" hidden onclick="if(event.target===this)closeKanbanBoardModal()">

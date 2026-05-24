@@ -50,6 +50,17 @@
       btn.title            = '点击登录 Neodomain';
       btn.dataset.hasJwt   = '';
       btn.dataset.nickname = '';
+      // Also reset sidebar avatar (Marvis skin)
+      const svg2b  = $('neowowAvatarSvg2');
+      const disc2b = $('neowowAvatarDisc2');
+      const btn2b  = $('neowowAvatarSidebar');
+      if (btn2b) {
+        if (svg2b)  svg2b.style.display  = '';
+        if (disc2b) disc2b.style.display = 'none';
+        btn2b.title          = '点击登录 Neodomain';
+        btn2b.dataset.hasJwt = '';
+        btn2b.dataset.nickname = '';
+      }
       return;
     }
 
@@ -71,6 +82,20 @@
     btn.title            = nickname ? `已登录 · ${nickname}（点击查看积分）` : '已登录（点击查看积分）';
     btn.dataset.hasJwt   = '1';
     btn.dataset.nickname = nickname || '';
+
+    // Mirror visual state to the Marvis sidebar avatar button.
+    const svg2     = $('neowowAvatarSvg2');
+    const disc2    = $('neowowAvatarDisc2');
+    const initial2 = $('neowowAvatarInitial2');
+    const btn2     = $('neowowAvatarSidebar');
+    if (btn2) {
+      if (svg2)     { svg2.style.display  = svg.style.display; }
+      if (disc2)    { disc2.style.display = disc.style.display; }
+      if (initial2) { initial2.textContent = ch.toUpperCase(); }
+      btn2.title            = btn.title;
+      btn2.dataset.hasJwt   = '1';
+      btn2.dataset.nickname = nickname || '';
+    }
   }
 
   // ── Boot overlay control ──────────────────────────────────────────────
@@ -203,12 +228,20 @@
     if (event && event.stopPropagation) event.stopPropagation();
     const popover = $('neowowAuthPopover');
     const body    = $('neowowAuthPopBody');
-    const btn     = $('neowowAvatarRail');
-    if (!popover || !body || !btn) return;
+    // The rail button is always the source of truth for auth state (kept
+    // current by refreshRailAvatar).  For POSITIONING we use whichever
+    // button was actually clicked — rail in normal skins, sidebar btn in
+    // Marvis where the rail is visually hidden.
+    const railBtn     = $('neowowAvatarRail');
+    const clickedBtn  = (event && event.currentTarget instanceof Element
+                         && event.currentTarget.id !== 'neowowAvatarRail')
+                        ? event.currentTarget : railBtn;
+    const btn = railBtn; // alias kept for downstream code that reads .dataset
+    if (!popover || !body || !railBtn) return;
 
     // Logged-in state is stamped on the BUTTON's dataset by
     // refreshRailAvatar (the disc is display:none when logged out, so
-    // its dataset isn't reliable).  Read from the button instead.
+    // its dataset isn't reliable).  Read from the rail button instead.
     const hasJwt = btn.dataset.hasJwt === '1';
     const nickname = btn.dataset.nickname || '';
 
@@ -248,7 +281,9 @@
     //   (popover bottom = button bottom). If the button is so close to
     //   the viewport bottom that this would leave < `margin` px of
     //   breathing room, clamp to `margin`.
-    const rect   = btn.getBoundingClientRect();
+    // Use whichever button was actually clicked for positioning (handles
+    // the Marvis skin where the sidebar button is shown instead of the rail).
+    const rect   = clickedBtn.getBoundingClientRect();
     const margin = 12;
     popover.style.left   = (rect.right + 8) + 'px';
     popover.style.top    = 'auto';
@@ -391,10 +426,13 @@
 
   // Close popover on outside-click + ESC.
   document.addEventListener('click', (e) => {
-    const popover = $('neowowAuthPopover');
-    const btn     = $('neowowAvatarRail');
+    const popover   = $('neowowAuthPopover');
+    const btn       = $('neowowAvatarRail');
+    const sidebarBtn = $('neowowAvatarSidebar');
     if (!popover || popover.style.display !== 'block') return;
-    if (popover.contains(e.target) || (btn && btn.contains(e.target))) return;
+    if (popover.contains(e.target)) return;
+    if (btn && btn.contains(e.target)) return;
+    if (sidebarBtn && sidebarBtn.contains(e.target)) return;
     popover.style.display = 'none';
   });
   document.addEventListener('keydown', (e) => {

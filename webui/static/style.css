@@ -258,6 +258,9 @@
   :root[data-skin="marvis"] body:has(.layout.sidebar-collapsed) .sidebar-expand-btn:hover{background:var(--hover-bg);color:var(--text);}
   /* Keep topbar balanced when expand btn appears */
   :root[data-skin="marvis"] body:has(.layout.sidebar-collapsed) .app-titlebar-spacer{display:flex;}
+  /* Neowow sidebar login button — hidden on all skins, shown in Marvis (where the rail is hidden) */
+  .neowow-sidebar-btn{display:none!important;}
+  :root[data-skin="marvis"] .neowow-sidebar-btn{display:flex!important;}
 
   /* #594: app-dialog light mode overrides — base styles use hardcoded dark gradients */
   :root:not(.dark) .app-dialog{
