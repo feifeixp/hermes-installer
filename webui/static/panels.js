@@ -224,11 +224,16 @@ async function switchPanel(name, opts = {}) {
   // showing-<name> class on <main>; no class means chat (the default).
   const mainEl = document.querySelector('main.main');
   if (mainEl) {
-    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs'].forEach(p => {
+    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs','backup'].forEach(p => {
       mainEl.classList.toggle('showing-' + p, nextPanel === p);
     });
   }
   // Lazy-load panel data
+  if (nextPanel === 'backup') {
+    // Lazy-load the backup iframe on first visit to avoid startup API calls
+    const bkpIframe = document.getElementById('backupIframe');
+    if (bkpIframe && !bkpIframe.src) bkpIframe.src = '/static/backup.html';
+  }
   if (nextPanel === 'tasks') await loadCrons();
   if (nextPanel === 'kanban') await loadKanban();
   if (nextPanel === 'skills') await loadSkills();

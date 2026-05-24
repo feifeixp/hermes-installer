@@ -168,7 +168,7 @@
     <button class="rail-btn nav-tab has-tooltip" data-panel="insights" onclick="switchPanel('insights',{fromRailClick:true})" data-tooltip="Insights" data-i18n-title="tab_insights" aria-label="Insights"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg></button>
     <button class="rail-btn nav-tab dashboard-link has-tooltip" id="dashboardRailBtn" data-dashboard-link style="display:none" onclick="openHermesDashboard(event)" data-tooltip="Hermes Dashboard" data-i18n-title="tab_dashboard" aria-label="Hermes Dashboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg><span class="dashboard-external-badge" aria-hidden="true"></span></button>
     <button class="rail-btn nav-tab has-tooltip" data-panel="logs" onclick="switchPanel('logs',{fromRailClick:true})" data-tooltip="Logs" data-i18n-title="tab_logs" aria-label="Logs"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/></svg></button>
-    <button class="rail-btn has-tooltip" onclick="window.open('/static/backup.html','_blank')" data-tooltip="备份管理" aria-label="备份管理"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
+    <button class="rail-btn nav-tab has-tooltip" data-panel="backup" onclick="switchPanel('backup',{fromRailClick:true})" data-tooltip="备份管理" aria-label="备份管理"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
     <div class="rail-spacer"></div>
     <!-- BEGIN: Neowow integration — auth avatar rail button (custom; not from upstream) -->
     <!-- One-click Neodomain login.  Sits above the gear icon in the rail -->
@@ -226,7 +226,7 @@
       <button class="nav-tab has-tooltip has-tooltip--bottom" data-panel="insights" data-label="Insights" onclick="switchPanel('insights',{fromRailClick:true})" data-tooltip="Insights" data-i18n-title="tab_insights"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg><span class="nav-tab-label">统计</span></button>
       <button class="nav-tab dashboard-link has-tooltip has-tooltip--bottom" id="dashboardMobileBtn" data-dashboard-link data-label="Dashboard" style="display:none" onclick="openHermesDashboard(event)" data-tooltip="Hermes Dashboard" data-i18n-title="tab_dashboard"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg><span class="dashboard-external-badge" aria-hidden="true"></span><span class="nav-tab-label">控制台</span></button>
       <button class="nav-tab has-tooltip has-tooltip--bottom" data-panel="logs" data-label="Logs" onclick="switchPanel('logs',{fromRailClick:true})" data-tooltip="Logs" data-i18n-title="tab_logs"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/></svg><span class="nav-tab-label">日志</span></button>
-      <button class="nav-tab has-tooltip has-tooltip--bottom" onclick="window.open('/static/backup.html','_blank')" data-tooltip="备份管理" aria-label="备份管理"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span class="nav-tab-label">备份</span></button>
+      <button class="nav-tab has-tooltip has-tooltip--bottom" data-panel="backup" onclick="switchPanel('backup',{fromRailClick:true})" data-tooltip="备份管理" aria-label="备份管理"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span class="nav-tab-label">备份</span></button>
       <!-- BEGIN: Neowow integration — sidebar avatar (mirrors #neowowAvatarRail; shown only in Marvis skin via CSS) -->
       <button class="nav-tab neowow-sidebar-btn has-tooltip has-tooltip--bottom" id="neowowAvatarSidebar" type="button" onclick="neowowAvatarClick(event)" data-tooltip="点击登录 Neodomain" aria-label="Neowow account"><svg id="neowowAvatarSvg2" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span class="neowow-avatar-disc" id="neowowAvatarDisc2" style="display:none;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--accent,#5e60ce);color:#fff;font-weight:700;font-size:11px;line-height:1"><span id="neowowAvatarInitial2">?</span></span><span class="nav-tab-label">登录账号</span></button>
       <!-- END: Neowow integration — sidebar avatar -->
@@ -381,6 +381,12 @@
         <label class="logs-check-row"><input id="logsAutoRefresh" type="checkbox" checked onchange="_syncLogsAutoRefresh()"><span data-i18n="logs_auto_refresh">Auto-refresh (5s)</span></label>
         <label class="logs-check-row"><input id="logsWrap" type="checkbox" onchange="_syncLogsWrap()"><span data-i18n="logs_wrap">Wrap lines</span></label>
         <button type="button" class="logs-copy" id="logsCopyAll" onclick="copyLogsAll()" data-i18n="logs_copy_all">Copy all</button>
+      </div>
+    </div>
+    <!-- Backup panel (content renders in .main via iframe) -->
+    <div class="panel-view" id="panelBackup">
+      <div class="panel-head">
+        <span>备份管理</span>
       </div>
     </div>
     <!-- Settings panel (menu list; actual panes render in .main) -->
@@ -1599,6 +1605,10 @@
             <button class="sm-btn" onclick="saveSettings()" style="margin-top:12px;width:100%;padding:8px;font-weight:600" data-i18n="settings_save_btn">Save Settings</button>
           </div>
       </div>
+    </div>
+    <!-- Backup main view — iframe is lazy-loaded by switchPanel('backup') -->
+    <div id="mainBackup" class="main-view">
+      <iframe id="backupIframe" style="flex:1;width:100%;height:100%;border:none;min-height:0"></iframe>
     </div>
   </main>
   <aside class="rightpanel">
