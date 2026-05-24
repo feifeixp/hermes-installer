@@ -834,72 +834,98 @@ def main():
                    f"端口 {port} 无法释放。\n请手动停止占用进程后重试。")
             sys.exit(1)
 
-    # ── Launch bootstrap.py ──────────────────────────────────────────────
-    # bootstrap.py handles everything:
-    #   1. Detect hermes-agent installation
-    #   2. Install hermes-agent if missing (git clone + venv + pip install)
-    #   3. Create WebUI venv + install deps if needed
-    #   4. Start server.py on the target port
-    #   5. Health-check, then exit (server.py keeps running detached)
-    #
-    # We run bootstrap.py in a daemon thread so the main thread can show a
-    # loading state in the window while bootstrap does its work.
+    # ── Launch WebUI server ──────────────────────────────────────────────
+    if sys.platform == "win32":
+        # ── Windows: install if needed, start server.py directly ────────
+        # bootstrap.py has ensure_supported_platform() that blocks Windows.
+        # We handle install + launch inline instead.
+        if not _is_agent_installed():
+            log.info("First run: hermes-agent not installed — starting Windows setup")
+            print("\n" + "=" * 56, flush=True)
+            print("   Hermes 首次启动 — 正在安装必要组件", flush=True)
+            print("   日志保存在：" + str(_LOG_PATH), flush=True)
+            print("=" * 56 + "\n", flush=True)
+            try:
+                _windows_install_agent()
+            except Exception as exc:
+                import traceback as _tb
+                tb = _tb.format_exc()
+                log.exception("Windows install failed: %s", exc)
+                _send_crash_report("windows_install_failed", str(exc), {"traceback": tb[:2000]})
+                _alert(
+                    "Hermes 安装失败",
+                    f"首次安装 hermes-agent 时出错：\n\n{exc}\n\n"
+                    f"请检查网络连接后重试。\n"
+                    f"详细日志：{_LOG_PATH}",
+                )
+                sys.exit(1)
 
-    python_exe = _find_bootstrap_python()
+        log.info("Windows: starting server.py directly (bypassing bootstrap.py)")
+        try:
+            _win_server_proc = _start_webui_server_windows(port, host)
+        except Exception as exc:
+            log.exception("Failed to start server.py on Windows: %s", exc)
+            _alert(
+                "Hermes 启动失败",
+                f"无法启动 WebUI 服务：\n\n{exc}\n\n"
+                f"日志：{_LOG_PATH}",
+            )
+            sys.exit(1)
 
-    if not BOOTSTRAP_PY.exists():
-        _alert("Hermes Installer",
-               f"找不到 WebUI 启动脚本。\n路径：{BOOTSTRAP_PY}\n"
-               f"请确认 webui/ 目录与 main.py 在同一文件夹下。")
-        sys.exit(1)
+        server_pids = [_win_server_proc.pid]
+        log.info("Windows server PID=%s — waiting for WebUI on port %d (timeout=%ds)",
+                 _win_server_proc.pid, port, WEBUI_STARTUP_TIMEOUT)
+        ready = _wait_for_server(port, timeout=WEBUI_STARTUP_TIMEOUT)
 
-    env = os.environ.copy()
-    env["HERMES_WEBUI_PORT"] = str(port)
-    env["HERMES_WEBUI_HOST"] = host
-    env["PYTHONUNBUFFERED"] = "1"
-    env["PYTHONUTF8"] = "1"
+    else:
+        # ── macOS / Linux: existing bootstrap.py path (unchanged) ────────
+        python_exe = _find_bootstrap_python()
 
-    log.info("Launching bootstrap.py: %s %s", python_exe, BOOTSTRAP_PY)
+        if not BOOTSTRAP_PY.exists():
+            _alert("Hermes Installer",
+                   f"找不到 WebUI 启动脚本。\n路径：{BOOTSTRAP_PY}\n"
+                   f"请确认 webui/ 目录与 main.py 在同一文件夹下。")
+            sys.exit(1)
 
-    # Launch as detached child — bootstrap.py spawns server.py and exits,
-    # server.py continues running
-    try:
-        proc = subprocess.Popen(
-            [python_exe, str(BOOTSTRAP_PY), str(port), "--host", host],
-            cwd=str(WEBUI_DIR),
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=(sys.platform != "win32"),
-        )
-    except FileNotFoundError:
-        _alert("Hermes Installer",
-               f"找不到 Python 解释器。\n尝试的路径：{python_exe}\n"
-               f"请安装 Python 3.10+ 后重试。")
-        sys.exit(1)
-    except Exception as exc:
-        _alert("Hermes Installer", f"无法启动 WebUI：{exc}")
-        sys.exit(1)
+        env = os.environ.copy()
+        env["HERMES_WEBUI_PORT"] = str(port)
+        env["HERMES_WEBUI_HOST"] = host
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONUTF8"] = "1"
 
-    log.info("bootstrap.py PID=%s — waiting for WebUI on port %d (timeout=%ds)",
-             proc.pid, port, WEBUI_STARTUP_TIMEOUT)
+        log.info("Launching bootstrap.py: %s %s", python_exe, BOOTSTRAP_PY)
 
-    # Wait for the WebUI server to be ready
-    # bootstrap.py installs hermes-agent + deps first, so this can take a while
-    ready = _wait_for_server(port, timeout=WEBUI_STARTUP_TIMEOUT)
-    if not ready:
-        # Server might still be starting — give it another 30s and try anyway
-        log.warning("Port %d not ready after %ds, trying anyway in 30s",
-                    port, WEBUI_STARTUP_TIMEOUT)
-        time.sleep(30)
-        ready = _wait_for_server(port, timeout=10)
+        try:
+            proc = subprocess.Popen(
+                [python_exe, str(BOOTSTRAP_PY), str(port), "--host", host],
+                cwd=str(WEBUI_DIR),
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            _alert("Hermes Installer",
+                   f"找不到 Python 解释器。\n尝试的路径：{python_exe}\n"
+                   f"请安装 Python 3.10+ 后重试。")
+            sys.exit(1)
+        except Exception as exc:
+            _alert("Hermes Installer", f"无法启动 WebUI：{exc}")
+            sys.exit(1)
 
-    # ── Capture server.py PIDs so we can clean them up on exit ──────────────
-    # bootstrap.py spawns server.py detached and then exits. Without explicit
-    # cleanup, server.py would survive window close and accumulate as orphans
-    # on every launch — eventually holding the port and forcing the user
-    # through the conflict dialog every time.
-    server_pids = _pids_on_port(port) if ready else []
+        log.info("bootstrap.py PID=%s — waiting for WebUI on port %d (timeout=%ds)",
+                 proc.pid, port, WEBUI_STARTUP_TIMEOUT)
+
+        ready = _wait_for_server(port, timeout=WEBUI_STARTUP_TIMEOUT)
+        if not ready:
+            log.warning("Port %d not ready after %ds, trying anyway in 30s",
+                        port, WEBUI_STARTUP_TIMEOUT)
+            time.sleep(30)
+            ready = _wait_for_server(port, timeout=10)
+
+        # bootstrap.py spawns server.py detached then exits — find it by port
+        server_pids = _pids_on_port(port) if ready else []
+
     log.info("WebUI server PIDs to terminate on exit: %s", server_pids)
 
     _cleanup_done = {"flag": False}
