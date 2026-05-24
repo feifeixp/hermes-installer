@@ -54,7 +54,7 @@ def test_panels_js_served(cleanup_test_sessions):
     src = get_text("/static/panels.js")
     assert "async function switchPanel(" in src
     assert "async function loadCrons(" in src
-    assert "async function loadSkills(" in src
+    assert "async function loadSkillsPanel(" in src
     assert "async function loadMemory(" in src
 
 def test_boot_js_served(cleanup_test_sessions):
@@ -107,9 +107,9 @@ def test_all_functions_present_across_modules(cleanup_test_sessions):
     required = [
         "setBusy", "syncTopbar", "renderMessages", "send", "loadSession",
         "newSession", "renderSessionList", "loadDir", "switchPanel",
-        "loadCrons", "loadSkills", "loadMemory", "editMessage",
+        "loadCrons", "loadSkillsPanel", "loadMemory", "editMessage",
         "regenerateResponse", "clearConversation", "highlightCode",
-        "toggleSkillForm", "submitSkillSave", "toggleMemoryEdit",
+        "skillsToggleSubscribe", "skillsSwitchTab", "toggleMemoryEdit",
     ]
     for fn in required:
         assert fn in all_src, f"Function {fn} missing from all modules"

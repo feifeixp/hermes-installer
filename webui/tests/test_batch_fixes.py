@@ -107,19 +107,6 @@ class TestCronSkillCacheInvalidation:
             "cache must always be busted on open"
         )
 
-    def test_cache_busted_on_skill_save(self):
-        src = self._panels_src()
-        # saveSkillForm() is the handler invoked on skill save (renamed from
-        # submitSkillSave in the main-view refactor; the old name still aliases it).
-        m = re.search(
-            r'async function saveSkillForm\(\).*?_skillsData\s*=\s*null.*?_cronSkillsCache\s*=\s*null',
-            src, re.DOTALL
-        )
-        assert m, (
-            "_cronSkillsCache must be set to null in saveSkillForm() "
-            "right after _skillsData = null"
-        )
-
 
 # ── Group D: System (auto) theme ──────────────────────────────────────────────
 

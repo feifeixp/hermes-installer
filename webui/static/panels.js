@@ -3221,7 +3221,7 @@ function _skillsRenderList() {
     return;
   }
   box.innerHTML = skills.map(s => `
-    <div class="skills-list-item" onclick="_skillsOpenFromList(${JSON.stringify(s)})">
+    <div class="skills-list-item" onclick="_skillsOpenFromList('${esc(s.name||'')}')">
       <div class="skills-list-item-info">
         <div class="skills-list-item-name">${esc(s.name || '')}</div>
         <div class="skills-list-item-desc">${esc(s.description || '')}</div>
@@ -3250,12 +3250,13 @@ async function skillsToggleLocal(name, enabled) {
   }
 }
 
-function _skillsOpenFromList(skill) {
+function _skillsOpenFromList(name) {
+  const skill = (_skillsState.localData || []).find(s => s.name === name) || { name };
   _skillsOpenDetail(skill, 'list');
   // Fetch content from local API
-  api(`/api/skills/content?name=${encodeURIComponent(skill.name)}`)
+  api(`/api/skills/content?name=${encodeURIComponent(name)}`)
     .then(data => {
-      if (!_skillsState.detailSkill || _skillsState.detailSkill.name !== skill.name) return;
+      if (!_skillsState.detailSkill || _skillsState.detailSkill.name !== name) return;
       _skillsState.detailSkill = { ..._skillsState.detailSkill, content: data.content || '' };
       _skillsRenderDetail();
     })
