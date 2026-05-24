@@ -3989,3 +3989,302 @@ main.main.showing-logs > #mainLogs{display:flex;}
 @media (prefers-reduced-motion: reduce){.stream-fade-word.is-new{animation:none;will-change:auto;}}
 [data-live-assistant="1"]:last-child .msg-body.stream-fade-active > :last-child::after,
 [data-live-assistant="1"]:last-child .msg-body.stream-fade-active:not(:has(> *))::after{display:none;content:none;}
+
+/* ── Skills panel redesign (3-tab UI) ────────────────────────────────── */
+#mainSkills { flex-direction: column; overflow: hidden; }
+
+/* Tab bar */
+.skills-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+  padding: 0 12px;
+}
+.skills-tab-btn {
+  background: none;
+  border: none;
+  padding: 10px 16px 8px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color .15s, border-color .15s;
+  font-family: inherit;
+}
+.skills-tab-btn:hover { color: var(--fg); }
+.skills-tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+
+/* Tab content */
+.skills-tab-content { flex: 1; overflow-y: auto; min-height: 0; }
+.skills-tab-pane { padding: 12px 14px; }
+
+/* List tab — local skills with toggle */
+.skills-list-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  gap: 10px;
+  margin-bottom: 4px;
+  transition: background .12s;
+}
+.skills-list-item:hover { background: var(--hover); }
+.skills-list-item-info { flex: 1; min-width: 0; }
+.skills-list-item-name { font-size: 13px; font-weight: 500; }
+.skills-list-item-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Toggle switch */
+.skill-toggle-wrap { position: relative; display: flex; align-items: center; flex-shrink: 0; }
+.skill-toggle { position: absolute; opacity: 0; width: 0; height: 0; }
+.skill-toggle-track {
+  display: inline-block;
+  width: 32px; height: 18px;
+  border-radius: 9px;
+  background: var(--border2, #555);
+  transition: background .2s;
+  cursor: pointer;
+  position: relative;
+}
+.skill-toggle-track::after {
+  content: '';
+  position: absolute;
+  left: 2px; top: 2px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left .2s;
+}
+.skill-toggle:checked + .skill-toggle-track { background: var(--accent); }
+.skill-toggle:checked + .skill-toggle-track::after { left: 16px; }
+
+/* Market grid */
+.skills-market-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  padding: 2px 0;
+}
+.skills-market-card {
+  background: var(--bg-input, var(--bg-panel));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.skills-market-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0,0,0,.08);
+}
+.skills-market-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.skills-market-card-name { font-size: 13px; font-weight: 600; }
+.skills-market-card-badge {
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--hover);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.skills-market-card-desc {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.skills-market-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.skills-market-card-count { font-size: 11px; color: var(--muted); margin-right: 4px; }
+.skills-tag {
+  font-size: 10px;
+  background: var(--hover);
+  color: var(--muted);
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+/* Detail view */
+.skills-detail-view {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.skills-detail-back {
+  padding: 10px 14px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.skills-back-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  font-family: inherit;
+}
+.skills-back-btn:hover { text-decoration: underline; }
+.skills-detail-layout {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+.skills-detail-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  min-width: 0;
+}
+.skills-detail-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 16px 14px;
+}
+.skills-detail-header { margin-bottom: 16px; }
+.skills-detail-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.skills-detail-icon { font-size: 32px; line-height: 1; flex-shrink: 0; }
+.skills-detail-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.skills-detail-meta { font-size: 12px; color: var(--muted); }
+.skills-detail-desc { font-size: 13px; line-height: 1.6; margin-bottom: 10px; }
+.skills-detail-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.skills-detail-body { font-size: 14px; line-height: 1.7; }
+
+/* Subscribe buttons */
+.skills-subscribe-btn {
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: opacity .15s;
+  font-family: inherit;
+}
+.skills-subscribe-btn.subscribed { background: transparent; color: var(--accent); }
+.skills-subscribe-btn:hover { opacity: .85; }
+
+.skills-sidebar-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 10px;
+}
+.skills-sidebar-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.skills-sidebar-key { color: var(--muted); }
+.skills-sidebar-val { font-weight: 500; }
+.skills-sidebar-subscribe-btn {
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+  margin-top: 12px;
+  transition: opacity .15s;
+  font-family: inherit;
+}
+.skills-sidebar-subscribe-btn.subscribed { background: transparent; color: var(--accent); }
+.skills-sidebar-subscribe-btn:hover { opacity: .85; }
+
+/* Status states */
+.skills-loading { padding: 20px; text-align: center; color: var(--muted); font-size: 13px; }
+.skills-empty { padding: 30px 20px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.skills-error { padding: 16px; color: #e55; font-size: 13px; }
+.skills-gated { padding: 20px; text-align: center; color: var(--muted); font-size: 13px; font-style: italic; }
+.skills-synced-badge { font-size: 11px; color: #4caf50; font-weight: 500; }
+.skills-unsynced-badge { font-size: 11px; color: var(--muted); }
+.skills-mine-status { flex-shrink: 0; }
+
+/* Login prompt (mine tab when not logged in) */
+.skills-login-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+  text-align: center;
+  gap: 8px;
+}
+.skills-login-icon { font-size: 40px; }
+.skills-login-title { font-size: 15px; font-weight: 600; }
+.skills-login-desc { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+
+/* Login modal (subscribe while not logged in) */
+.skills-login-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.4);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.skills-login-modal-box {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px;
+  max-width: 300px;
+  width: 90%;
+}
+
+/* Skills description div (replaces inline style) */
+.panel-skills-desc {
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+/* ── End skills panel redesign ─────────────────────────────────────────── */
