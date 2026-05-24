@@ -236,7 +236,7 @@ async function switchPanel(name, opts = {}) {
   }
   if (nextPanel === 'tasks') await loadCrons();
   if (nextPanel === 'kanban') await loadKanban();
-  if (nextPanel === 'skills') await loadSkills();
+  if (nextPanel === 'skills') await loadSkillsPanel();
   if (nextPanel === 'memory') await loadMemory();
   if (nextPanel === 'workspaces') await loadWorkspacesPanel();
   if (nextPanel === 'profiles') await loadProfilesPanel();
@@ -3130,88 +3130,9 @@ async function clearConversation() {
   } catch(e) { setStatus(t('clear_failed') + e.message); }
 }
 
-// ── Skills panel ──
-async function loadSkills() {
-  if (_skillsData) { renderSkills(_skillsData); return; }
-  const box = $('skillsList');
-  try {
-    const data = await api('/api/skills');
-    _skillsData = data.skills || [];
-    // Prune collapsed state to only keep categories present in fresh data,
-    // avoiding stale keys when categories are renamed or removed server-side.
-    const liveCats = new Set(_skillsData.map(s => s.category || '(general)'));
-    for (const c of _collapsedCats) { if (!liveCats.has(c)) _collapsedCats.delete(c); }
-    renderSkills(_skillsData);
-  } catch(e) { box.innerHTML = `<div style="padding:12px;color:var(--accent);font-size:12px">Error: ${esc(e.message)}</div>`; }
-}
+// ── Skills panel (3-tab redesign) ──────────────────────────────────────
 
-let _collapsedCats = new Set(); // persisted collapsed state across re-renders
-
-function _toggleCatCollapse(cat) {
-  if (_collapsedCats.has(cat)) _collapsedCats.delete(cat);
-  else _collapsedCats.add(cat);
-  // Toggle DOM without full re-render
-  document.querySelectorAll('.skills-category').forEach(sec => {
-    const header = sec.querySelector('.skills-cat-header');
-    if (header && header.dataset.cat === cat) {
-      const collapsed = _collapsedCats.has(cat);
-      sec.classList.toggle('collapsed', collapsed);
-      header.querySelector('.cat-chevron').style.transform = collapsed ? '' : 'rotate(90deg)';
-      sec.querySelectorAll('.skill-item').forEach(el => el.style.display = collapsed ? 'none' : '');
-    }
-  });
-}
-
-function renderSkills(skills) {
-  const query = ($('skillsSearch').value || '').toLowerCase();
-  const filtered = query ? skills.filter(s =>
-    (s.name||'').toLowerCase().includes(query) ||
-    (s.description||'').toLowerCase().includes(query) ||
-    (s.category||'').toLowerCase().includes(query)
-  ) : skills;
-  // Group by category
-  const cats = {};
-  for (const s of filtered) {
-    const cat = s.category || '(general)';
-    if (!cats[cat]) cats[cat] = [];
-    cats[cat].push(s);
-  }
-  const box = $('skillsList');
-  box.innerHTML = '';
-  if (!filtered.length) { box.innerHTML = `<div style="padding:12px;color:var(--muted);font-size:12px">${esc(t('skills_no_match'))}</div>`; return; }
-  for (const [cat, items] of Object.entries(cats).sort()) {
-    const collapsed = _collapsedCats.has(cat);
-    const sec = document.createElement('div');
-    sec.className = 'skills-category' + (collapsed ? ' collapsed' : '');
-    const hdr = document.createElement('div');
-    hdr.className = 'skills-cat-header';
-    hdr.dataset.cat = cat;
-    hdr.innerHTML = `<span class="cat-chevron" style="display:inline-flex;transition:transform .15s;${collapsed ? '' : 'transform:rotate(90deg)'}">${li('chevron-right',12)}</span> ${esc(cat)} <span style="opacity:.5">(${items.length})</span>`;
-    hdr.onclick = () => _toggleCatCollapse(cat);
-    sec.appendChild(hdr);
-    for (const skill of items.sort((a,b) => a.name.localeCompare(b.name))) {
-      const el = document.createElement('div');
-      el.className = 'skill-item';
-      el.style.display = collapsed ? 'none' : '';
-      el.innerHTML = `<span class="skill-name">${esc(skill.name)}</span><span class="skill-desc">${esc(skill.description||'')}</span>`;
-      el.onclick = () => openSkill(skill.name, el);
-      sec.appendChild(el);
-    }
-    box.appendChild(sec);
-  }
-}
-
-function filterSkills() {
-  if (_skillsData) renderSkills(_skillsData);
-}
-
-// Currently selected skill detail — kept across panel switches so re-entering
-// the Skills view shows the last-viewed skill.
-let _currentSkillDetail = null; // { name, category, content }
-let _skillMode = 'empty'; // 'empty' | 'read' | 'create' | 'edit'
-let _skillPreFormDetail = null; // snapshot of previously-viewed skill when entering a form
-let _editingSkillName = null;
-
+// Keep _stripYamlFrontmatter here — was in the old skills section, still needed.
 function _stripYamlFrontmatter(content) {
   if (!content) return { frontmatter: null, body: '' };
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
@@ -3219,272 +3140,398 @@ function _stripYamlFrontmatter(content) {
   return { frontmatter: m[1], body: content.slice(m[0].length) };
 }
 
-function _renderSkillDetail(name, content, linkedFiles) {
-  const title = $('skillDetailTitle');
-  const body = $('skillDetailBody');
-  const empty = $('skillDetailEmpty');
-  const editBtn = $('btnEditSkillDetail');
-  const delBtn = $('btnDeleteSkillDetail');
-  if (title) title.textContent = name;
-  const { frontmatter, body: markdownBody } = _stripYamlFrontmatter(content);
-  let html = '';
-  if (frontmatter) {
-    html += `<details class="skill-frontmatter"><summary>${esc(t('skill_metadata'))}</summary><pre><code>${esc(frontmatter)}</code></pre></details>`;
+let _skillsState = {
+  activeTab:    'list',   // 'list' | 'market' | 'mine'
+  detailSkill:  null,     // null = show tabs; object = show detail
+  detailSource: null,     // 'list' | 'market' | 'mine'
+  listLoaded:   false,
+  marketLoaded: false,
+  mineLoaded:   false,
+  localData:    null,     // [{name, description, category, disabled, ...}]
+  marketData:   null,     // [{id, name, displayName, description, ...}]
+  mineData:     null,     // [{id, name, isLocal, ...}]
+};
+
+async function loadSkillsPanel() {
+  // Reset detail view when re-entering panel
+  if (_skillsState.detailSkill) {
+    _skillsState.detailSkill = null;
   }
-  html += renderMd(markdownBody || '(no content)');
-  const lf = linkedFiles || {};
-  const categories = Object.entries(lf).filter(([,files]) => files && files.length > 0);
-  if (categories.length) {
-    html += `<div class="skill-linked-files"><div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${esc(t('linked_files'))}</div>`;
-    for (const [cat, files] of categories) {
-      html += `<div class="skill-linked-section"><h4>${esc(cat)}</h4>`;
-      for (const f of files) {
-        html += `<a class="skill-linked-file" href="#" data-skill-name="${esc(name)}" data-skill-file="${esc(f)}">${esc(f)}</a>`;
-      }
-      html += '</div>';
-    }
-    html += '</div>';
-  }
-  body.innerHTML = `<div class="main-view-content skill-detail-content">${html}</div>`;
-  body.querySelectorAll('.skill-linked-file').forEach(a => {
-    a.addEventListener('click', e => { e.preventDefault(); openSkillFile(a.dataset.skillName, a.dataset.skillFile); });
+  _skillsRenderView();
+  if (!_skillsState.listLoaded) await _skillsLoadList();
+}
+
+function skillsSwitchTab(tab) {
+  _skillsState.activeTab   = tab;
+  _skillsState.detailSkill = null;
+  document.querySelectorAll('.skills-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+    btn.setAttribute('aria-selected', btn.dataset.tab === tab ? 'true' : 'false');
   });
-  body.style.display = '';
-  if (empty) empty.style.display = 'none';
-  _skillMode = 'read';
-  _setSkillHeaderButtons('read');
+  _skillsRenderView();
+  if (tab === 'list'   && !_skillsState.listLoaded)   _skillsLoadList();
+  if (tab === 'market' && !_skillsState.marketLoaded) _skillsLoadMarket();
+  if (tab === 'mine'   && !_skillsState.mineLoaded)   _skillsLoadMine();
 }
 
-function _renderSkillError(name, message) {
-  const title = $('skillDetailTitle');
-  const body = $('skillDetailBody');
-  const empty = $('skillDetailEmpty');
-  if (title) title.textContent = name;
-  if (body) {
-    body.innerHTML = `<div class="main-view-content"><div class="detail-form-error" style="display:block">${esc(message || t('skill_load_failed'))}</div></div>`;
-    body.style.display = '';
-  }
-  if (empty) empty.style.display = 'none';
-  _currentSkillDetail = null;
-  _skillMode = 'empty';
-  _setSkillHeaderButtons('empty');
-}
+function _skillsRenderView() {
+  const detailView = $('skillsDetailView');
+  const tabContent = $('skillsTabContent');
+  const tabBar     = $('skillsTabBar');
+  if (!detailView || !tabContent || !tabBar) return;
 
-function _setSkillHeaderButtons(mode) {
-  const editBtn = $('btnEditSkillDetail');
-  const delBtn = $('btnDeleteSkillDetail');
-  const cancelBtn = $('btnCancelSkillDetail');
-  const saveBtn = $('btnSaveSkillDetail');
-  const show = b => b && (b.style.display = '');
-  const hide = b => b && (b.style.display = 'none');
-  if (mode === 'read') { show(editBtn); show(delBtn); hide(cancelBtn); hide(saveBtn); }
-  else if (mode === 'create' || mode === 'edit') { hide(editBtn); hide(delBtn); show(cancelBtn); show(saveBtn); }
-  else { hide(editBtn); hide(delBtn); hide(cancelBtn); hide(saveBtn); }
-}
-
-async function openSkill(name, el) {
-  // Highlight active skill in the sidebar list
-  document.querySelectorAll('.skill-item').forEach(e => e.classList.remove('active'));
-  if (el) el.classList.add('active');
-  _skillPreFormDetail = null;
-  _editingSkillName = null;
-  try {
-    const data = await api(`/api/skills/content?name=${encodeURIComponent(name)}`);
-    if (data && (data.success === false || data.error)) {
-      const message = data.error || t('skill_load_failed');
-      _renderSkillError(name, message);
-      setStatus(t('skill_load_failed') + message);
-      return;
-    }
-    _currentSkillDetail = { name, content: data.content || '', linked_files: data.linked_files || {} };
-    _renderSkillDetail(name, data.content || '', data.linked_files || {});
-  } catch(e) { setStatus(t('skill_load_failed') + e.message); }
-}
-
-async function openSkillFile(skillName, filePath) {
-  try {
-    const data = await api(`/api/skills/content?name=${encodeURIComponent(skillName)}&file=${encodeURIComponent(filePath)}`);
-    if (data && data.error) {
-      _renderSkillError(skillName, data.error);
-      setStatus(t('skill_file_load_failed') + data.error);
-      return;
-    }
-    const body = $('skillDetailBody');
-    if (!body) return;
-    const ext = (filePath.split('.').pop() || '').toLowerCase();
-    const isMd = ['md','markdown'].includes(ext);
-    const backLabel = t('skills_back_to').replace('{0}', skillName);
-    const header = `<div class="skill-file-breadcrumb"><a href="#" class="skill-file-back" data-skill-name="${esc(skillName)}">&larr; ${esc(backLabel)}</a><span class="skill-file-path">${esc(filePath)}</span></div>`;
-    let content;
-    if (isMd) {
-      content = `<div class="main-view-content">${renderMd(data.content || '')}</div>`;
-    } else {
-      const escaped = esc(data.content || '');
-      content = `<pre class="skill-file-code"><code>${escaped}</code></pre>`;
-    }
-    body.innerHTML = header + content;
-    body.style.display = '';
-    const empty = $('skillDetailEmpty');
-    if (empty) empty.style.display = 'none';
-    body.querySelectorAll('.skill-file-back').forEach(a => {
-      a.addEventListener('click', e => {
-        e.preventDefault();
-        if (_currentSkillDetail && _currentSkillDetail.name === a.dataset.skillName) {
-          _renderSkillDetail(_currentSkillDetail.name, _currentSkillDetail.content, _currentSkillDetail.linked_files);
-        } else {
-          openSkill(a.dataset.skillName, null);
-        }
-      });
+  if (_skillsState.detailSkill) {
+    detailView.style.display = '';
+    tabContent.style.display = 'none';
+    tabBar.style.display     = 'none';
+  } else {
+    detailView.style.display = 'none';
+    tabContent.style.display = '';
+    tabBar.style.display     = '';
+    const tab = _skillsState.activeTab;
+    const paneMap = { list: 'skillsPaneList', market: 'skillsPaneMarket', mine: 'skillsPaneMine' };
+    Object.entries(paneMap).forEach(([t, id]) => {
+      const el = $(id);
+      if (el) el.style.display = t === tab ? '' : 'none';
     });
-    if (!isMd) requestAnimationFrame(() => { if (typeof highlightCode === 'function') highlightCode(); });
-  } catch(e) { setStatus(t('skill_file_load_failed') + e.message); }
-}
-
-function editCurrentSkill() {
-  if (!_currentSkillDetail) return;
-  const s = _currentSkillDetail;
-  let category = '';
-  if (_skillsData) {
-    const match = _skillsData.find(x => x.name === s.name);
-    if (match) category = match.category || '';
   }
-  _skillPreFormDetail = { name: s.name, content: s.content, linked_files: s.linked_files };
-  _editingSkillName = s.name;
-  _skillMode = 'edit';
-  _renderSkillForm({ name: s.name, category, content: s.content || '', isEdit: true });
 }
 
-function openSkillCreate() {
-  if (typeof switchPanel === 'function' && _currentPanel !== 'skills') switchPanel('skills');
-  _skillPreFormDetail = _currentSkillDetail ? { ..._currentSkillDetail } : null;
-  _editingSkillName = null;
-  _skillMode = 'create';
-  _renderSkillForm({ name: '', category: '', content: '', isEdit: false });
+// ── Tab: 技能列表 ────────────────────────────────────────────────────────
+async function _skillsLoadList() {
+  const box = $('skillsListBody');
+  if (!box) return;
+  box.innerHTML = '<div class="skills-loading">加载中...</div>';
+  try {
+    const data = await api('/api/skills');
+    _skillsState.localData  = data.skills || [];
+    _skillsState.listLoaded = true;
+    _skillsRenderList();
+  } catch(e) {
+    box.innerHTML = `<div class="skills-error">加载失败: ${esc(e.message)}</div>`;
+  }
 }
 
-function _renderSkillForm({ name, category, content, isEdit }) {
-  const title = $('skillDetailTitle');
-  const body = $('skillDetailBody');
-  const empty = $('skillDetailEmpty');
-  if (!body || !title) return;
-  title.textContent = isEdit ? t('skills_edit') + ' · ' + name : t('new_skill');
-  const nameDisabled = isEdit ? 'disabled' : '';
-  const nameHint = isEdit ? `<div class="detail-form-hint">${esc(t('skill_rename_not_supported') || 'Renaming a skill is not supported. Create a new skill and delete the old one to rename.')}</div>` : '';
-  body.innerHTML = `
-    <div class="main-view-content">
-      <form class="detail-form" onsubmit="event.preventDefault(); saveSkillForm();">
-        <div class="detail-form-row">
-          <label for="skillFormName">${esc(t('skill_name') || 'Name')}</label>
-          <input type="text" id="skillFormName" value="${esc(name || '')}" placeholder="my-skill" autocomplete="off" ${nameDisabled} required>
-          ${nameHint}
-        </div>
-        <div class="detail-form-row">
-          <label for="skillFormCategory">${esc(t('skill_category') || 'Category')}</label>
-          <input type="text" id="skillFormCategory" value="${esc(category || '')}" placeholder="${esc(t('skill_category_placeholder') || 'Optional, e.g. devops')}" autocomplete="off">
-        </div>
-        <div class="detail-form-row">
-          <label for="skillFormContent">${esc(t('skill_content') || 'SKILL.md content')}</label>
-          <textarea id="skillFormContent" rows="18" placeholder="${esc(t('skill_content_placeholder') || 'YAML frontmatter + markdown body')}">${esc(content || '')}</textarea>
-        </div>
-        <div id="skillFormError" class="detail-form-error" style="display:none"></div>
-      </form>
-    </div>`;
-  body.style.display = '';
-  if (empty) empty.style.display = 'none';
-  _setSkillHeaderButtons(isEdit ? 'edit' : 'create');
-  const focusEl = isEdit ? $('skillFormCategory') : $('skillFormName');
-  if (focusEl) focusEl.focus();
-}
-
-function cancelSkillForm() {
-  _editingSkillName = null;
-  if (_skillPreFormDetail) {
-    const snap = _skillPreFormDetail;
-    _skillPreFormDetail = null;
-    _currentSkillDetail = snap;
-    _renderSkillDetail(snap.name, snap.content || '', snap.linked_files || {});
+function _skillsRenderList() {
+  const skills = _skillsState.localData || [];
+  const box = $('skillsListBody');
+  if (!box) return;
+  if (!skills.length) {
+    box.innerHTML = '<div class="skills-empty">暂无本地技能<br><small>在技能市场订阅技能后会出现在这里</small></div>';
     return;
   }
-  // Revert to empty state
-  _skillPreFormDetail = null;
-  _currentSkillDetail = null;
-  _skillMode = 'empty';
-  const body = $('skillDetailBody');
-  const empty = $('skillDetailEmpty');
-  const title = $('skillDetailTitle');
-  if (body) { body.innerHTML = ''; body.style.display = 'none'; }
-  if (empty) empty.style.display = '';
-  if (title) title.textContent = '';
-  _setSkillHeaderButtons('empty');
+  box.innerHTML = skills.map(s => `
+    <div class="skills-list-item" onclick="_skillsOpenFromList(${JSON.stringify(s)})">
+      <div class="skills-list-item-info">
+        <div class="skills-list-item-name">${esc(s.name || '')}</div>
+        <div class="skills-list-item-desc">${esc(s.description || '')}</div>
+      </div>
+      <label class="skill-toggle-wrap" onclick="event.stopPropagation()" title="${s.disabled ? '已禁用' : '已启用'}">
+        <input type="checkbox" class="skill-toggle" data-skill-name="${esc(s.name || '')}" ${s.disabled ? '' : 'checked'}
+          onchange="skillsToggleLocal(this.dataset.skillName, this.checked)">
+        <span class="skill-toggle-track"></span>
+      </label>
+    </div>
+  `).join('');
 }
 
-async function saveSkillForm() {
-  const nameInput = $('skillFormName');
-  const catInput = $('skillFormCategory');
-  const contentInput = $('skillFormContent');
-  const errEl = $('skillFormError');
-  if (!nameInput || !contentInput || !errEl) return;
-  const name = (nameInput.value || '').trim().toLowerCase().replace(/\s+/g, '-');
-  const category = (catInput ? (catInput.value || '').trim() : '');
-  const content = contentInput.value;
-  errEl.style.display = 'none';
-  if (!name) { errEl.textContent = t('skill_name_required'); errEl.style.display = ''; return; }
-  if (!content.trim()) { errEl.textContent = t('content_required'); errEl.style.display = ''; return; }
+async function skillsToggleLocal(name, enabled) {
   try {
-    await api('/api/skills/save', {method:'POST', body: JSON.stringify({name, category: category||undefined, content})});
-    showToast(_editingSkillName ? t('skill_updated') : t('skill_created'));
-    _skillsData = null;
-    _cronSkillsCache = null;
-    _editingSkillName = null;
-    _skillPreFormDetail = null;
-    await loadSkills();
-    // Reload the saved skill in read mode with fresh content
-    const row = document.querySelector(`.skill-item .skill-name`);
-    const match = document.querySelectorAll('.skill-item');
-    let targetEl = null;
-    match.forEach(el => {
-      const nm = el.querySelector('.skill-name');
-      if (nm && nm.textContent === name) targetEl = el;
+    await api('/api/skills/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ name, enabled }),
     });
-    await openSkill(name, targetEl);
-  } catch(e) { errEl.textContent = t('error_prefix') + e.message; errEl.style.display = ''; }
+    const skill = (_skillsState.localData || []).find(s => s.name === name);
+    if (skill) skill.disabled = !enabled;
+  } catch(e) {
+    setStatus('切换失败: ' + e.message);
+    _skillsState.listLoaded = false;
+    await _skillsLoadList();
+  }
 }
 
-// Back-compat aliases (delete flow + any old callers)
-const submitSkillSave = saveSkillForm;
-function toggleSkillForm(){ openSkillCreate(); }
+function _skillsOpenFromList(skill) {
+  _skillsOpenDetail(skill, 'list');
+  // Fetch content from local API
+  api(`/api/skills/content?name=${encodeURIComponent(skill.name)}`)
+    .then(data => {
+      if (!_skillsState.detailSkill || _skillsState.detailSkill.name !== skill.name) return;
+      _skillsState.detailSkill = { ..._skillsState.detailSkill, content: data.content || '' };
+      _skillsRenderDetail();
+    })
+    .catch(() => {}); // non-fatal; show without content
+}
 
-async function deleteCurrentSkill() {
-  if (!_currentSkillDetail) return;
-  const name = _currentSkillDetail.name;
-  const message = t('skill_delete_confirm')
-    ? t('skill_delete_confirm').replace('{0}', name)
-    : `Delete skill "${name}"?`;
-  const ok = await showConfirmDialog({
-    title: t('delete_title') || 'Delete',
-    message,
-    confirmLabel: t('delete_title') || 'Delete',
-    danger: true,
-    focusCancel: true,
-  });
-  if (!ok) return;
+// ── Tab: 技能市场 ────────────────────────────────────────────────────────
+async function _skillsLoadMarket() {
+  const box = $('skillsMarketBody');
+  if (!box) return;
+  box.innerHTML = '<div class="skills-loading">加载市场技能...</div>';
   try {
-    await api('/api/skills/delete', { method:'POST', body: JSON.stringify({ name }) });
-    _currentSkillDetail = null;
-    _skillPreFormDetail = null;
-    _skillsData = null;
-    _cronSkillsCache = null;
-    _skillMode = 'empty';
-    const body = $('skillDetailBody');
-    const empty = $('skillDetailEmpty');
-    const title = $('skillDetailTitle');
-    if (body) { body.innerHTML = ''; body.style.display = 'none'; }
-    if (empty) empty.style.display = '';
-    if (title) title.textContent = '';
-    _setSkillHeaderButtons('empty');
-    await loadSkills();
-    showToast(t('skill_deleted') || 'Skill deleted');
-  } catch(e) { setStatus(t('error_prefix') + e.message); }
+    const data = await api('/api/skills/market');
+    _skillsState.marketData   = data.skills || [];
+    _skillsState.marketLoaded = true;
+    _skillsRenderMarket();
+  } catch(e) {
+    box.innerHTML = `<div class="skills-error">加载失败: ${esc(e.message)}</div>`;
+  }
+}
+
+function _skillsRenderMarket() {
+  const skills = _skillsState.marketData || [];
+  const box = $('skillsMarketBody');
+  if (!box) return;
+  if (!skills.length) {
+    box.innerHTML = '<div class="skills-empty">暂无市场技能</div>';
+    return;
+  }
+  box.innerHTML = `<div class="skills-market-grid">${skills.map(s => `
+    <div class="skills-market-card" onclick="_skillsOpenFromMarket('${esc(s.id || '')}')">
+      <div class="skills-market-card-header">
+        <div class="skills-market-card-name">${esc(s.displayName || s.name || '')}</div>
+        <div class="skills-market-card-badge">v${esc(String(s.version || 1))}</div>
+      </div>
+      <div class="skills-market-card-desc">${esc(s.description || '')}</div>
+      <div class="skills-market-card-footer">
+        <span class="skills-market-card-count">⭐ ${s.subscriberCount || 0}</span>
+        ${(s.tags || []).slice(0, 3).map(t => `<span class="skills-tag">${esc(t)}</span>`).join('')}
+      </div>
+    </div>
+  `).join('')}</div>`;
+}
+
+async function _skillsOpenFromMarket(skillId) {
+  // Show stub immediately with cached data
+  const cached = (_skillsState.marketData || []).find(s => s.id === skillId);
+  _skillsOpenDetail(cached || { id: skillId, name: skillId, _loading: true }, 'market');
+  // Then fetch full detail in background
+  try {
+    const full = await api(`/api/skills/market/${encodeURIComponent(skillId)}`);
+    if (!_skillsState.detailSkill || _skillsState.detailSkill.id !== skillId) return;
+    _skillsState.detailSkill = { ..._skillsState.detailSkill, ...full };
+    _skillsRenderDetail();
+  } catch(e) {
+    const body = $('skillsDetailBody');
+    if (body && _skillsState.detailSkill && _skillsState.detailSkill.id === skillId) {
+      body.innerHTML = `<div class="skills-error">加载失败: ${esc(e.message)}</div>`;
+    }
+  }
+}
+
+// ── Tab: 我的技能 ────────────────────────────────────────────────────────
+async function _skillsLoadMine() {
+  const box = $('skillsMineBody');
+  if (!box) return;
+  box.innerHTML = '<div class="skills-loading">加载中...</div>';
+  try {
+    const data = await api('/api/skills/mine');
+    _skillsState.mineData   = data.skills || [];
+    _skillsState.mineLoaded = true;
+    _skillsRenderMine();
+  } catch(e) {
+    // 403 = not logged in (backend returns 403, not 401, to avoid redirect).
+    // api() attaches err.status from the HTTP response, so we check that.
+    if (e.status === 403 || (e.message && e.message.toLowerCase().includes('token'))) {
+      box.innerHTML = `
+        <div class="skills-login-prompt">
+          <div class="skills-login-icon">🔐</div>
+          <div class="skills-login-title">请先登录 neowow.studio</div>
+          <div class="skills-login-desc">登录后即可查看和管理您订阅的技能</div>
+          <button class="sm-btn" onclick="neowowAvatarClick(event)">登录 / 注册</button>
+        </div>`;
+    } else {
+      box.innerHTML = `<div class="skills-error">加载失败: ${esc(e.message)}</div>`;
+    }
+  }
+}
+
+function _skillsRenderMine() {
+  const skills = _skillsState.mineData || [];
+  const box = $('skillsMineBody');
+  if (!box) return;
+  if (!skills.length) {
+    box.innerHTML = `
+      <div class="skills-empty">
+        还没有订阅任何技能<br>
+        <small style="margin-top:4px;display:block">去「<a href="#" onclick="skillsSwitchTab('market');return false" style="color:var(--accent)">技能市场</a>」浏览并订阅</small>
+      </div>`;
+    return;
+  }
+  box.innerHTML = skills.map(s => `
+    <div class="skills-list-item" onclick="_skillsOpenFromMarket('${esc(s.id || '')}')">
+      <div class="skills-list-item-info">
+        <div class="skills-list-item-name">${esc(s.displayName || s.name || '')}</div>
+        <div class="skills-list-item-desc">${esc(s.description || '')}</div>
+      </div>
+      <div class="skills-mine-status">
+        ${s.isLocal
+          ? '<span class="skills-synced-badge">✓ 已同步</span>'
+          : '<span class="skills-unsynced-badge">未同步</span>'}
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── Detail view ─────────────────────────────────────────────────────────
+function _skillsOpenDetail(skill, source) {
+  _skillsState.detailSkill  = skill;
+  _skillsState.detailSource = source;
+  _skillsRenderView();
+  _skillsRenderDetail();
+}
+
+function skillsCloseDetail() {
+  _skillsState.detailSkill  = null;
+  _skillsState.detailSource = null;
+  _skillsRenderView();
+}
+
+function _skillsRenderDetail() {
+  const skill = _skillsState.detailSkill;
+  if (!skill) return;
+
+  const nameEl    = $('skillsDetailName');
+  const metaEl    = $('skillsDetailMeta');
+  const descEl    = $('skillsDetailDesc');
+  const tagsEl    = $('skillsDetailTags');
+  const bodyEl    = $('skillsDetailBody');
+  const sidebarEl = $('skillsDetailSidebarInfo');
+
+  if (nameEl) nameEl.textContent = skill.displayName || skill.name || skill.id || '';
+
+  if (metaEl) {
+    const parts = [];
+    if (skill.author)           parts.push(`作者：${esc(skill.author)}`);
+    else if (skill.displayName && skill.displayName !== (skill.name || ''))
+                                parts.push(`作者：${esc(skill.displayName)}`);
+    if (skill.subscriberCount != null) parts.push(`${skill.subscriberCount} 人订阅`);
+    metaEl.innerHTML = parts.join(' · ');
+  }
+
+  if (descEl) descEl.textContent = skill.description || '';
+
+  if (tagsEl) {
+    const tags = Array.isArray(skill.tags) ? skill.tags : [];
+    tagsEl.innerHTML = tags.map(t => `<span class="skills-tag">${esc(t)}</span>`).join('');
+  }
+
+  if (bodyEl) {
+    if (skill._loading) {
+      bodyEl.innerHTML = '<div class="skills-loading">加载内容...</div>';
+    } else if (skill._contentGated) {
+      bodyEl.innerHTML = '<div class="skills-gated">订阅此技能后可查看完整内容</div>';
+    } else {
+      const content = skill.content || '';
+      if (content) {
+        const { body: mdBody } = _stripYamlFrontmatter(content);
+        bodyEl.innerHTML = `<div class="main-view-content skill-detail-content">${renderMd(mdBody || content)}</div>`;
+      } else {
+        bodyEl.innerHTML = '<div class="skills-empty">暂无内容</div>';
+      }
+    }
+  }
+
+  if (sidebarEl) {
+    const rows = [
+      ['版本', `v${skill.version || 1}`],
+      ['订阅数', skill.subscriberCount != null ? String(skill.subscriberCount) : null],
+      ['类型', skill.isDefault ? '官方默认' : (skill.id ? '市场技能' : '本地技能')],
+    ].filter(([, v]) => v != null);
+    sidebarEl.innerHTML = rows.map(([k, v]) =>
+      `<div class="skills-sidebar-row"><span class="skills-sidebar-key">${esc(k)}</span><span class="skills-sidebar-val">${esc(String(v))}</span></div>`
+    ).join('');
+  }
+
+  _skillsUpdateSubscribeBtns();
+}
+
+function _skillsIsSubscribed(skill) {
+  if (!skill || !skill.id) return false;
+  return (_skillsState.mineData || []).some(s => s.id === skill.id);
+}
+
+function _skillsUpdateSubscribeBtns() {
+  const skill  = _skillsState.detailSkill;
+  const source = _skillsState.detailSource;
+  const detailBtn  = $('skillsDetailSubscribeBtn');
+  const sidebarBtn = $('skillsSidebarSubscribeBtn');
+
+  // Hide subscribe buttons for local-only skills (no id = can't subscribe)
+  const hide = source === 'list' || !skill?.id;
+  [detailBtn, sidebarBtn].forEach(btn => {
+    if (!btn) return;
+    btn.style.display = hide ? 'none' : '';
+    if (!hide) {
+      const subscribed = _skillsIsSubscribed(skill);
+      btn.textContent = subscribed ? '已订阅' : '订阅';
+      btn.className   = btn.id === 'skillsDetailSubscribeBtn'
+        ? `skills-subscribe-btn${subscribed ? ' subscribed' : ''}`
+        : `skills-sidebar-subscribe-btn${subscribed ? ' subscribed' : ''}`;
+    }
+  });
+}
+
+async function skillsToggleSubscribe() {
+  const skill = _skillsState.detailSkill;
+  if (!skill || !skill.id) return;
+
+  if (_skillsIsSubscribed(skill)) {
+    // Unsubscribe
+    try {
+      await api('/api/skills/unsubscribe', {
+        method: 'POST',
+        body: JSON.stringify({ id: skill.id }),
+      });
+      _skillsState.mineData   = (_skillsState.mineData || []).filter(s => s.id !== skill.id);
+      _skillsState.mineLoaded = false;
+      _skillsState.listLoaded = false;
+      setStatus('已取消订阅');
+      _skillsUpdateSubscribeBtns();
+    } catch(e) {
+      _skillsHandleAuthError(e);
+    }
+  } else {
+    // Subscribe
+    try {
+      await api('/api/skills/subscribe', {
+        method: 'POST',
+        body: JSON.stringify({ id: skill.id }),
+      });
+      if (!_skillsState.mineData) _skillsState.mineData = [];
+      if (!_skillsState.mineData.some(s => s.id === skill.id)) {
+        _skillsState.mineData.push({ ...skill, isLocal: true });
+      }
+      _skillsState.mineLoaded = false;
+      _skillsState.listLoaded = false;
+      setStatus('订阅成功！技能已同步到本地。');
+      _skillsUpdateSubscribeBtns();
+    } catch(e) {
+      _skillsHandleAuthError(e);
+    }
+  }
+}
+
+function _skillsHandleAuthError(e) {
+  const msg = (e && e.message) || '';
+  // api() attaches err.status from HTTP response; 403 = no auth token
+  if (e.status === 403 || msg.toLowerCase().includes('token')) {
+    // Show modal login prompt
+    const modal = document.createElement('div');
+    modal.className = 'skills-login-modal';
+    modal.innerHTML = `
+      <div class="skills-login-modal-box">
+        <div class="skills-login-title" style="margin-bottom:8px">需要登录</div>
+        <div class="skills-login-desc">订阅技能需要先登录 neowow.studio 账号。</div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="sm-btn" onclick="neowowAvatarClick(event);this.closest('.skills-login-modal').remove()">登录 / 注册</button>
+          <button class="sm-btn secondary" onclick="this.closest('.skills-login-modal').remove()">取消</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  } else {
+    setStatus('操作失败: ' + msg);
+  }
 }
 
 // ── Memory (main view) ──
@@ -4714,7 +4761,7 @@ async function switchToProfile(name) {
     }
 
     // ── Sidebar panels ─────────────────────────────────────────────────────
-    if (_currentPanel === 'skills') await loadSkills();
+    if (_currentPanel === 'skills') await loadSkillsPanel();
     if (_currentPanel === 'memory') await loadMemory();
     if (_currentPanel === 'tasks') await loadCrons();
     if (_currentPanel === 'kanban') await loadKanban();
