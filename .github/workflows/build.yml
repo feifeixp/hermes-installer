@@ -24,6 +24,7 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  actions: write      # needed to dispatch mirror-to-oss workflow
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════════
@@ -169,3 +170,31 @@ jobs:
             dist/Hermes-Installer-Windows.zip
             dist/Hermes Installer.exe
           generate_release_notes: true
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Mirror — dispatch OSS sync after both builds upload to the release
+  # ═══════════════════════════════════════════════════════════════════════
+  #
+  # WHY: GitHub does not propagate the `release: published` event to
+  # other workflows when the release is created/updated by GITHUB_TOKEN
+  # (softprops/action-gh-release uses GITHUB_TOKEN). This is by design
+  # to prevent infinite workflow loops. So mirror-to-oss.yml's
+  # `on: release: [published]` trigger never fires automatically.
+  #
+  # FIX: Run this job after both macOS + Windows jobs succeed, and
+  # explicitly dispatch mirror-to-oss.yml with the tag name.
+  mirror:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Dispatch mirror-to-oss
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          echo "Dispatching mirror-to-oss for tag: $TAG"
+          gh workflow run mirror-to-oss.yml \
+            --repo "${{ github.repository }}" \
+            --field tag="$TAG"
+          echo "✓ mirror-to-oss dispatched (runs async in background)"
