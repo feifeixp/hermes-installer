@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -92,14 +93,111 @@ _update_notice_cache: dict = {}     # {data: dict, fetched_at: float}
 # the GitHub Releases API for the repo that publishes the Docker image and
 # compare against the baked-in _version.py tag.
 _IS_DOCKER = Path("/.within_container").exists()
-_DOCKER_GITHUB_REPO = "feifeixp/hermes-installer"
-_DOCKER_IMAGE       = f"ghcr.io/{_DOCKER_GITHUB_REPO}"
+_DOCKER_GITHUB_REPO  = "feifeixp/hermes-installer"
+_DOCKER_IMAGE        = f"ghcr.io/{_DOCKER_GITHUB_REPO}"
 _GITHUB_RELEASES_API = f"https://api.github.com/repos/{_DOCKER_GITHUB_REPO}/releases/latest"
+_DOCKER_SOCKET       = Path("/var/run/docker.sock")
 _docker_update_cache: dict = {}     # {data: dict, fetched_at: float}
 
 
 def _neowow_only() -> bool:
     return os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}
+
+
+# ── Docker socket HTTP client ─────────────────────────────────────────────────
+
+class _UnixHTTPConnection:
+    """Minimal HTTP/1.1 client over a Unix-domain socket.
+
+    Avoids taking a dependency on the ``docker`` Python SDK or requiring the
+    ``docker`` CLI binary inside the container.  Only used when
+    ``/var/run/docker.sock`` is mounted, i.e. the user explicitly opted in to
+    Docker-managed updates by adding the socket volume to docker-compose.yml.
+    """
+
+    def __init__(self, socket_path: str = "/var/run/docker.sock"):
+        import http.client as _http
+        import socket as _sock
+
+        class _Conn(_http.HTTPConnection):
+            def connect(self_inner) -> None:  # noqa: N805
+                self_inner.sock = _sock.socket(
+                    _sock.AF_UNIX, _sock.SOCK_STREAM
+                )
+                self_inner.sock.settimeout(self.timeout)
+                self_inner.sock.connect(socket_path)
+
+        self._cls = _Conn
+        self.timeout = 300  # long timeout for image pulls
+
+    def request(self, method: str, path: str, body=None, headers=None):
+        import json as _j
+        conn = self._cls("localhost")
+        h = {"Content-Type": "application/json"}
+        if headers:
+            h.update(headers)
+        body_bytes = _j.dumps(body).encode() if (body is not None) else None
+        conn.request(method, path, body=body_bytes, headers=h)
+        resp = conn.getresponse()
+        raw = resp.read()
+        try:
+            data = _j.loads(raw) if raw.strip() else {}
+        except Exception:
+            data = {"_raw": raw.decode(errors="replace")}
+        return resp.status, data
+
+
+def docker_socket_available() -> bool:
+    """Return True when the Docker socket is mounted and accessible."""
+    return _DOCKER_SOCKET.exists() and os.access(_DOCKER_SOCKET, os.W_OK)
+
+
+def pull_docker_image(image: str = _DOCKER_IMAGE, tag: str = "latest") -> dict:
+    """Pull *image*:*tag* via the Docker socket API.
+
+    Requires the Docker socket to be mounted (docker_socket_available() == True).
+    Blocking call — image pulls can take minutes on slow connections.
+
+    Returns:
+      ok          bool   — True on success
+      status      int    — HTTP status from Docker API
+      message     str    — human-readable result or error detail
+    """
+    if not docker_socket_available():
+        return {
+            "ok": False,
+            "status": 0,
+            "message": (
+                "Docker socket 未挂载。请在 docker-compose.yml 的 volumes 中"
+                " 添加 /var/run/docker.sock:/var/run/docker.sock 后重启容器。"
+            ),
+        }
+    try:
+        client = _UnixHTTPConnection()
+        # Docker Engine API: POST /images/create?fromImage=IMAGE&tag=TAG
+        path = f"/images/create?fromImage={urllib.parse.quote(image)}&tag={urllib.parse.quote(tag)}"
+        status, data = client.request("POST", path)
+        if status in (200, 201):
+            # Invalidate cached update notice so next check shows "up-to-date"
+            _docker_update_cache.clear()
+            return {
+                "ok": True,
+                "status": status,
+                "message": f"镜像 {image}:{tag} 拉取完成，运行 `docker compose up -d` 以应用。",
+            }
+        err = data.get("message") or str(data)
+        return {
+            "ok": False,
+            "status": status,
+            "message": f"拉取失败 (HTTP {status}): {err[:200]}",
+        }
+    except Exception as exc:
+        logger.warning("pull_docker_image failed: %s", exc)
+        return {
+            "ok": False,
+            "status": 0,
+            "message": f"Docker socket 通信失败：{exc}",
+        }
 
 
 def _version_newer(latest: str, current: str) -> bool:

@@ -1748,45 +1748,77 @@
                background:transparent;color:var(--text);cursor:pointer;font-size:12px">稍后</button>`;
 
     if (isDocker) {
-      // Docker mode: show copy-able shell commands instead of a download link.
-      const pullCmd = `docker pull ${dockerImage}:latest`;
-      const upCmd   = 'docker compose up -d --force-recreate';
-      const allCmds = `${pullCmd}\n${upCmd}`;
-      const codeStyle = [
-        'display:block',
-        'margin:4px 0',
-        'padding:3px 7px',
-        'background:rgba(0,0,0,0.35)',
-        'border-radius:4px',
-        'font-family:monospace',
-        'font-size:12px',
-        'color:#a5f3fc',
-        'white-space:nowrap',
-        'overflow:hidden',
-        'text-overflow:ellipsis',
-        'max-width:520px',
-      ].join(';');
-      const copyBtnStyle = [
-        'flex-shrink:0',
-        'padding:3px 9px',
-        'border-radius:5px',
-        'border:1px solid rgba(94,96,206,0.4)',
-        'background:transparent',
-        'color:var(--text)',
-        'cursor:pointer',
-        'font-size:12px',
-        'margin-left:6px',
-      ].join(';');
+      // ── Docker mode ────────────────────────────────────────────────────────
+      // Primary path: "立即拉取" button calls POST /api/updates/docker-pull
+      // which pulls the new image via the Docker socket. After pull, the user
+      // only needs to run `docker compose up -d` (NOT docker pull again).
+      //
+      // Fallback (socket not mounted): show copy-able commands as before.
+      const pullCmd   = `docker pull ${dockerImage}:latest`;
+      const upCmd     = 'docker compose up -d';
+      const allCmds   = `${pullCmd}\n${upCmd}`;
+      const codeStyle = 'display:block;margin:3px 0;padding:3px 7px;background:rgba(0,0,0,0.35);border-radius:4px;font-family:monospace;font-size:12px;color:#a5f3fc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:480px';
+      const btnStyle  = 'flex-shrink:0;padding:4px 12px;border-radius:5px;border:1px solid rgba(94,96,206,0.5);background:linear-gradient(135deg,rgba(94,96,206,0.25),rgba(94,96,206,0.12));color:var(--text);cursor:pointer;font-size:12px;font-weight:600';
+
+      // The pull button ID is unique per banner so we can update its text from the click handler
+      const pullBtnId = 'neowowDockerPullBtn';
+
       banner.innerHTML = `
         <span style="font-size:18px;flex-shrink:0">🐳</span>
-        <span style="flex:1;min-width:0;line-height:1.7">
-          <strong style="color:var(--accent,#5e60ce)">Hermes Docker ${versionLabel}</strong> 已发布，请在宿主机执行：
-          <code style="${codeStyle}">${pullCmd}</code>
-          <code style="${codeStyle}">${upCmd}</code>
+        <span style="flex:1;min-width:0;line-height:1.8">
+          <strong style="color:var(--accent,#5e60ce)">Hermes Docker ${versionLabel}</strong> 已发布。
+          <span id="neowowDockerPullStatus" style="color:var(--text-muted,#94a3b8);font-size:12px">
+            点击"立即拉取"可在后台下载新镜像，完成后运行 <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;font-size:11px">docker compose up -d</code> 应用。
+          </span>
         </span>
-        <button onclick="try{navigator.clipboard.writeText(${JSON.stringify(allCmds)}).then(()=>{this.textContent='已复制✓';setTimeout(()=>{this.textContent='复制命令'},1500)});}catch(e){}" style="${copyBtnStyle}">复制命令</button>
+        <button id="${pullBtnId}" style="${btnStyle};margin-left:6px" onclick="neowowDockerPull(this)">立即拉取</button>
         ${dismissBtn}
       `;
+
+      // Expose pull handler globally so the inline onclick can find it
+      window.neowowDockerPull = async function(btn) {
+        const statusEl = document.getElementById('neowowDockerPullStatus');
+        btn.disabled = true;
+        btn.textContent = '拉取中…';
+        btn.style.opacity = '0.6';
+        if (statusEl) statusEl.innerHTML = '<span style="color:#f59e0b">⏳ 正在下载新镜像，请稍候（可能需要数分钟）…</span>';
+        try {
+          const r = await fetch('/api/updates/docker-pull', { method: 'POST', cache: 'no-store' });
+          const d = await r.json();
+          if (d.ok) {
+            btn.textContent = '✓ 已拉取';
+            btn.style.opacity = '1';
+            btn.style.background = 'linear-gradient(135deg,rgba(16,185,129,0.3),rgba(16,185,129,0.15))';
+            btn.style.borderColor = 'rgba(16,185,129,0.5)';
+            if (statusEl) statusEl.innerHTML = `
+              <span style="color:#10b981">✓ 新镜像已下载完成！</span>
+              在宿主机运行：
+              <code style="${codeStyle}">docker compose up -d</code>
+              即可切换到新版本（约5秒，页面将短暂中断）。
+            `;
+          } else if (d.socket === false) {
+            // Socket not mounted — fall back to copy-commands UI
+            btn.style.display = 'none';
+            if (statusEl) statusEl.innerHTML = `
+              Docker socket 未挂载，请手动执行：
+              <code style="${codeStyle}">${pullCmd}</code>
+              <code style="${codeStyle}">${upCmd}</code>
+              <button onclick="try{navigator.clipboard.writeText(${JSON.stringify(allCmds)}).then(()=>{this.textContent='已复制✓';setTimeout(()=>{this.textContent='复制命令'},1500)});}catch(e){}"
+                style="margin-top:4px;padding:3px 9px;border-radius:4px;border:1px solid rgba(94,96,206,0.4);background:transparent;color:var(--text);cursor:pointer;font-size:11px">复制命令</button>
+            `;
+          } else {
+            btn.disabled = false;
+            btn.textContent = '重试';
+            btn.style.opacity = '1';
+            if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444">✗ ${d.message || '拉取失败，请手动运行 docker pull'}</span>`;
+          }
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = '重试';
+          btn.style.opacity = '1';
+          if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444">✗ 请求失败：${err.message}</span>`;
+        }
+      };
     } else {
       // Non-Docker: show download link as before.
       const msg = data.message ? ` — ${data.message}` : '';

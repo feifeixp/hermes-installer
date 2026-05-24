@@ -5737,6 +5737,28 @@ def handle_post(handler, parsed) -> bool:
         return _handle_session_import(handler, body)
 
     # ── Self-update (POST) ──
+    # ── Docker one-click image pull ──────────────────────────────────────────
+    # Pulls the latest Docker image via the Docker socket so the user only
+    # needs to run `docker compose up -d` afterwards (not docker pull too).
+    # Requires /var/run/docker.sock to be mounted in docker-compose.yml.
+    if parsed.path == "/api/updates/docker-pull":
+        from api.neowow import _IS_DOCKER, docker_socket_available, pull_docker_image
+        if not _IS_DOCKER:
+            return bad(handler, "仅在 Docker 容器内可用", status=400)
+        if not docker_socket_available():
+            return j(handler, {
+                "ok": False,
+                "socket": False,
+                "message": (
+                    "Docker socket 未挂载。在 docker-compose.yml 的 hermes-webui "
+                    "服务下添加：\n  volumes:\n    - /var/run/docker.sock:/var/run/docker.sock\n"
+                    "然后重启容器即可启用一键更新。"
+                ),
+            })
+        # Blocking call — may take minutes; the frontend shows a spinner.
+        result = pull_docker_image()
+        return j(handler, {**result, "socket": True})
+
     if parsed.path in ("/api/updates/apply", "/api/updates/force"):
         # NEOWOW_ONLY: updates are managed centrally by Neowow.
         # Block all client-initiated git pulls — they would overwrite
