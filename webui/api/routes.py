@@ -5962,6 +5962,31 @@ def handle_post(handler, parsed) -> bool:
             logger.exception("neowow jwt save failed")
             return bad(handler, str(e), status=500)
 
+    # One-shot provider activation — called by the onboarding overlay after
+    # first login.  Reads the JWT from neowow.json automatically (via
+    # apply_onboarding_setup), writes neowow-coding-plan to config.yaml.
+    if parsed.path == "/api/neowow/activate-provider":
+        try:
+            from api.onboarding import (
+                _NEOWOW_CODING_PLAN_PROVIDER_ID,
+                _fetch_neowow_plan_models,
+                apply_onboarding_setup,
+            )
+            models, default_model = _fetch_neowow_plan_models()
+            model = default_model or (models[0]["id"] if models else "deepseek-v4-flash")
+            apply_onboarding_setup({
+                "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
+                "model": model,
+            })
+            return j(handler, {
+                "ok": True,
+                "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
+                "model": model,
+            })
+        except Exception as e:
+            logger.warning("[activate-provider] failed: %s", e)
+            return bad(handler, str(e), status=500)
+
     # OAuth browser launcher — pywebview blocks window.open() inside
     # the embedded WebUI, so the JS handler calls this endpoint
     # instead. We use Python's `webbrowser` module to spawn the OS
