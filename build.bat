@@ -30,6 +30,28 @@ REM ── 2. Upgrade pip first ────────────────
 echo  → 升级 pip...
 python -m pip install --upgrade pip --quiet
 
+REM ── 2.5 Prepare uv.exe (bundle into installer) ───────────────────────────
+echo  → 准备 uv 安装工具...
+if not exist tools mkdir tools
+if not exist tools\uv.exe (
+    echo    正在从 GitHub 下载 uv.exe...
+    powershell -Command ^
+        "$url='https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip';" ^
+        "Invoke-WebRequest -Uri $url -OutFile uv_dl.zip -UseBasicParsing;" ^
+        "Expand-Archive uv_dl.zip -DestinationPath uv_tmp -Force;" ^
+        "Copy-Item uv_tmp\uv.exe tools\uv.exe -Force;" ^
+        "Remove-Item uv_dl.zip,uv_tmp -Recurse -Force;" ^
+        "Write-Host 'uv.exe ready'"
+    if not exist tools\uv.exe (
+        echo  ❌ uv.exe 下载失败，请检查网络后重试
+        pause
+        exit /b 1
+    )
+) else (
+    echo    ✓ uv.exe 已存在，跳过下载
+)
+echo  ✓ uv 准备完成
+
 REM ── 3. Install deps (retry once on failure) ───────────────────────────────
 echo  → 安装打包依赖（首次约 1-2 分钟）...
 
