@@ -85,26 +85,143 @@ _UPDATE_NOTICE_URL  = f"{_NEOWOW_BASE}/api/public/update-notice"
 _UPDATE_NOTICE_TTL  = 1800          # seconds; same as native update cache
 _update_notice_cache: dict = {}     # {data: dict, fetched_at: float}
 
+# ── Docker image update check ────────────────────────────────────────────────
+#
+# When running inside a Docker container (/.within_container exists) the git
+# checkout is absent so the native update checker is a no-op. Instead we poll
+# the GitHub Releases API for the repo that publishes the Docker image and
+# compare against the baked-in _version.py tag.
+_IS_DOCKER = Path("/.within_container").exists()
+_DOCKER_GITHUB_REPO = "feifeixp/hermes-installer"
+_DOCKER_IMAGE       = f"ghcr.io/{_DOCKER_GITHUB_REPO}"
+_GITHUB_RELEASES_API = f"https://api.github.com/repos/{_DOCKER_GITHUB_REPO}/releases/latest"
+_docker_update_cache: dict = {}     # {data: dict, fetched_at: float}
+
 
 def _neowow_only() -> bool:
     return os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}
 
 
+def _version_newer(latest: str, current: str) -> bool:
+    """Return True when *latest* is strictly newer than *current* (semver-ish).
+
+    Strips a leading 'v' and ignores pre-release suffixes after '-' so that
+    comparing 'v1.3.6' against 'v1.3.5-dirty' works as expected.
+    """
+    def _parse(v: str) -> tuple[int, ...]:
+        clean = v.lstrip("v").split("-")[0]   # drop dirty/pre-release suffix
+        parts = clean.split(".")[:3]
+        result = []
+        for part in parts:
+            try:
+                result.append(int(part))
+            except ValueError:
+                result.append(0)
+        return tuple(result)
+
+    try:
+        return _parse(latest) > _parse(current)
+    except Exception:
+        return False
+
+
+def _check_docker_github_release() -> dict:
+    """Check GitHub Releases API for a newer Docker image (30-min cached).
+
+    Returns a dict compatible with get_update_notice():
+      available     bool  — True when a newer release exists
+      version       str   — latest tag, e.g. "1.3.6"  (empty when not available)
+      message       str   — first 200 chars of release notes
+      downloadUrl   str   — GitHub release page URL
+      publishedAt   str   — ISO timestamp from GitHub
+      isDocker      bool  — always True; tells the UI to show docker pull cmds
+      dockerImage   str   — e.g. "ghcr.io/feifeixp/hermes-installer"
+      currentVersion str  — running version (from _version.py / git describe)
+    """
+    import time
+    now = time.time()
+    if _docker_update_cache and now - _docker_update_cache.get("fetched_at", 0) < _UPDATE_NOTICE_TTL:
+        return dict(_docker_update_cache["data"])
+
+    try:
+        from api.updates import WEBUI_VERSION as _current
+    except Exception:
+        _current = "unknown"
+
+    try:
+        req = urllib.request.Request(
+            _GITHUB_RELEASES_API,
+            headers={
+                "User-Agent": f"hermes-webui/{_current}",
+                "Accept":     "application/vnd.github.v3+json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = json.loads(resp.read().decode())
+        if not isinstance(raw, dict):
+            raise ValueError("unexpected GitHub API response")
+
+        latest_tag   = str(raw.get("tag_name") or "")
+        release_url  = str(raw.get("html_url")  or "")
+        release_body = str(raw.get("body")       or "")[:200].strip()
+        published_at = str(raw.get("published_at") or "")
+
+        available = _version_newer(latest_tag, _current)
+        result = {
+            "available":      available,
+            "version":        latest_tag.lstrip("v") if available else "",
+            "message":        release_body if available else "",
+            "downloadUrl":    release_url if available else "",
+            "publishedAt":    published_at if available else "",
+            "isDocker":       True,
+            "dockerImage":    _DOCKER_IMAGE,
+            "currentVersion": _current,
+            "latestTag":      latest_tag,
+        }
+    except Exception as exc:
+        logger.debug("docker github-release check failed: %s", exc)
+        result = {
+            "available":      False,
+            "version":        "",
+            "message":        "",
+            "downloadUrl":    "",
+            "publishedAt":    "",
+            "isDocker":       True,
+            "dockerImage":    _DOCKER_IMAGE,
+            "currentVersion": _current,
+        }
+
+    _docker_update_cache["data"]       = result
+    _docker_update_cache["fetched_at"] = now
+    return dict(result)
+
+
 def get_update_notice() -> dict:
     """Fetch the Neowow-managed update notice (cached 30 min).
 
+    In Docker environments, falls back to checking the GitHub Releases API
+    for the published Docker image tag instead of the admin-controlled notice,
+    because the admin notice pipeline is designed for the native installer and
+    Docker users need version-aware docker-pull instructions.
+
     Returns a dict with at least:
       available   bool   — True when a new version is ready
-      version     str    — e.g. "0.52.0" (empty when not available)
-      message     str    — admin-authored release note (may be empty)
-      downloadUrl str    — link to download / changelogs page
-      publishedAt str    — ISO timestamp when admin published the notice
+      version     str    — e.g. "1.3.6" (empty when not available)
+      message     str    — release note (may be empty)
+      downloadUrl str    — link to release / changelogs page
+      publishedAt str    — ISO timestamp when the release was published
+      isDocker    bool   — True when running inside Docker (drives UI copy)
     Returns {"available": False} on network error / not configured.
     """
     import time
     now = time.time()
     if _update_notice_cache and now - _update_notice_cache.get("fetched_at", 0) < _UPDATE_NOTICE_TTL:
         return _update_notice_cache["data"]
+
+    # Docker: check the GitHub Releases API instead of the admin-pushed notice.
+    # The docker_update_cache has its own TTL so this is still bounded.
+    if _IS_DOCKER:
+        return _check_docker_github_release()
 
     try:
         req = urllib.request.Request(
@@ -125,6 +242,7 @@ def get_update_notice() -> dict:
         "message":      str(data.get("message") or ""),
         "downloadUrl":  str(data.get("downloadUrl") or ""),
         "publishedAt":  str(data.get("publishedAt") or ""),
+        "isDocker":     False,
     }
     _update_notice_cache["data"]       = result
     _update_notice_cache["fetched_at"] = now

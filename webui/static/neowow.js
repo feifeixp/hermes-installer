@@ -1735,25 +1735,73 @@
       }
     }
 
-    const versionLabel = data.version ? `v${data.version}` : '新版本';
-    const msg          = data.message ? ` — ${data.message}` : '';
-    const url          = data.downloadUrl || 'https://app.neowow.studio/agent';
-
-    banner.innerHTML = `
-      <span style="font-size:18px;flex-shrink:0">🚀</span>
-      <span style="flex:1;min-width:0">
-        <strong style="color:var(--accent,#5e60ce)">Neowow Hermes ${versionLabel}</strong>
-        已发布${msg}。请<a href="${url}" target="_blank" rel="noopener"
-          style="color:var(--accent,#5e60ce);text-decoration:underline">前往下载页</a>更新。
-      </span>
-      <button onclick="document.getElementById('neowowUpdateBanner').style.display='none';
-                       sessionStorage.setItem('neowow-update-dismissed','${data.version||''}');"
-        style="flex-shrink:0;padding:4px 10px;border-radius:5px;border:1px solid rgba(94,96,206,0.4);
-               background:transparent;color:var(--text);cursor:pointer;font-size:12px">稍后</button>
-    `;
     // Respect "稍后" across page refreshes for the same version
     const dismissed = sessionStorage.getItem('neowow-update-dismissed');
     if (dismissed && dismissed === String(data.version || '')) return;
+
+    const versionLabel = data.version ? `v${data.version}` : '新版本';
+    const isDocker     = !!data.isDocker;
+    const dockerImage  = data.dockerImage || 'ghcr.io/feifeixp/hermes-installer';
+    const dismissBtn   = `<button onclick="document.getElementById('neowowUpdateBanner').style.display='none';
+                       sessionStorage.setItem('neowow-update-dismissed','${data.version||''}');"
+        style="flex-shrink:0;padding:4px 10px;border-radius:5px;border:1px solid rgba(94,96,206,0.4);
+               background:transparent;color:var(--text);cursor:pointer;font-size:12px">稍后</button>`;
+
+    if (isDocker) {
+      // Docker mode: show copy-able shell commands instead of a download link.
+      const pullCmd = `docker pull ${dockerImage}:latest`;
+      const upCmd   = 'docker compose up -d --force-recreate';
+      const allCmds = `${pullCmd}\n${upCmd}`;
+      const codeStyle = [
+        'display:block',
+        'margin:4px 0',
+        'padding:3px 7px',
+        'background:rgba(0,0,0,0.35)',
+        'border-radius:4px',
+        'font-family:monospace',
+        'font-size:12px',
+        'color:#a5f3fc',
+        'white-space:nowrap',
+        'overflow:hidden',
+        'text-overflow:ellipsis',
+        'max-width:520px',
+      ].join(';');
+      const copyBtnStyle = [
+        'flex-shrink:0',
+        'padding:3px 9px',
+        'border-radius:5px',
+        'border:1px solid rgba(94,96,206,0.4)',
+        'background:transparent',
+        'color:var(--text)',
+        'cursor:pointer',
+        'font-size:12px',
+        'margin-left:6px',
+      ].join(';');
+      banner.innerHTML = `
+        <span style="font-size:18px;flex-shrink:0">🐳</span>
+        <span style="flex:1;min-width:0;line-height:1.7">
+          <strong style="color:var(--accent,#5e60ce)">Hermes Docker ${versionLabel}</strong> 已发布，请在宿主机执行：
+          <code style="${codeStyle}">${pullCmd}</code>
+          <code style="${codeStyle}">${upCmd}</code>
+        </span>
+        <button onclick="try{navigator.clipboard.writeText(${JSON.stringify(allCmds)}).then(()=>{this.textContent='已复制✓';setTimeout(()=>{this.textContent='复制命令'},1500)});}catch(e){}" style="${copyBtnStyle}">复制命令</button>
+        ${dismissBtn}
+      `;
+    } else {
+      // Non-Docker: show download link as before.
+      const msg = data.message ? ` — ${data.message}` : '';
+      const url = data.downloadUrl || 'https://app.neowow.studio/agent';
+      banner.innerHTML = `
+        <span style="font-size:18px;flex-shrink:0">🚀</span>
+        <span style="flex:1;min-width:0">
+          <strong style="color:var(--accent,#5e60ce)">Neowow Hermes ${versionLabel}</strong>
+          已发布${msg}。请<a href="${url}" target="_blank" rel="noopener"
+            style="color:var(--accent,#5e60ce);text-decoration:underline">前往下载页</a>更新。
+        </span>
+        ${dismissBtn}
+      `;
+    }
+
     banner.style.display = 'flex';
   }
 
