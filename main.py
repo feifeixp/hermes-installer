@@ -370,6 +370,95 @@ def _check_webview2_windows() -> "str | None":
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Windows install helpers
+# ══════════════════════════════════════════════════════════════════════════
+
+def _is_agent_installed() -> bool:
+    """Return True if the hermes-agent venv exists and run_agent is importable.
+
+    Windows-only check. Fast (<1 s) — runs on every startup to decide
+    whether to show the install wizard.
+    """
+    venv_python = (
+        Path.home() / ".hermes" / "hermes-agent" / "venv" / "Scripts" / "python.exe"
+    )
+    if not venv_python.exists():
+        log.info("agent not installed: venv python not found at %s", venv_python)
+        return False
+    agent_dir = Path.home() / ".hermes" / "hermes-agent"
+    try:
+        result = subprocess.run(
+            [str(venv_python), "-c", "import run_agent; print('ok')"],
+            capture_output=True,
+            timeout=10,
+            env={**os.environ, "PYTHONPATH": str(agent_dir)},
+        )
+        if result.returncode == 0:
+            log.info("agent installed and importable at %s", venv_python)
+            return True
+        log.info(
+            "agent check failed (rc=%s): %s",
+            result.returncode,
+            result.stderr.decode("utf-8", errors="replace")[:200],
+        )
+        return False
+    except Exception as exc:
+        log.info("agent check exception: %s", exc)
+        return False
+
+
+def _find_system_python() -> "str | None":
+    """Find a system Python ≥3.11 on Windows PATH.
+
+    Returns the executable path, or None if not found. Used as a hint
+    to uv so it doesn't need to download Python from the internet.
+    """
+    for name in ("python3.13", "python3.12", "python3.11", "python3", "python"):
+        found = shutil.which(name)
+        if not found:
+            continue
+        try:
+            result = subprocess.run(
+                [found, "-c",
+                 "import sys; v=sys.version_info; exit(0 if v>=(3,11) else 1)"],
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                log.info("found system Python ≥3.11: %s", found)
+                return found
+        except Exception:
+            continue
+    log.info("no system Python ≥3.11 found — uv will manage its own Python")
+    return None
+
+
+def _run_uv(uv_exe: Path, args: "list[str]", error_prefix: str = "uv 命令失败") -> None:
+    """Run a uv command, streaming output to console + log.
+
+    Raises RuntimeError (with last 10 output lines) on non-zero exit.
+    """
+    cmd = [str(uv_exe)] + args
+    log.info("Running uv: %s", " ".join(cmd))
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env={**os.environ, "UV_NO_PROGRESS": "1", "PYTHONUTF8": "1"},
+    )
+    output_lines: list[str] = []
+    for raw in proc.stdout:
+        line = raw.decode("utf-8", errors="replace").rstrip()
+        print(f"    {line}", flush=True)
+        log.info("[uv] %s", line)
+        output_lines.append(line)
+    proc.wait()
+    if proc.returncode != 0:
+        tail = "\n".join(output_lines[-10:])
+        raise RuntimeError(f"{error_prefix} (exit {proc.returncode}):\n{tail}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Native window — pywebview (macOS cocoa + Windows edgechromium)
 # ══════════════════════════════════════════════════════════════════════════
 def _open_native_window(title: str, url: str, on_close=None, current_mode: str = "local"):
