@@ -35,13 +35,7 @@ echo  → 准备 uv 安装工具...
 if not exist tools mkdir tools
 if not exist tools\uv.exe (
     echo    正在从 GitHub 下载 uv.exe...
-    powershell -Command ^
-        "$url='https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip';" ^
-        "Invoke-WebRequest -Uri $url -OutFile uv_dl.zip -UseBasicParsing;" ^
-        "Expand-Archive uv_dl.zip -DestinationPath uv_tmp -Force;" ^
-        "Copy-Item uv_tmp\uv.exe tools\uv.exe -Force;" ^
-        "Remove-Item uv_dl.zip,uv_tmp -Recurse -Force;" ^
-        "Write-Host 'uv.exe ready'"
+    powershell -Command "Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile uv_dl.zip -UseBasicParsing -TimeoutSec 60; Expand-Archive uv_dl.zip -DestinationPath uv_tmp -Force; Copy-Item uv_tmp\uv.exe tools\uv.exe -Force; Remove-Item uv_dl.zip,uv_tmp -Recurse -Force"
     if not exist tools\uv.exe (
         echo  ❌ uv.exe 下载失败，请检查网络后重试
         pause

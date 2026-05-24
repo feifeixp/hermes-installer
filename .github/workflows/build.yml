@@ -120,12 +120,13 @@ jobs:
           # Download latest uv for Windows x64
           $url = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
           Write-Host "Downloading uv from $url ..."
-          Invoke-WebRequest -Uri $url -OutFile uv_download.zip -UseBasicParsing
+          Invoke-WebRequest -Uri $url -OutFile uv_download.zip -UseBasicParsing -TimeoutSec 60
           New-Item -ItemType Directory -Force -Path tools | Out-Null
           Expand-Archive -Path uv_download.zip -DestinationPath uv_tmp -Force
           # The zip contains uv.exe at the root
           Copy-Item uv_tmp\uv.exe tools\uv.exe -Force
           Remove-Item uv_download.zip, uv_tmp -Recurse -Force
+          & tools\uv.exe --version | Out-Null
           $size = [math]::Round((Get-Item tools\uv.exe).Length / 1MB, 1)
           Write-Host "✓ tools\uv.exe ready ($size MB)"
 
