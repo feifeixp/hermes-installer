@@ -682,6 +682,11 @@ _PROVIDER_ENV_VAR_ALIASES: dict[str, tuple[str, ...]] = {
     # #1500 — agent runtime reads LM_API_KEY (canonical), but WebUI builds
     # ≤ v0.50.272 wrote LMSTUDIO_API_KEY into .env.  Keep reading both.
     "lmstudio": ("LMSTUDIO_API_KEY",),
+    # Phase β onboarding previously wrote the JWT under NEOWOW_CODING_PLAN_API_KEY
+    # before the canonical name was standardised to NEOWOW_TOKEN.  Users who
+    # onboarded on an older build will have the old name in their .env;
+    # fall back to it so their credentials keep working after upgrade.
+    "neowow-coding-plan": ("NEOWOW_CODING_PLAN_API_KEY",),
 }
 
 # Providers that use OAuth or token flows — their credentials are managed
@@ -1447,6 +1452,23 @@ def _provider_is_oauth(provider_id: str) -> bool:
     return provider_id in _OAUTH_PROVIDERS
 
 
+def _is_neowow_only_mode(cfg: dict | None = None) -> bool:
+    """Return True when the WebUI should show only Neowow-provided models.
+
+    Triggered by either:
+      - HERMES_NEOWOW_ONLY env var  (managed cloud deployments), OR
+      - neowow_cloud.slug present in config.yaml (desktop install synced
+        to Neowow Studio — user has chosen the managed model catalogue).
+    """
+    if os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}:
+        return True
+    try:
+        c = cfg if cfg is not None else get_config()
+        return bool((c.get("neowow_cloud") or {}).get("slug"))
+    except Exception:
+        return False
+
+
 # SECTION: Public API
 
 
@@ -1483,7 +1505,7 @@ def get_providers() -> dict[str, Any]:
     # loadProvidersPanel) was missing the gate, so the user saw the
     # full multi-vendor list in Settings even though they were locked
     # to coding-plan everywhere else. Filter here too.
-    if os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}:
+    if _is_neowow_only_mode(cfg=cfg):
         known_ids = {pid for pid in known_ids if pid == "neowow-coding-plan"}
 
     for pid in sorted(known_ids):
@@ -1728,7 +1750,7 @@ def get_providers() -> dict[str, Any]:
     # vanish from the panel — users need to see "you have this old
     # config; switch to Coding Plan to enable chat"). Everything else
     # is dropped.
-    if os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}:
+    if _is_neowow_only_mode(cfg=cfg):
         _keep = {"neowow-coding-plan"}
         if active_provider:
             _keep.add(active_provider)
