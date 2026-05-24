@@ -1381,13 +1381,30 @@ def get_provider_quota(provider_id: str | None = None, *, refresh: bool = False)
             credits_limit = plan.get("creditsLimit")
             credits_used = plan.get("creditsUsed")
             plan_name = plan.get("planName") or display_name
-            cycle_end = (plan.get("cycleEndAt") or "")[:10]
+            cycle_end_raw = plan.get("cycleEndAt")
+            cycle_end = ""
+            if cycle_end_raw is not None:
+                try:
+                    import datetime
+                    # cycleEndAt is millisecond Unix timestamp
+                    ts = int(cycle_end_raw) // 1000
+                    cycle_end = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+                except Exception:
+                    cycle_end = str(cycle_end_raw)[:10]
+
+            def _fmt_credits(v: object) -> str:
+                if v is None:
+                    return "—"
+                try:
+                    return f"{float(v):,.0f}"
+                except (TypeError, ValueError):
+                    return str(v)
 
             details: list[str] = []
             if credits_remaining is not None:
-                details.append(f"剩余 {credits_remaining:,} credits")
+                details.append(f"剩余 {_fmt_credits(credits_remaining)} credits")
             if credits_used is not None and credits_limit is not None:
-                details.append(f"已用 {credits_used:,} / {credits_limit:,}")
+                details.append(f"已用 {_fmt_credits(credits_used)} / {_fmt_credits(credits_limit)}")
             if cycle_end:
                 details.append(f"周期结束：{cycle_end}")
 
