@@ -4006,6 +4006,48 @@ def handle_get(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("neowow skills/cloud-list failed")
             return bad(handler, str(e), status=500)
+
+    # Public market listing — no auth. Proxies GET /api/public/skills.
+    if parsed.path == "/api/skills/market":
+        from api.skills import get_market_skills
+        try:
+            return j(handler, get_market_skills())
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("skills/market failed")
+            return bad(handler, str(e), status=500)
+
+    # Public market detail — no auth. Proxies GET /api/public/skills/{id}.
+    if parsed.path.startswith("/api/skills/market/"):
+        skill_id = parsed.path[len("/api/skills/market/"):]
+        from api.skills import get_market_skill_detail
+        try:
+            return j(handler, get_market_skill_detail(skill_id))
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("skills/market/{id} failed")
+            return bad(handler, str(e), status=500)
+
+    # Authenticated subscriptions list — returns skills from /api/me/skills.
+    # Returns 403 (not 401) when no token so the frontend can show a prompt
+    # rather than triggering the 401 login redirect.
+    if parsed.path == "/api/skills/mine":
+        from api.skills import get_mine_skills
+        try:
+            return j(handler, {"skills": get_mine_skills(handler)})
+        except ValueError as e:
+            # No token — 403 so frontend shows login prompt, not redirect
+            return bad(handler, str(e), status=403)
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("skills/mine failed")
+            return bad(handler, str(e), status=500)
+
     # Managed update notice — only meaningful when HERMES_NEOWOW_ONLY=1.
     # Fetches the Neowow-published update notice from the dashboard and
     # caches it locally (30 min). The frontend polls this instead of the
@@ -5997,6 +6039,56 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e), status=502)         # upstream
         except Exception as e:
             logger.exception("neowow cloud-push failed")
+            return bad(handler, str(e), status=500)
+
+    # Subscribe to a market skill: calls neowow API, writes locally, rebuilds prompt.
+    # Body: { "id": "skill-abc123" }
+    if parsed.path == "/api/skills/subscribe":
+        skill_id = (body or {}).get("id", "")
+        if not skill_id:
+            return bad(handler, "id is required")
+        from api.skills import subscribe_skill
+        try:
+            return j(handler, subscribe_skill(skill_id, handler))
+        except ValueError as e:
+            return bad(handler, str(e), status=400)
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("skills/subscribe failed")
+            return bad(handler, str(e), status=500)
+
+    # Unsubscribe from a skill: calls neowow API, removes locally, rebuilds prompt.
+    # Body: { "id": "skill-abc123" }
+    if parsed.path == "/api/skills/unsubscribe":
+        skill_id = (body or {}).get("id", "")
+        if not skill_id:
+            return bad(handler, "id is required")
+        from api.skills import unsubscribe_skill
+        try:
+            return j(handler, unsubscribe_skill(skill_id, handler))
+        except ValueError as e:
+            return bad(handler, str(e), status=400)
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("skills/unsubscribe failed")
+            return bad(handler, str(e), status=500)
+
+    # Enable/disable a local skill. Updates config.yaml skills.disabled list.
+    # Body: { "name": "my-skill", "enabled": true }
+    if parsed.path == "/api/skills/toggle":
+        name    = (body or {}).get("name", "")
+        enabled = bool((body or {}).get("enabled", True))
+        if not name:
+            return bad(handler, "name is required")
+        from api.skills import toggle_local_skill
+        try:
+            return j(handler, toggle_local_skill(name, enabled))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=500)
+        except Exception as e:
+            logger.exception("skills/toggle failed")
             return bad(handler, str(e), status=500)
 
     # Sync subscribed skills + platform defaults from the dashboard into
