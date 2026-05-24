@@ -513,13 +513,17 @@ def _windows_install_agent() -> None:
     print("      ✓ 虚拟环境创建完成", flush=True)
 
     # ── Step 3: Install dependencies ──────────────────────────────────────
-    print("[3/3] 正在安装依赖（使用清华镜像，约 1-3 分钟请耐心等待）...", flush=True)
+    print("[3/3] 正在安装依赖（多镜像并行，约 1-3 分钟请耐心等待）...", flush=True)
     venv_python_path = venv_dir / "Scripts" / "python.exe"
     _run_uv(uv_exe, [
         "pip", "install",
         "-e", str(agent_dir),
         "--python", str(venv_python_path),
-        "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple/",
+        # Primary: aliyun syncs frequently and covers most packages
+        "--index-url", "https://mirrors.aliyun.com/pypi/simple/",
+        # Fallbacks tried in order when a package isn't on the primary mirror
+        "--extra-index-url", "https://pypi.tuna.tsinghua.edu.cn/simple/",
+        "--extra-index-url", "https://repo.huaweicloud.com/repository/pypi/simple/",
         "--extra-index-url", "https://pypi.org/simple/",
     ], error_prefix="依赖安装失败")
     print("\n      ✓ 安装完成！Hermes 即将启动...\n", flush=True)
