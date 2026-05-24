@@ -4053,7 +4053,7 @@ _SETTINGS_DEFAULTS = {
     # settings.json are unaffected (the merge in load_settings only fills
     # in missing keys — see _normalize_appearance).
     "theme": "system",  # light | dark | system
-    "skin": "sienna",  # accent color skin: default | ares | mono | slate | poseidon | sisyphus | charizard | sienna
+    "skin": "marvis",  # accent color skin: default | ares | mono | slate | poseidon | sisyphus | charizard | sienna | marvis
     "font_size": "default",  # small | default | large | xlarge
     "session_jump_buttons": False,  # show Start/End transcript jump pills
     "session_endless_scroll": False,  # auto-load older transcript pages while scrolling upward
@@ -4091,6 +4091,11 @@ _SETTINGS_SKIN_VALUES = {
     # and rewrite it to "default" on every settings save, breaking the
     # picker for anyone who selected it.
     "sienna",
+    # Marvis — clean minimal blue-accent layout (hides icon rail, shows
+    # full-width text sidebar). Added to the valid set so server-side
+    # _normalize_appearance doesn't silently reject it and fall back to
+    # "default" on every /api/settings response.
+    "marvis",
 }
 _SETTINGS_LEGACY_THEME_MAP = {
     # Legacy full themes now map onto the closest supported theme + accent skin pair.
