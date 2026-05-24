@@ -61,6 +61,8 @@ a = Analysis(
         _webui_datas
         # Bundle zip is optional: present → offline install; absent → git clone at runtime
         + ([("hermes_agent_bundle.zip", ".")] if Path("hermes_agent_bundle.zip").exists() else [])
+        # uv.exe: Windows-only install tool, bundled so users don't need internet for uv itself
+        + ([("tools/uv.exe", "tools")] if IS_WIN and Path("tools/uv.exe").exists() else [])
     ),
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
