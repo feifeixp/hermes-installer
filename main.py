@@ -57,6 +57,46 @@ log.info("=== Hermes Installer starting === pid=%s py=%s platform=%s frozen=%s",
          getattr(sys, "frozen", False))
 
 
+# ── Console window visibility (Windows only) ────────────────────────────────
+# On Windows with console=True the black CMD window appears immediately.
+# We hide it as soon as possible so normal runs show only the Edge WebView
+# window. During first-run installation we reveal it so the user can see
+# the progress output, then hide it again when install finishes.
+#
+# SW_HIDE=0, SW_SHOW=5, SW_MINIMIZE=6
+def _console_hwnd() -> int:
+    """Return the Win32 console HWND, or 0 if unavailable."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+        return ctypes.windll.kernel32.GetConsoleWindow()  # type: ignore[attr-defined]
+    except Exception:
+        return 0
+
+
+def _show_console() -> None:
+    """Make the console window visible (for install progress)."""
+    hwnd = _console_hwnd()
+    if hwnd:
+        try:
+            import ctypes
+            ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
+        except Exception:
+            pass
+
+
+def _hide_console() -> None:
+    """Hide the console window (normal / post-install runs)."""
+    hwnd = _console_hwnd()
+    if hwnd:
+        try:
+            import ctypes
+            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        except Exception:
+            pass
+
+
 def _alert(title: str, msg: str):
     log.error("ALERT %s | %s", title, msg)
     print(f"[ERROR] {title}: {msg}", file=sys.stderr)
@@ -850,11 +890,21 @@ def main():
 
     # ── Launch WebUI server ──────────────────────────────────────────────
     if sys.platform == "win32":
+        # ── Hide the console window immediately ──────────────────────────
+        # On Windows the process starts with console=True so PyInstaller
+        # gives us a black CMD window.  We hide it right away so the user
+        # only ever sees the Edge WebView window, not a raw terminal.
+        # During first-run installation we reveal it so the user can watch
+        # the progress output, then hide it again before opening the UI.
+        _hide_console()
+
         # ── Windows: install if needed, start server.py directly ────────
         # bootstrap.py has ensure_supported_platform() that blocks Windows.
         # We handle install + launch inline instead.
         if not _is_agent_installed():
             log.info("First run: hermes-agent not installed — starting Windows setup")
+            # Show the console so the user can watch install progress.
+            _show_console()
             print("\n" + "=" * 56, flush=True)
             print("   Hermes 首次启动 — 正在安装必要组件", flush=True)
             print("   日志保存在：" + str(_LOG_PATH), flush=True)
@@ -873,6 +923,8 @@ def main():
                     f"详细日志：{_LOG_PATH}",
                 )
                 sys.exit(1)
+            # Install complete — hide console again before opening UI.
+            _hide_console()
 
         log.info("Windows: starting server.py directly (bypassing bootstrap.py)")
         try:
