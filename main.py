@@ -519,10 +519,20 @@ def _windows_install_agent() -> None:
         "pip", "install",
         "-e", str(agent_dir),
         "--python", str(venv_python_path),
-        # Primary: aliyun syncs frequently and covers most packages
+        # Use "first-index" strategy: uv stops at the first mirror that has
+        # the package and downloads the wheel from THAT same mirror only.
+        # Without this, uv resolves metadata from all indexes simultaneously
+        # and may try to download a wheel from a mirror (e.g. Tsinghua) that
+        # blocks direct .whl downloads with 403 Forbidden, even though the
+        # package was available on the primary mirror. "first-index" prevents
+        # that cross-mirror 403 scenario.
+        "--index-strategy", "first-index",
+        # Primary: Aliyun syncs frequently, wide package coverage, reliable wheel downloads
         "--index-url", "https://mirrors.aliyun.com/pypi/simple/",
-        # Fallbacks tried in order when a package isn't on the primary mirror
-        "--extra-index-url", "https://pypi.tuna.tsinghua.edu.cn/simple/",
+        # Fallbacks tried in order when a package isn't on the primary mirror.
+        # Note: Tsinghua (pypi.tuna.tsinghua.edu.cn) is intentionally excluded
+        # because it returns 403 Forbidden on direct wheel downloads.
+        "--extra-index-url", "https://mirrors.ustc.edu.cn/pypi/simple/",
         "--extra-index-url", "https://repo.huaweicloud.com/repository/pypi/simple/",
         "--extra-index-url", "https://pypi.org/simple/",
     ], error_prefix="依赖安装失败")
