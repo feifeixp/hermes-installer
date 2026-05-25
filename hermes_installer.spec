@@ -4,19 +4,34 @@ PyInstaller spec for Hermes Installer.
 Produces:
   macOS   → dist/Hermes Installer.app  (+ .dmg via build.sh)
   Windows → dist/Hermes Installer.exe  (single file, via build.bat)
+
+All identity / version / copyright constants come from _meta.py so this
+file never needs to be touched for a version bump or legal-text change.
 """
 
 import sys
 from pathlib import Path
 
+# Import metadata from single source of truth
+from _meta import (
+    APP_NAME, APP_FULL_NAME, EXE_NAME,
+    BUNDLE_ID, VERSION, VERSION_TUPLE,
+    MACOS_INFO_PLIST,
+    windows_version_info_text,
+)
+
 block_cipher = None
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 
-# ── Hidden imports ─────────────────────────────────────────────────────────
-# pywebview handles its own PyInstaller hook (includes cocoa/WKWebView on macOS,
-# edgechromium/WebView2 on Windows).  Only platform-specific extras here.
+# ── Windows: write version_info file before EXE step ──────────────────────
+# PyInstaller reads this file to embed company/copyright/version into the
+# EXE's VS_VERSION_INFO resource block (visible in file Properties on Windows).
+_WIN_VERSION_FILE = Path("dist_version_info.txt")
+if IS_WIN:
+    _WIN_VERSION_FILE.write_text(windows_version_info_text(), encoding="utf-8")
 
+# ── Hidden imports ─────────────────────────────────────────────────────────
 HIDDEN_IMPORTS = []
 
 if IS_WIN:
@@ -88,7 +103,7 @@ if IS_WIN:
         a.zipfiles,
         a.datas,
         exclude_binaries=False,
-        name="Hermes Installer",
+        name=EXE_NAME,
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
@@ -100,6 +115,8 @@ if IS_WIN:
         codesign_identity=None,
         entitlements_file=None,
         icon="icon.ico" if Path("icon.ico").exists() else None,
+        # Embed company / copyright / version into EXE resource block
+        version=str(_WIN_VERSION_FILE) if _WIN_VERSION_FILE.exists() else None,
     )
 else:
     exe = EXE(
@@ -107,7 +124,7 @@ else:
         a.scripts,
         [],
         exclude_binaries=True,
-        name="Hermes Installer",
+        name=EXE_NAME,
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
@@ -131,32 +148,16 @@ if IS_MAC:
         strip=False,
         upx=False,
         upx_exclude=[],
-        name="Hermes Installer",
+        name=EXE_NAME,
     )
 
 # ── BUNDLE (.app) — macOS only ─────────────────────────────────────────────
 if IS_MAC:
     app_bundle = BUNDLE(
         coll,
-        name="Hermes Installer.app",
+        name=f"{APP_FULL_NAME}.app",
         icon="icon.icns" if Path("icon.icns").exists() else None,
-        bundle_identifier="com.nousresearch.hermes-installer",
-        version="1.0.0",
-        info_plist={
-            "CFBundleName": "Hermes Installer",
-            "CFBundleDisplayName": "Hermes",
-            "CFBundleVersion": "1.0.0",
-            "CFBundleShortVersionString": "1.0.0",
-            "NSPrincipalClass": "NSApplication",
-            "NSHighResolutionCapable": True,
-            "LSMinimumSystemVersion": "11.0",
-            "NSAppleEventsUsageDescription": "Hermes Installer automates setup steps.",
-            "NSDesktopFolderUsageDescription": "Hermes Installer reads config files.",
-            "NSDocumentsFolderUsageDescription": "Hermes Installer may access documents.",
-            "NSDownloadsFolderUsageDescription": "Hermes Installer saves downloaded files.",
-            "NSNetworkVolumesUsageDescription": "Hermes Installer connects to AI APIs.",
-            # Hardened Runtime exceptions (required for PyObjC WebView)
-            "com.apple.security.cs.allow-unsigned-executable-memory": True,
-            "com.apple.security.cs.disable-library-validation": True,
-        },
+        bundle_identifier=BUNDLE_ID,
+        version=VERSION,
+        info_plist=MACOS_INFO_PLIST,
     )

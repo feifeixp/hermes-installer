@@ -51,6 +51,11 @@ jobs:
         run: python bundle_source.py
 
       - name: PyInstaller
+        env:
+          # _meta.py reads this to embed the correct version into Info.plist.
+          # On tag builds it's vX.Y.Z; on branch/PR builds it's the branch name
+          # which _meta.py treats as non-semver and falls back to git describe.
+          INSTALLER_VERSION: ${{ github.ref_name }}
         run: python -m PyInstaller hermes_installer.spec --noconfirm --clean
 
       - name: Verify .app
@@ -135,6 +140,8 @@ jobs:
         run: python bundle_source.py
 
       - name: PyInstaller
+        env:
+          INSTALLER_VERSION: ${{ github.ref_name }}
         run: python -m PyInstaller hermes_installer.spec --noconfirm --clean
 
       - name: Verify .exe
