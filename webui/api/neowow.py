@@ -1666,6 +1666,58 @@ def get_cloud_status() -> dict:
     }
 
 
+def heartbeat_broker() -> bool:
+    """Send a server-side keep-alive heartbeat to the Neowow broker.
+
+    Called by the background heartbeat daemon thread in server.py while
+    Hermes has at least one running background task — prevents the idle-
+    sweep cron from stopping the ECS when the user's browser is closed.
+
+    Auth: reads HERMES_INSTANCE_OWNER_USERID and NEOWOW_HEARTBEAT_TOKEN
+    from the container's environment (injected via cloud-init at spawn).
+    Both must be present; silently returns False on desktop installs where
+    they are absent (no-op — desktop Hermes isn't managed by the broker).
+
+    Returns True on broker acknowledgement, False on any failure (logged at
+    debug/warning level; never raises — the caller is a background thread).
+    """
+    user_id = os.getenv("HERMES_INSTANCE_OWNER_USERID", "").strip()
+    token   = os.getenv("NEOWOW_HEARTBEAT_TOKEN", "").strip()
+    if not user_id or not token:
+        # Not a cloud-managed instance — skip silently.
+        return False
+
+    url     = f"{_NEOWOW_BASE}/api/me/instance/server-heartbeat"
+    payload = json.dumps({"userId": user_id, "token": token}).encode("utf-8")
+    req     = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent":   "Hermes/server-heartbeat",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            logger.debug("[heartbeat] broker ack: state=%s lastSeenAt=%s",
+                         data.get("state", "?"), data.get("lastSeenAt", "?"))
+            return bool(data.get("ok"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")
+        except Exception:
+            pass
+        logger.warning("[heartbeat] broker rejected (HTTP %d): %s", e.code, body[:200])
+        return False
+    except Exception as exc:
+        # Network hiccup, timeout, DNS failure — non-fatal.
+        logger.debug("[heartbeat] broker unreachable: %s", exc)
+        return False
+
+
 def _utc_now_iso() -> str:
     """ISO-8601 UTC stamp — same shape the dashboard uses, easy to diff."""
     from datetime import datetime, timezone

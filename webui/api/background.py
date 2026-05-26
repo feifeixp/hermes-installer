@@ -81,6 +81,22 @@ def get_background_tasks(parent_sid: str) -> list[dict[str, Any]]:
         return list(_BACKGROUND_TASKS.get(parent_sid, []))
 
 
+def has_any_running_task() -> bool:
+    """Return True when at least one background task across ALL sessions
+    is still in ``status='running'``.
+
+    Used by the server-side heartbeat loop (server.py) to decide whether
+    to ping the broker — no need to acquire a JWT or touch network when
+    there is nothing running.
+    """
+    with _lock:
+        return any(
+            t["status"] == "running"
+            for tasks in _BACKGROUND_TASKS.values()
+            for t in tasks
+        )
+
+
 def cleanup_btw(parent_sid: str) -> dict[str, Any] | None:
     """Remove and return btw tracking for a parent session."""
     with _lock:

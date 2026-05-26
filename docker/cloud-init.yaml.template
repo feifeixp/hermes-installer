@@ -117,6 +117,11 @@ write_files:
             # may flip this off if the user explicitly wants to BYO
             # provider, but cloud is hard-locked.
             HERMES_NEOWOW_ONLY: "1"
+            # Server-side heartbeat token — lets the Hermes background
+            # thread ping /api/me/instance/server-heartbeat while tasks
+            # run, preventing idle-sweep from stopping the instance when
+            # the user's browser is closed. Minted fresh at spawn time.
+            NEOWOW_HEARTBEAT_TOKEN: "%HEARTBEAT_TOKEN%"
             # ── Fast PyPI mirror ─────────────────────────────────────
             # uv (used in docker_init.bash) reads UV_INDEX_URL so
             # pip installs hit the Aliyun mirror instead of pypi.org.

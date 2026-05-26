@@ -487,6 +487,48 @@ def main() -> None:
 
     _threading.Thread(target=_startup_skill_sync, daemon=True, name="startup-skill-sync").start()
 
+    # ── Server-side idle-keep-alive heartbeat ──────────────────────────────
+    # When the user's browser is closed while Hermes executes a background
+    # task (/background or /btw), the browser-side heartbeat stops. Without
+    # intervention, the idle-sweep cron (every 5 min) would shut down the
+    # ECS after IDLE_TIMEOUT_MIN of browser silence.
+    #
+    # This daemon thread checks every 5 minutes whether any background task
+    # is still running. If yes, it POSTs to the broker's server-heartbeat
+    # endpoint which updates lastSeenAt in TableStore — same effect as the
+    # browser heartbeat, just from the server side.
+    #
+    # Only fires on cloud instances that have both env vars set:
+    #   HERMES_INSTANCE_OWNER_USERID  (set by cloud-init via %USER_ID%)
+    #   NEOWOW_HEARTBEAT_TOKEN        (set by cloud-init via %HEARTBEAT_TOKEN%)
+    # Desktop/native Hermes installs are unaffected (env vars absent → no-op).
+    def _background_heartbeat_loop():
+        import time as _time
+        try:
+            from api.background import has_any_running_task
+            from api.neowow import heartbeat_broker
+        except ImportError:
+            return  # modules not available — skip
+        # Interval deliberately matches the broker's idle-sweep cron period
+        # (5 min) so we always stamp lastSeenAt before the next sweep check.
+        INTERVAL = 5 * 60
+        logger.debug("[heartbeat] background heartbeat loop started")
+        while True:
+            _time.sleep(INTERVAL)
+            try:
+                if has_any_running_task():
+                    sent = heartbeat_broker()
+                    if sent:
+                        logger.info("[heartbeat] keep-alive sent (background task running)")
+            except Exception as exc:
+                logger.debug("[heartbeat] loop iteration error: %s", exc)
+
+    _threading.Thread(
+        target=_background_heartbeat_loop,
+        daemon=True,
+        name="background-heartbeat",
+    ).start()
+
     try:
         httpd.serve_forever()
     finally:
