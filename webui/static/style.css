@@ -947,6 +947,52 @@
   .toast-copy:hover,.toast-copy:focus-visible{opacity:1;background:color-mix(in srgb,currentColor 10%,transparent);outline:none;}
   .toast.warning{background:color-mix(in srgb,var(--warning) 14%,var(--surface));border-color:color-mix(in srgb,var(--warning) 45%,var(--surface));color:var(--warning);}
   .onboarding-overlay{position:fixed;inset:0;z-index:1050;background:rgba(7,12,19,.78);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;padding:24px;}
+  /* The onboarding wizard hardcodes a dark gradient card background (see
+     .onboarding-card below) regardless of the active theme/skin. Every
+     inner .onboarding-* rule below reads var(--text) / var(--muted) / etc.,
+     which in a light skin (e.g. Marvis light) resolve to near-black text
+     and almost-invisible borders on the dark card. Override the relevant
+     color properties with hardcoded light values so the dialog stays
+     readable in every skin. Targeting children explicitly (not via a
+     parent --text override) because color inherits its computed value,
+     not the var() expression — a parent --text override would leave
+     children with already-resolved dark inherited color. */
+  .onboarding-overlay,
+  .onboarding-overlay h2,
+  .onboarding-overlay .onboarding-step-title,
+  .onboarding-overlay .onboarding-step-index,
+  .onboarding-overlay .onboarding-check strong,
+  .onboarding-overlay .onboarding-field span,
+  .onboarding-overlay .onboarding-summary span,
+  .onboarding-overlay .onboarding-oauth-card strong,
+  .onboarding-overlay .onboarding-status.info,
+  .onboarding-overlay .onboarding-field input,
+  .onboarding-overlay .onboarding-field select,
+  .onboarding-overlay .onboarding-probe-btn{
+    color:#F5F5F5;
+  }
+  .onboarding-overlay .onboarding-sidebar p,
+  .onboarding-overlay .onboarding-step-desc,
+  .onboarding-overlay .onboarding-check span,
+  .onboarding-overlay .onboarding-copy,
+  .onboarding-overlay .onboarding-api-key-help,
+  .onboarding-overlay .onboarding-summary strong,
+  .onboarding-overlay .onboarding-oauth-card p,
+  .onboarding-overlay .onboarding-probe-banner.onboarding-probe-probing{
+    color:rgba(245,245,245,.65);
+  }
+  .onboarding-overlay .onboarding-status,
+  .onboarding-overlay .onboarding-step,
+  .onboarding-overlay .onboarding-check,
+  .onboarding-overlay .onboarding-field input,
+  .onboarding-overlay .onboarding-field select,
+  .onboarding-overlay .onboarding-summary div,
+  .onboarding-overlay .onboarding-oauth-card,
+  .onboarding-overlay .onboarding-probe-btn,
+  .onboarding-overlay .onboarding-probe-banner{
+    border-color:rgba(255,255,255,.15);
+    background-color:rgba(255,255,255,.04);
+  }
   .onboarding-card{width:min(980px,100%);max-height:min(760px,94vh);overflow:auto;border:1px solid var(--accent-bg-strong);border-radius:24px;background:linear-gradient(180deg,rgba(20,30,44,.98),rgba(11,17,27,.98));box-shadow:0 24px 80px rgba(0,0,0,.45);}
   .onboarding-shell{display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);}
   .onboarding-sidebar{padding:28px 24px;border-right:1px solid var(--border);background:linear-gradient(180deg,var(--accent-bg),transparent);}
