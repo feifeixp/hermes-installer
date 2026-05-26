@@ -47,7 +47,7 @@ function _saveComposerDraftNow(sid, text, files) {
 // Restore composer draft from server onto #msg textarea.
 // Only restores if there's actual text (skip empty/None drafts).
 // Guards against double-restore when rapidly switching sessions.
-function _restoreComposerDraft(draft, targetSid) {
+function _restoreComposerDraft(draft, targetSid, opts={}) {
   const ta = $('msg');
   if (!ta) return;
   // targetSid is the session that was requested — if it no longer matches
@@ -55,10 +55,20 @@ function _restoreComposerDraft(draft, targetSid) {
   if (targetSid && _loadingSessionId !== null && _loadingSessionId !== targetSid) return;
   const text = (draft && typeof draft.text === 'string') ? draft.text : '';
   const files = (draft && Array.isArray(draft.files)) ? draft.files : [];
+  const current = ta.value || '';
+  const preserveActiveInput = !!(opts && opts.preserveActiveInput);
+
+  // Same-session force refreshes are driven by external state changes and may
+  // finish seconds after the user continued typing. In that case the local
+  // composer is the authoritative in-progress draft; never replace non-empty
+  // local input with an older server draft. Cross-session switches still restore
+  // normally so the previous session's composer contents do not leak forward.
+  if (preserveActiveInput && current && current !== text) return;
+
   // If there's no text and no files, clear the textarea (a previous session's
   // draft may still be sitting there from a cross-session switch).
   if (!text && !files.length) {
-    if (ta.value) {
+    if (current) {
       ta.value = '';
       if (typeof autoResize === 'function') autoResize();
       if (typeof updateSendBtn === 'function') updateSendBtn();
@@ -66,7 +76,6 @@ function _restoreComposerDraft(draft, targetSid) {
     return;
   }
   // Only update if different to avoid cursor jumps on unrelated session switches.
-  const current = ta.value || '';
   if (current !== text) {
     ta.value = text;
     if (typeof autoResize === 'function') autoResize();
@@ -170,6 +179,14 @@ function _clearSessionCompletionUnread(sid) {
   _saveSessionCompletionUnread();
 }
 
+function _clearSessionViewedCount(sid) {
+  if (!sid) return;
+  const counts = _getSessionViewedCounts();
+  if (!Object.prototype.hasOwnProperty.call(counts, sid)) return;
+  delete counts[sid];
+  _saveSessionViewedCounts();
+}
+
 function _hasSessionCompletionUnread(sid) {
   if (!sid) return false;
   return Object.prototype.hasOwnProperty.call(_getSessionCompletionUnread(), sid);
@@ -248,6 +265,36 @@ function _isSessionEffectivelyStreaming(s) {
   return Boolean(s && (s.is_streaming || _isSessionLocallyStreaming(s)));
 }
 
+function _isServerIdleSessionRow(s) {
+  return Boolean(s && s.session_id && !s.is_streaming && !s.active_stream_id && !s.pending_user_message);
+}
+
+function _reconcileActiveSessionIdleStateFromList(serverRows) {
+  if (!S || !S.session || !S.session.session_id) return false;
+  if (typeof _sendInProgress !== 'undefined' && _sendInProgress) return false;
+  if (!Array.isArray(serverRows)) return false;
+  const sid=S.session.session_id;
+  const serverRow=serverRows.find(s=>s&&s.session_id===sid);
+  if (!serverRow) return false;
+  if (!_isServerIdleSessionRow(serverRow)) return false;
+  let changed=false;
+  if (S.busy) { S.busy=false; changed=true; }
+  if (S.activeStreamId) { S.activeStreamId=null; changed=true; }
+  if (INFLIGHT&&INFLIGHT[sid]) {
+    delete INFLIGHT[sid];
+    if (typeof clearInflightState==='function') clearInflightState(sid);
+    changed=true;
+  }
+  if (S.session) {
+    S.session.active_stream_id=null;
+    S.session.pending_user_message=null;
+  }
+  _sessionStreamingById.set(sid, false);
+  _forgetObservedStreamingSession(sid);
+  if (changed&&typeof updateSendBtn==='function') updateSendBtn();
+  return changed;
+}
+
 function _purgeStaleInflightEntries() {
   // Clean up INFLIGHT entries for sessions the server confirms are NOT
   // streaming. This prevents the in-memory cache from growing unbounded
@@ -263,6 +310,9 @@ function _purgeStaleInflightEntries() {
     }
   }
   for (const sid of Object.keys(INFLIGHT)) {
+    if (typeof _sendInProgress !== 'undefined' && _sendInProgress && sid === _sendInProgressSid) {
+      continue;
+    }
     if (!sessionsById.has(sid)) {
       // Session is absent from _allSessions — it was deleted / archived /
       // filtered and can never stream again, so drop the entry.
@@ -379,88 +429,139 @@ function _markPollingCompletionUnreadTransitions(sessions) {
   }
 }
 
+let _newSessionInFlight=null;
+const _newSessionPendingText=()=>t('new_session_creating')||'Creating new conversation…';
+function _setNewSessionPending(pending){
+  const btn=$('btnNewChat');
+  if(btn){
+    btn.disabled=!!pending;
+    btn.setAttribute('aria-busy',pending?'true':'false');
+  }
+  const statusEl=$('composerStatus');
+  const pendingText=_newSessionPendingText();
+  if(pending){
+    setComposerStatus(pendingText);
+  }else if(statusEl&&statusEl.textContent===pendingText){
+    setComposerStatus('');
+  }
+}
+
 async function newSession(flash, options={}){
-  updateQueueBadge();
-  S.toolCalls=[];
-  clearLiveToolCards();
-  // One-shot profile-switch workspace: applied to the first new session after a profile
-  // switch, then cleared.  Use a dedicated flag so S._profileDefaultWorkspace (the
-  // persistent boot/settings default) is not consumed and remains available for the
-  // blank-page display on all subsequent returns to the empty state (#823).
-  const switchWs=S._profileSwitchWorkspace;
-  S._profileSwitchWorkspace=null;
-  const inheritWs=switchWs||(S.session?S.session.workspace:null)||(S._profileDefaultWorkspace||null);
-  // Use the saved default model for new sessions (#872). The user's saved
-  // default_model (from Settings) takes priority over the chat-header dropdown
-  // value, which reflects the *previous* session's model. Fall back to the
-  // dropdown value only when no default_model is configured.
-  const modelSel=$('modelSelect');
-  const selectedDefaultModel=window._defaultModel||(modelSel&&modelSel.value)||'';
-  let defaultApplied=false;
-  if(window._defaultModel&&modelSel&&typeof _applyModelToDropdown==='function'){
-    defaultApplied=!!_applyModelToDropdown(window._defaultModel,modelSel,window._activeProvider||null);
+  if(_newSessionInFlight){
+    if(typeof showToast==='function') showToast(_newSessionPendingText(),1500);
+    return _newSessionInFlight;
   }
-  const canQualify=!window._defaultModel||defaultApplied||(modelSel&&modelSel.value===selectedDefaultModel);
-  const newModelState=(canQualify&&typeof _modelStateForSelect==='function')
-    ? _modelStateForSelect(modelSel,selectedDefaultModel)
-    : {model:selectedDefaultModel,model_provider:null};
-  const reqBody={
-    model:newModelState.model,
-    model_provider:newModelState.model_provider||null,
-    workspace:inheritWs,
-    profile:S.activeProfile||'default',
-  };
-  if(options&&options.worktree) reqBody.worktree=true;
-  if(_activeProject&&_activeProject!==NO_PROJECT_FILTER) reqBody.project_id=_activeProject;
-  const data=await api('/api/session/new',{method:'POST',body:JSON.stringify(reqBody)});
-  S.session=data.session;S.messages=data.session.messages||[];
-  S.lastUsage={...(data.session.last_usage||{})};
-  if(flash)S.session._flash=true;
-  localStorage.setItem('hermes-webui-session',S.session.session_id);
-  _setActiveSessionUrl(S.session.session_id);
-  _setSessionViewedCount(S.session.session_id, S.session.message_count || 0);
-  // Sync chat-header dropdown to the session's model so the UI reflects
-  // the default model the server actually used (#872).
-  if(S.session.model && S.session.model!==$('modelSelect').value && typeof _applyModelToDropdown==='function'){
-    _applyModelToDropdown(S.session.model,$('modelSelect'),S.session.model_provider||null);
-    if(typeof syncModelChip==='function') syncModelChip();
+  _setNewSessionPending(true);
+  _newSessionInFlight=(async()=>{
+    updateQueueBadge();
+    S.toolCalls=[];
+    clearLiveToolCards();
+    // One-shot profile-switch workspace: applied to the first new session after a profile
+    // switch, then cleared.  Use a dedicated flag so S._profileDefaultWorkspace (the
+    // persistent boot/settings default) is not consumed and remains available for the
+    // blank-page display on all subsequent returns to the empty state (#823).
+    const switchWs=S._profileSwitchWorkspace;
+    S._profileSwitchWorkspace=null;
+    const inheritWs=switchWs||(S.session?S.session.workspace:null)||(S._profileDefaultWorkspace||null);
+    const reqBody={
+      workspace:inheritWs,
+      profile:S.activeProfile||'default',
+    };
+    if(S.session&&S.session.session_id) reqBody.prev_session_id=S.session.session_id;
+    if(options&&options.worktree) reqBody.worktree=true;
+    if(_activeProject&&_activeProject!==NO_PROJECT_FILTER) reqBody.project_id=_activeProject;
+    const data=await api('/api/session/new',{method:'POST',body:JSON.stringify(reqBody)});
+    S.session=data.session;S.messages=data.session.messages||[];
+    S.lastUsage={...(data.session.last_usage||{})};
+    if(flash)S.session._flash=true;
+    try{localStorage.setItem('hermes-webui-session',S.session.session_id);}catch(_){}
+    _setActiveSessionUrl(S.session.session_id);
+    _setSessionViewedCount(S.session.session_id, S.session.message_count || 0);
+    // Sync chat-header dropdown to the session's model/provider so the UI reflects
+    // the default route the server actually used (#872). Compare provider state too:
+    // duplicate model ids can exist under several providers, and a stale persisted
+    // picker selection with the same model id should not mask the new session's
+    // configured default provider.
+    const modelSel=$('modelSelect');
+    if(S.session.model && modelSel && typeof _applyModelToDropdown==='function'){
+      const currentModelState=(typeof _modelStateForSelect==='function')
+        ? _modelStateForSelect(modelSel,modelSel.value)
+        : {model:modelSel.value,model_provider:null};
+      const sessionProvider=S.session.model_provider||null;
+      const currentProvider=currentModelState.model_provider||null;
+      if(S.session.model!==modelSel.value || sessionProvider !== currentProvider){
+        let sessionModelApplied=_applyModelToDropdown(S.session.model,modelSel,sessionProvider);
+        if(!sessionModelApplied){
+          const opt=document.createElement('option');
+          opt.value=S.session.model;
+          opt.textContent=typeof getModelLabel==='function'?getModelLabel(S.session.model):S.session.model;
+          opt.dataset.custom='1';
+          opt.dataset.provider=sessionProvider||'';
+          modelSel.appendChild(opt);
+          sessionModelApplied=_applyModelToDropdown(S.session.model,modelSel,sessionProvider);
+        }
+        if(sessionModelApplied&&typeof syncModelChip==='function') syncModelChip();
+      }
+    }
+    // Reset per-session visual state: a fresh chat is idle even if another
+    // conversation is still streaming in the background.
+    S.busy=false;
+    S.activeStreamId=null;
+    updateSendBtn();
+    setStatus('');
+    setComposerStatus('');
+    if(typeof _setLiveAssistantTps==='function') _setLiveAssistantTps(null);
+    if(typeof _syncCtxIndicator==='function'){
+      _syncCtxIndicator({
+        input_tokens:data.session.input_tokens||0,
+        output_tokens:data.session.output_tokens||0,
+        estimated_cost:data.session.estimated_cost||0,
+        cache_read_tokens:data.session.cache_read_tokens||0,
+        cache_write_tokens:data.session.cache_write_tokens||0,
+        cache_hit_percent:data.session.cache_hit_percent,
+        context_length:data.session.context_length||0,
+        last_prompt_tokens:data.session.last_prompt_tokens||0,
+        threshold_tokens:data.session.threshold_tokens||0,
+      });
+    }
+    updateQueueBadge(S.session.session_id);
+    syncTopbar();renderMessages();
+    const dirLoad=loadDir('.');
+    // loadDir('.') is fire-and-forget while the workspace panel is closed:
+    // waiting would block new-chat/profile-switch flow for users who never open
+    // the file tree. When visible, wait so the file list lands with the session.
+    if(options&&options.awaitWorkspaceLoad) await dirLoad;
+    // don't call renderSessionList here - callers do it when needed
+  })();
+  try{
+    return await _newSessionInFlight;
+  }finally{
+    _newSessionInFlight=null;
+    _setNewSessionPending(false);
   }
-  // Reset per-session visual state: a fresh chat is idle even if another
-  // conversation is still streaming in the background.
-  S.busy=false;
-  S.activeStreamId=null;
-  updateSendBtn();
-  setStatus('');
-  setComposerStatus('');
-  if(typeof _setLiveAssistantTps==='function') _setLiveAssistantTps(null);
-  if(typeof _syncCtxIndicator==='function'){
-    _syncCtxIndicator({
-      input_tokens:data.session.input_tokens||0,
-      output_tokens:data.session.output_tokens||0,
-      estimated_cost:data.session.estimated_cost||0,
-      context_length:data.session.context_length||0,
-      last_prompt_tokens:data.session.last_prompt_tokens||0,
-      threshold_tokens:data.session.threshold_tokens||0,
-    });
-  }
-  updateQueueBadge(S.session.session_id);
-  syncTopbar();renderMessages();loadDir('.');
-  // don't call renderSessionList here - callers do it when needed
 }
 
 async function loadSession(sid){
+  const opts = arguments[1] || {};
+  if(!opts.skipLineageResolve && typeof _resolveSessionIdFromSidebarLineage==='function'){
+    const resolvedSid=_resolveSessionIdFromSidebarLineage(sid);
+    if(resolvedSid&&resolvedSid!==sid) sid=resolvedSid;
+  }
+  const forceReload = !!opts.force;
   const currentSid = S.session ? S.session.session_id : null;
   // Clicking the already-open session in the sidebar is a no-op. Reloading it
   // tears down active pane state and can reset the long-session scroll window
-  // to the top even though the user did not navigate anywhere.
-  if(currentSid===sid) return;
+  // to the top even though the user did not navigate anywhere. Explicit
+  // refresh paths pass {force:true} when external state.db changes arrive.
+  // Legacy invariant kept for static regression tests: if(currentSid===sid) return
+  if(currentSid===sid && !forceReload) return;
   // Mark this session as the in-flight load. Subsequent loadSession() calls
   // will overwrite this; stale awaits use the mismatch to bail out (#1060).
   _loadingSessionId = sid;
-  stopApprovalPolling();hideApprovalCard();
+  stopApprovalPolling();hideApprovalCard(forceReload);
   _yoloEnabled=false;_updateYoloPill();
   if(typeof stopClarifyPolling==='function') stopClarifyPolling();
-  if(typeof hideClarifyCard==='function') hideClarifyCard();
+  if(typeof hideClarifyCard==='function') hideClarifyCard(forceReload, forceReload?'external-refresh':'dismissed');
   // Show loading indicator immediately for responsiveness.
   // Cleared by renderMessages() once full session data arrives.
   // Persist the current composer draft before switching away so it can be
@@ -469,30 +570,35 @@ async function loadSession(sid){
   if (currentSid && currentSid !== sid) {
     _saveComposerDraftNow(currentSid, ($('msg') || {}).value || '', S.pendingFiles ? [...S.pendingFiles] : []);
   }
-  if (currentSid !== sid) {
+  if (currentSid !== sid || forceReload) {
     S.messages = [];
     S.toolCalls = [];
     _messagesTruncated = false;
     _oldestIdx = 0;
     _loadingOlder = false;
     const _msgInner = $('msgInner');
-    if (_msgInner) _msgInner.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">Loading conversation...</div>';
+    if (_msgInner && currentSid !== sid) _msgInner.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">Loading conversation...</div>';
   }
   // Phase 1: Load metadata only (~1KB) for fast session switching.
+  // Resolve model immediately: old sessions can persist stale provider-shaped
+  // IDs (e.g. openai/gpt-5.4-mini) and assigning those to S.session creates a
+  // short race where the composer can display/send the wrong model before the
+  // deferred resolver catches up.
   // Guard against network/server failures to prevent a permanently stuck loading state.
   let data;
   try {
-    data = await api(`/api/session?session_id=${encodeURIComponent(sid)}&messages=0&resolve_model=0`);
+    data = await api(`/api/session?session_id=${encodeURIComponent(sid)}&messages=0&resolve_model=1`);
   } catch(e) {
     const _msgInner = $('msgInner');
     if(_msgInner){
       if(e.status===404){
         _msgInner.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">Session not available in web UI.</div>';
-        // If this 404 was for the saved active-session ID (not a click-into request),
-        // wipe the stale localStorage value and rethrow so boot can fall through to
-        // the empty-state instead of sticking to a broken "Session not available" view.
-        if(!currentSid&&localStorage.getItem('hermes-webui-session')===sid){
+        // Option A (#2798): for boot-time stale URL/localStorage session IDs,
+        // always clear persisted session, strip /session/{id} from URL, and
+        // rethrow so boot can deterministically fall through to empty-state.
+        if(!currentSid){
           localStorage.removeItem('hermes-webui-session');
+          try{ history.replaceState(null,'','/'); }catch(_){ }
           if (_loadingSessionId === sid) _loadingSessionId = null;
           throw e;
         }
@@ -521,12 +627,13 @@ async function loadSession(sid){
   if (typeof window !== 'undefined' && typeof window._resetScrollDirectionTracker === 'function') {
     try { window._resetScrollDirectionTracker(); } catch (_) {}
   }
+  if(typeof _applyPendingSessionModelForSession==='function') _applyPendingSessionModelForSession(sid);
   // Sync workspace display immediately so the chip label reflects the new session's workspace
   // before any async message-loading begins (mirrors how model is handled).
   if(typeof syncTopbar==='function') syncTopbar();
   _setSessionViewedCount(S.session.session_id, Number(data.session.message_count || 0));
   _clearSessionCompletionUnread(S.session.session_id);
-  localStorage.setItem('hermes-webui-session',S.session.session_id);
+  try{localStorage.setItem('hermes-webui-session',S.session.session_id);}catch(_){}
   _setActiveSessionUrl(S.session.session_id);
 
   const activeStreamId=S.session.active_stream_id||null;
@@ -540,8 +647,21 @@ async function loadSession(sid){
     S.busy=false;
   }
 
-  // Phase 2a: If session is streaming, restore from INFLIGHT cache before
-  // loading full messages (INFLIGHT state is self-contained and sufficient).
+  function _mergePendingSessionMessage(session,messages){
+    if(!Array.isArray(messages)) return false;
+    const pendingMsg=typeof getPendingSessionMessage==='function'?getPendingSessionMessage(session,messages):null;
+    if(!pendingMsg) return false;
+    if(messages.some(existing=>_sameTranscriptMessage(existing,pendingMsg))) return false;
+    const liveAssistantIdx=messages.findIndex(m=>m&&m.role==='assistant'&&m._live);
+    if(liveAssistantIdx>=0) messages.splice(liveAssistantIdx,0,pendingMsg);
+    else messages.push(pendingMsg);
+    return true;
+  }
+
+  // Phase 2a: If session is streaming, restore the persisted transcript first,
+  // then merge the local INFLIGHT live tail. INFLIGHT is a recovery tail, not a
+  // complete transcript; treating it as the full source makes long sessions look
+  // like they lost history after switching away and back.
   if(!INFLIGHT[sid]&&activeStreamId&&typeof loadInflightState==='function'){
     const stored=loadInflightState(sid, activeStreamId);
     if(stored){
@@ -555,20 +675,35 @@ async function loadSession(sid){
   }
 
   if(INFLIGHT[sid]){
-    // Streaming session: use cached INFLIGHT messages (already has pending assistant output).
-    S.messages=INFLIGHT[sid].messages;
+    const inflightMessages=INFLIGHT[sid].messages||[];
+    S.messages=[];
+    S.toolCalls=[];
+    try {
+      await _ensureMessagesLoaded(sid);
+    } catch(e) {
+      S.messages=inflightMessages;
+    }
+    S.messages=_mergeInflightTailMessages(S.messages,inflightMessages);
     S.toolCalls=(INFLIGHT[sid].toolCalls||[]);
+    if(_mergePendingSessionMessage(S.session,S.messages)){
+      INFLIGHT[sid].messages=S.messages;
+    }
     S.busy=true;
     // appendLiveToolCard() is guarded by S.activeStreamId; restore it before
     // replaying persisted live tools so the compact Activity count survives
     // switching away from and back to an active chat (#1715).
     S.activeStreamId=activeStreamId;
-    syncTopbar();renderMessages();appendThinking();loadDir('.');
-    clearLiveToolCards();
-    if(typeof placeLiveToolCardsHost==='function') placeLiveToolCardsHost();
-    for(const tc of (S.toolCalls||[])){
-      if(tc&&tc.name) appendLiveToolCard(tc);
+    syncTopbar();renderMessages();
+    const restoredLiveTurn=typeof restoreLiveTurnHtmlForSession==='function'&&restoreLiveTurnHtmlForSession(sid);
+    if(!restoredLiveTurn){
+      appendThinking();
+      clearLiveToolCards();
+      if(typeof placeLiveToolCardsHost==='function') placeLiveToolCardsHost();
+      for(const tc of (S.toolCalls||[])){
+        if(tc&&tc.name) appendLiveToolCard(tc);
+      }
     }
+    loadDir('.');
     setBusy(true);setComposerStatus('');
     startApprovalPolling(sid);
     if(typeof startClarifyPolling==='function') startClarifyPolling(sid);
@@ -634,8 +769,7 @@ async function loadSession(sid){
     updateQueueBadge(sid);
 
     // Attach pending user message if one is queued.
-    const pendingMsg=typeof getPendingSessionMessage==='function'?getPendingSessionMessage(S.session):null;
-    if(pendingMsg) S.messages.push(pendingMsg);
+    _mergePendingSessionMessage(S.session,S.messages);
 
     if(activeStreamId){
       S.busy=true;
@@ -660,7 +794,10 @@ async function loadSession(sid){
       syncTopbar();renderMessages();
       if(typeof resumeManualCompressionForSession==='function') resumeManualCompressionForSession(sid);
       const _dirP=loadDir('.');
-      await _dirP;
+      // Workspace refresh is guarded by session id inside loadDir(); do not
+      // block session-load completion, draft restore, or model resolution on
+      // file-tree IO for users focused on the chat.
+      if(_dirP&&typeof _dirP.catch==='function') _dirP.catch(()=>{});
     }
   }
 
@@ -673,9 +810,12 @@ async function loadSession(sid){
       input_tokens:      _pick(u.input_tokens,      _s.input_tokens),
       output_tokens:     _pick(u.output_tokens,     _s.output_tokens),
       estimated_cost:    _pick(u.estimated_cost,    _s.estimated_cost),
-      context_length:    _pick(u.context_length,    _s.context_length),
+      cache_read_tokens: _pick(u.cache_read_tokens, _s.cache_read_tokens),
+      cache_write_tokens:_pick(u.cache_write_tokens,_s.cache_write_tokens),
+      cache_hit_percent: _pick(u.cache_hit_percent, _s.cache_hit_percent, null),
+      context_length:    _pick(_s.context_length,    u.context_length),
       last_prompt_tokens:_pick(u.last_prompt_tokens,_s.last_prompt_tokens),
-      threshold_tokens:  _pick(u.threshold_tokens,  _s.threshold_tokens),
+      threshold_tokens:  _pick(_s.threshold_tokens,  u.threshold_tokens),
     });
   }
   if(typeof _renderPendingPromptsForActiveSession==='function') _renderPendingPromptsForActiveSession();
@@ -685,12 +825,14 @@ async function loadSession(sid){
   // against stale writes from slow responses racing to restore the previous draft).
   const _draft = S.session && S.session.composer_draft;
   if (_draft && (typeof _restoreComposerDraft === 'function')) {
-    _restoreComposerDraft(_draft, sid);
+    _restoreComposerDraft(_draft, sid, {preserveActiveInput:currentSid===sid&&forceReload});
   }
 
   _resolveSessionModelForDisplaySoon(sid);
   // Clear the in-flight session marker now that this load has completed (#1060).
   if (_loadingSessionId === sid) _loadingSessionId = null;
+
+  if(typeof renderSessionArtifacts==='function') renderSessionArtifacts();
 
   // ── Cross-channel handoff hint ──
   // After session fully loaded, check if this is a messaging session with
@@ -708,12 +850,13 @@ const _HANDOFF_THRESHOLD = 10;  // conversation rounds
 const _HANDOFF_STORAGE_PREFIX = 'handoff:';
 const _HANDOFF_SUFFIX_DISMISSED_AT = 'dismissed_at';
 const _HANDOFF_SUFFIX_SUMMARY_HANDLED_AT = 'summary_handled_at';
-const _MESSAGING_RAW_SOURCES = new Set(['weixin', 'telegram', 'discord', 'slack']);
+const _MESSAGING_RAW_SOURCES = new Set(['weixin', 'telegram', 'discord', 'slack', 'email']);
 const _MESSAGING_SOURCE_LABELS = {
   weixin: 'WeChat',
   telegram: 'Telegram',
   discord: 'Discord',
   slack: 'Slack',
+  email: 'Email',
 };
 
 function _isMessagingSession(session) {
@@ -798,6 +941,12 @@ function _clearHandoffStorageForSession(sid) {
     _setHandoffStorageValue(sid, _HANDOFF_SUFFIX_DISMISSED_AT, null);
     _setHandoffStorageValue(sid, _HANDOFF_SUFFIX_SUMMARY_HANDLED_AT, null);
   } catch {}
+  // Session deletion should also prune per-session tracking maps. Otherwise
+  // heavy users accumulate one localStorage entry per deleted session forever,
+  // which increases quota pressure and can make future UI persistence fail.
+  try { _clearSessionViewedCount(sid); } catch {}
+  try { _clearSessionCompletionUnread(sid); } catch {}
+  try { _forgetObservedStreamingSession(sid); } catch {}
 }
 
 function _getHandoffDismissedAt(sid) {
@@ -1062,8 +1211,26 @@ function _resolveSessionModelForDisplaySoon(sid){
       if(!model||!S.session||S.session.session_id!==sid) return;
       S.session.model=model;
       S.session.model_provider=provider||null;
+      S.session.context_length=data.session.context_length||0;
+      S.session.threshold_tokens=data.session.threshold_tokens||0;
+      S.session.last_prompt_tokens=data.session.last_prompt_tokens||0;
       S.session._modelResolutionDeferred=false;
       syncTopbar();
+      if(typeof _syncCtxIndicator==='function'){
+        const u=S.lastUsage||{};
+        const _pick=(latest,stored,dflt=0)=>latest!=null?latest:(stored!=null?stored:dflt);
+        _syncCtxIndicator({
+          input_tokens:_pick(u.input_tokens,S.session.input_tokens),
+          output_tokens:_pick(u.output_tokens,S.session.output_tokens),
+          estimated_cost:_pick(u.estimated_cost,S.session.estimated_cost),
+          cache_read_tokens:_pick(u.cache_read_tokens,S.session.cache_read_tokens),
+          cache_write_tokens:_pick(u.cache_write_tokens,S.session.cache_write_tokens),
+          cache_hit_percent:_pick(u.cache_hit_percent,S.session.cache_hit_percent,null),
+          context_length:data.session.context_length||0,
+          last_prompt_tokens:_pick(u.last_prompt_tokens,S.session.last_prompt_tokens),
+          threshold_tokens:data.session.threshold_tokens||0,
+        });
+      }
     }catch(_){
       // Keep session switching non-blocking; the next load can try again.
     }
@@ -1114,6 +1281,51 @@ async function _ensureMessagesLoaded(sid) {
     S.lastUsage={...(data.session.last_usage||S.lastUsage||{})};
     _setSessionViewedCount(sid, Number(S.session.message_count || msgs.length));
   }
+}
+
+function _messageComparableText(m){
+  if(!m) return '';
+  if(typeof msgContent==='function'){
+    try{return String(msgContent(m)||'').trim();}
+    catch(_){}
+  }
+  return String(m.content||'').trim();
+}
+
+function _stripAttachedFilesMarker(text){
+  return String(text||'').replace(/\n\n\[Attached files: [^\]]+\]$/,'').trim();
+}
+
+function _sameTranscriptMessage(a,b){
+  if(!(a&&b)) return false;
+  const role=String(a.role||'');
+  if(role!==String(b.role||'')) return false;
+  const aText=_messageComparableText(a);
+  const bText=_messageComparableText(b);
+  if(aText===bText) return true;
+  if(role==='user'){
+    return _stripAttachedFilesMarker(aText)===_stripAttachedFilesMarker(bText);
+  }
+  return false;
+}
+
+function _mergeInflightTailMessages(baseMessages, inflightMessages){
+  const base=Array.isArray(baseMessages)?baseMessages:[];
+  const inflight=Array.isArray(inflightMessages)?inflightMessages:[];
+  let liveIdx=-1;
+  for(let i=inflight.length-1;i>=0;i--){
+    if(inflight[i]&&inflight[i]._live){liveIdx=i;break;}
+  }
+  if(liveIdx<0) return base;
+  let start=liveIdx;
+  if(liveIdx>0&&inflight[liveIdx-1]&&inflight[liveIdx-1].role==='user') start=liveIdx-1;
+  const tail=inflight.slice(start).filter(m=>m&&m.role);
+  const merged=[...base];
+  for(const msg of tail){
+    const duplicate=merged.slice(-Math.max(5,tail.length+2)).some(existing=>_sameTranscriptMessage(existing,msg));
+    if(!duplicate) merged.push(msg);
+  }
+  return merged;
 }
 
 // Load older messages when the user scrolls to the top of the conversation.
@@ -1302,6 +1514,17 @@ function _sessionSnapshotById(sid){
   if(S.session&&S.session.session_id===sid) return S.session;
   return (_allSessions||[]).find(s=>s&&s.session_id===sid)||null;
 }
+function _pinnedSessionCount(){
+  return (_allSessions||[]).filter(s=>s&&s.pinned&&!s.archived).length;
+}
+function _getPinnedSessionsLimit(){
+  const limit=parseInt(window._pinnedSessionsLimit||3,10);
+  return (Number.isFinite(limit)&&limit>0)?limit:3;
+}
+function _pinnedSessionsLimitMessage(){
+  const limit=_getPinnedSessionsLimit();
+  return `Only ${limit} conversations can be pinned. Unpin one before pinning another.`;
+}
 function _worktreeSessionCount(ids){
   return (ids||[]).reduce((count,sid)=>{
     const session=_sessionSnapshotById(sid);
@@ -1326,6 +1549,24 @@ function _sessionArchiveToast(response, session){
 function _sessionDeleteDescription(session){
   return session&&session.worktree_path?t('session_delete_worktree_desc'):t('session_delete_desc');
 }
+function _optimisticallyArchiveSessionInList(sid, archived){
+  if(!sid||!Array.isArray(_allSessions)) return;
+  let changed=false;
+  _allSessions=_allSessions.map(s=>{
+    if(!s||s.session_id!==sid) return s;
+    changed=true;
+    return {...s,archived:!!archived};
+  });
+  if(changed) renderSessionListFromCache();
+}
+function _optimisticallyRemoveSessionFromList(sid){
+  if(!sid||!Array.isArray(_allSessions)) return;
+  const before=_allSessions.length;
+  _allSessions=_allSessions.filter(s=>!s||s.session_id!==sid);
+  if(_selectedSessions&&_selectedSessions.has(sid)) _selectedSessions.delete(sid);
+  if(typeof _dropStaleOptimisticSessionRow==='function') _dropStaleOptimisticSessionRow(sid);
+  if(_allSessions.length!==before) renderSessionListFromCache();
+}
 
 function _sessionIdFromLocation(){
   if(typeof window==='undefined'||!window.location) return null;
@@ -1338,7 +1579,7 @@ function _sessionIdFromLocation(){
   }
   try{
     const qs=new URLSearchParams(window.location.search||'');
-    return qs.get('session')||null;
+    return qs.get('session')||qs.get('session_id')||null;
   }catch(_e){return null;}
 }
 function _sessionUrlForSid(sid){
@@ -1624,7 +1865,10 @@ function _openSessionActionMenu(session, anchorEl){
         session.pinned=newPinned;
         if(S.session&&S.session.session_id===session.session_id) S.session.pinned=newPinned;
         renderSessionList();
-      }catch(err){showToast(t('session_pin_failed')+err.message);}
+      }catch(err){
+        showToast(t('session_pin_failed')+err.message);
+        await renderSessionList();
+      }
     },
     session.pinned?'is-active':''
   ));
@@ -1645,13 +1889,32 @@ function _openSessionActionMenu(session, anchorEl){
       closeSessionActionMenu();
       try{
         const response=await api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:session.session_id,archived:!session.archived})});
+        _optimisticallyArchiveSessionInList(session.session_id,!session.archived);
         session.archived=!session.archived;
         if(S.session&&S.session.session_id===session.session_id) S.session.archived=session.archived;
-        await renderSessionList();
+        void renderSessionList();
         showToast(session.archived?_sessionArchiveToast(response,session):t('session_restored'));
       }catch(err){showToast(t('session_archive_failed')+err.message);}
     }
   ));
+  if(isExternalSession && !session.archived){
+    menu.appendChild(_buildSessionAction(
+      t('session_hide_external'),
+      t('session_hide_external_desc'),
+      ICONS.archive,
+      async()=>{
+        closeSessionActionMenu();
+        try{
+          await api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:session.session_id,archived:true})});
+          _optimisticallyArchiveSessionInList(session.session_id,true);
+          session.archived=true;
+          if(S.session&&S.session.session_id===session.session_id) S.session.archived=true;
+          void renderSessionList();
+          showToast(t('session_hidden'));
+        }catch(err){showToast(t('session_archive_failed')+err.message);}
+      }
+    ));
+  }
   if(!isExternalSession){
     _appendSessionDuplicateAction(menu, session);
   }
@@ -1724,6 +1987,56 @@ window.addEventListener('resize',()=>{
 // concurrently. Without this guard, a slower older response can overwrite _allSessions
 // with stale data, causing sessions to vanish from the sidebar.
 let _renderSessionListGen = 0;
+let _sessionListRefreshAnimationPending = false;
+let _sessionListFirstRenderAnimated = false;
+let _sessionListEnterAllAnimationPending = false;
+
+function animateNextSessionListRefresh(options={}){
+  _sessionListRefreshAnimationPending = true;
+  if(options&&options.enterAll) _sessionListEnterAllAnimationPending = true;
+}
+
+function _captureSessionListFlipPositions(){
+  const list=$('sessionList');
+  if(!list) return null;
+  const positions=new Map();
+  list.querySelectorAll('.session-item[data-sid]').forEach(row=>{
+    positions.set(row.dataset.sid,row.getBoundingClientRect().top);
+  });
+  return positions;
+}
+
+function _sessionListPrefersReducedMotion(){
+  try{return window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;}
+  catch(_){return false;}
+}
+
+function _playSessionListFlipAnimation(before){
+  if(!before||!before.size||_sessionListPrefersReducedMotion()) return;
+  const list=$('sessionList');
+  if(!list) return;
+  list.querySelectorAll('.session-item[data-sid]').forEach(row=>{
+    const oldTop=before.get(row.dataset.sid);
+    if(oldTop===undefined) return;
+    const delta=oldTop-row.getBoundingClientRect().top;
+    if(Math.abs(delta)<1) return;
+    row.style.setProperty('--session-reflow-offset',delta+'px');
+    row.classList.add('session-reflowing');
+    row.getBoundingClientRect();
+    row.style.setProperty('--session-reflow-offset','0px');
+    let cleared=false;
+    const clear=()=>{
+      if(cleared) return;
+      cleared=true;
+      row.classList.remove('session-reflowing');
+      row.style.removeProperty('--session-reflow-offset');
+      row.removeEventListener('transitionend',onEnd);
+    };
+    const onEnd=(event)=>{ if(event.propertyName==='transform') clear(); };
+    row.addEventListener('transitionend',onEnd);
+    setTimeout(clear,460);
+  });
+}
 
 function _isOptimisticFirstTurnSessionRow(s){
   if(!s||!s.session_id||s.archived) return false;
@@ -1739,6 +2052,31 @@ function _isOptimisticFirstTurnSessionRow(s){
   );
 }
 
+function _shouldKeepLocalOnlyOptimisticSessionRow(local){
+  if(!_isOptimisticFirstTurnSessionRow(local)) return false;
+  const sid=local.session_id;
+  if(typeof _sendInProgress!=='undefined'&&_sendInProgress&&sid===_sendInProgressSid) return true;
+  const activeSid=S&&S.session&&S.session.session_id;
+  const isActive=Boolean(activeSid&&activeSid===sid);
+  const hasRuntimeConfirmation=Boolean(local.active_stream_id||local.pending_user_message||local.pending_started_at);
+  if(isActive&&S.busy&&hasRuntimeConfirmation) return true;
+  const localTs=Number(local.last_message_at||local.updated_at||0);
+  const ageMs=localTs>0?Date.now()-(localTs*1000):Infinity;
+  return Boolean(isActive&&S.busy&&ageMs>=0&&ageMs<5000);
+}
+
+function _dropStaleOptimisticSessionRow(sid){
+  if(!sid) return;
+  if(INFLIGHT&&INFLIGHT[sid]){
+    delete INFLIGHT[sid];
+    if(typeof clearInflightState==='function') clearInflightState(sid);
+  }
+  if(typeof _sessionStreamingById!=='undefined'&&_sessionStreamingById&&typeof _sessionStreamingById.set==='function'){
+    _sessionStreamingById.set(sid,false);
+  }
+  if(typeof _forgetObservedStreamingSession==='function') _forgetObservedStreamingSession(sid);
+}
+
 function _mergeOptimisticFirstTurnSessions(fetchedSessions){
   const merged=Array.isArray(fetchedSessions)?[...fetchedSessions]:[];
   const bySid=new Map();
@@ -1749,24 +2087,32 @@ function _mergeOptimisticFirstTurnSessions(fetchedSessions){
     const idx=bySid.has(sid)?bySid.get(sid):-1;
     if(idx>=0){
       const fetched=merged[idx]||{};
+      const fetchedIsServerIdle=_isServerIdleSessionRow(fetched);
+      const keepLocalOptimistic=fetchedIsServerIdle?false:_shouldKeepLocalOnlyOptimisticSessionRow(local);
       const localCount=Number(local.message_count||0);
       const fetchedCount=Number(fetched.message_count||0);
       const localTs=Number(local.last_message_at||local.updated_at||0);
       const fetchedTs=Number(fetched.last_message_at||fetched.updated_at||0);
+      if(!keepLocalOptimistic&&typeof _dropStaleOptimisticSessionRow==='function') _dropStaleOptimisticSessionRow(sid);
       merged[idx]={
         ...local,
         ...fetched,
-        message_count:Math.max(localCount,fetchedCount),
-        last_message_at:Math.max(localTs,fetchedTs),
-        updated_at:Math.max(Number(local.updated_at||0),Number(fetched.updated_at||0),localTs,fetchedTs),
-        active_stream_id:fetched.active_stream_id||local.active_stream_id||null,
-        pending_user_message:fetched.pending_user_message||local.pending_user_message||null,
-        pending_started_at:fetched.pending_started_at||local.pending_started_at||null,
-        is_streaming:Boolean(fetched.is_streaming||local.is_streaming||_isSessionLocallyStreaming(local)),
+        title:keepLocalOptimistic?(local.title||fetched.title):fetched.title,
+        message_count:keepLocalOptimistic?Math.max(localCount,fetchedCount):fetchedCount,
+        last_message_at:keepLocalOptimistic?Math.max(localTs,fetchedTs):fetchedTs,
+        updated_at:keepLocalOptimistic?Math.max(Number(local.updated_at||0),Number(fetched.updated_at||0),localTs,fetchedTs):Number(fetched.updated_at||fetchedTs||0),
+        active_stream_id:fetchedIsServerIdle?null:(keepLocalOptimistic?(fetched.active_stream_id||local.active_stream_id||null):null),
+        pending_user_message:fetchedIsServerIdle?null:(keepLocalOptimistic?(fetched.pending_user_message||local.pending_user_message||null):null),
+        pending_started_at:fetchedIsServerIdle?null:(keepLocalOptimistic?(fetched.pending_started_at||local.pending_started_at||null):null),
+        is_streaming:fetchedIsServerIdle?false:(keepLocalOptimistic&&Boolean(fetched.is_streaming||local.is_streaming||_isSessionLocallyStreaming(local))),
       };
     }else{
-      merged.push({...local,is_streaming:true});
-      bySid.set(sid,merged.length-1);
+      if(_shouldKeepLocalOnlyOptimisticSessionRow(local)){
+        merged.push({...local,is_streaming:true});
+        bySid.set(sid,merged.length-1);
+      }else{
+        _dropStaleOptimisticSessionRow(sid);
+      }
     }
   }
   return merged;
@@ -1804,9 +2150,6 @@ function _applySessionListPayload(sessData, projData){
   // active profile so the "Show N from other profiles" toggle can render
   // without a second round-trip. Stashed on the module for renderSessionListFromCache.
   _otherProfileCount = sessData.other_profile_count || 0;
-  _allSessions = _mergeOptimisticFirstTurnSessions(sessData.sessions||[]);
-  _clearLineageReportCache();
-  _allProjects = projData.projects||[];
   // Capture server clock for clock-skew compensation (issue #1144).
   // server_time is epoch seconds from the server's time.time().
   // _serverTimeDelta = client - server, so (Date.now() - _serverTimeDelta)
@@ -1817,6 +2160,10 @@ function _applySessionListPayload(sessData, projData){
   if (typeof sessData.server_tz === 'string') {
     _serverTz = sessData.server_tz;
   }
+  _reconcileActiveSessionIdleStateFromList(sessData.sessions||[]);
+  _allSessions = _mergeOptimisticFirstTurnSessions(sessData.sessions||[]);
+  _clearLineageReportCache();
+  _allProjects = projData.projects||[];
   _markPollingCompletionUnreadTransitions(_allSessions);
   const isStreaming = _allSessions.some(s => Boolean(s && s.is_streaming));
   if (isStreaming) {
@@ -1825,6 +2172,12 @@ function _applySessionListPayload(sessData, projData){
     stopStreamingPoll();
   }
   ensureSessionTimeRefreshPoll();
+  ensureActiveSessionExternalRefreshPoll();
+  if(!_sessionListFirstRenderAnimated&&Array.isArray(_allSessions)&&_allSessions.length){
+    animateNextSessionListRefresh({enterAll:true});
+    _sessionListFirstRenderAnimated=true;
+  }
+  ensureSessionEventsSSE();
   renderSessionListFromCache();  // no-ops if rename is in progress
 }
 
@@ -1858,8 +2211,27 @@ let _gatewaySSEWarningShown = false;
 const _gatewayFallbackPollMs = 30000;
 const _streamingPollMs = 5000;
 const _sessionTimeRefreshMs = 60000;
+const _activeSessionExternalRefreshMs = 5000;
 let _streamingPollTimer = null;
 let _sessionTimeRefreshTimer = null;
+let _activeSessionExternalRefreshTimer = null;
+let _activeSessionExternalRefreshInFlight = false;
+let _sessionEventsSSE = null;
+let _sessionEventsRefreshTimer = 0;
+let _sessionEventsReconnectTimer = 0;
+let _sessionEventsNeedsRefreshOnOpen = false;
+let _sessionEventsReconnectAttempt = 0;
+const _sessionEventsReconnectBaseMs = 5000;
+const _sessionEventsReconnectMaxMs = 30000;
+
+function _sessionEventsReconnectDelayMs(){
+  const attempt = Math.max(0, Number(_sessionEventsReconnectAttempt || 0));
+  const base = Math.min(_sessionEventsReconnectMaxMs, _sessionEventsReconnectBaseMs * Math.pow(2, attempt));
+  const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(base * 0.35)));
+  return Math.min(_sessionEventsReconnectMaxMs, Math.floor(base * 0.75) + jitter);
+}
+let _sessionListRefreshInFlight = false;
+let _sessionListRefreshPendingReason = '';
 
 function startStreamingPoll(){
   if(_streamingPollTimer) return;
@@ -1880,6 +2252,130 @@ function ensureSessionTimeRefreshPoll(){
     renderSessionListFromCache();
   }, _sessionTimeRefreshMs);
 }
+
+async function refreshActiveSessionIfExternallyUpdated(reason){
+  if(_activeSessionExternalRefreshInFlight) return;
+  if(!S.session || !S.session.session_id) return;
+  if(S.busy || S.activeStreamId) return;
+  if(typeof document !== 'undefined' && document.hidden) return;
+  const sid = S.session.session_id;
+  const localCount = Number(S.session.message_count || (Array.isArray(S.messages)?S.messages.length:0) || 0);
+  const localLast = Number(S.session.last_message_at || S.session.updated_at || 0);
+  _activeSessionExternalRefreshInFlight = true;
+  try{
+    const data = await api(`/api/session?session_id=${encodeURIComponent(sid)}&messages=0&resolve_model=0`);
+    if(!data || !data.session) return;
+    if(!S.session || S.session.session_id !== sid) return;
+    if(S.busy || S.activeStreamId) return;
+    const remoteCount = Number(data.session.message_count || 0);
+    const remoteLast = Number(data.session.last_message_at || data.session.updated_at || 0);
+    if(remoteCount > localCount || remoteLast > localLast){
+      await loadSession(sid, {force:true, externalRefreshReason:reason||'poll'});
+      if(typeof renderSessionList==='function') void renderSessionList();
+    }
+  }catch(e){
+    // Ignore transient refresh failures; the next poll/focus event will retry.
+  }finally{
+    _activeSessionExternalRefreshInFlight = false;
+  }
+}
+
+function ensureActiveSessionExternalRefreshPoll(){
+  if(_activeSessionExternalRefreshTimer) return;
+  _activeSessionExternalRefreshTimer = setInterval(() => {
+    void refreshActiveSessionIfExternallyUpdated('poll');
+  }, _activeSessionExternalRefreshMs);
+  if(typeof document !== 'undefined' && !document._hermesExternalRefreshVisibilityHook){
+    document.addEventListener('visibilitychange', () => {
+      if(!document.hidden) void refreshActiveSessionIfExternallyUpdated('visible');
+    });
+    document._hermesExternalRefreshVisibilityHook = true;
+  }
+  if(typeof window !== 'undefined' && !window._hermesExternalRefreshFocusHook){
+    window.addEventListener('focus', () => { void refreshActiveSessionIfExternallyUpdated('focus'); });
+    window._hermesExternalRefreshFocusHook = true;
+  }
+}
+
+async function refreshSessionList(reason='manual', opts={}){
+  const force = !!(opts && opts.force);
+  const refreshActive = !!(opts && opts.refreshActive);
+  if(!force && typeof document !== 'undefined' && document.hidden) return;
+  if(_sessionListRefreshInFlight){
+    _sessionListRefreshPendingReason = reason || 'session-list';
+    return;
+  }
+  _sessionListRefreshInFlight = true;
+  try{
+    await renderSessionList({deferWhileInteracting:!force});
+    if(refreshActive) await refreshActiveSessionIfExternallyUpdated(reason||'session-list');
+  }finally{
+    _sessionListRefreshInFlight = false;
+    const pendingReason = _sessionListRefreshPendingReason;
+    _sessionListRefreshPendingReason = '';
+    if(pendingReason) _scheduleSessionEventsRefresh(pendingReason);
+  }
+}
+
+function _scheduleSessionEventsRefresh(reason){
+  if(_sessionEventsRefreshTimer) return;
+  _sessionEventsRefreshTimer = setTimeout(() => {
+    _sessionEventsRefreshTimer = 0;
+    void refreshSessionList(reason||'event');
+  }, 300);
+}
+
+function _closeSessionEventsSSE(){
+  if(_sessionEventsSSE){
+    _sessionEventsSSE.close();
+    _sessionEventsSSE = null;
+  }
+}
+
+function ensureSessionEventsSSE(){
+  if(typeof document !== 'undefined' && !document._hermesSessionEventsVisibilityHook){
+    document.addEventListener('visibilitychange', () => {
+      if(document.hidden){
+        _closeSessionEventsSSE();
+      }else{
+        ensureSessionEventsSSE();
+        void refreshSessionList('visible');
+      }
+    });
+    document._hermesSessionEventsVisibilityHook = true;
+  }
+  if(typeof EventSource==='undefined') return;
+  if(typeof document !== 'undefined' && document.hidden) return;
+  if(_sessionEventsSSE) return;
+  try{
+    // Same-origin relative URL preserves subpath mounts and normal WebUI cookies.
+    _sessionEventsSSE = new EventSource('api/sessions/events');
+    _sessionEventsSSE.onopen = () => {
+      _sessionEventsReconnectAttempt = 0;
+      if(!_sessionEventsNeedsRefreshOnOpen) return;
+      _sessionEventsNeedsRefreshOnOpen = false;
+      void refreshSessionList('reconnect');
+    };
+    _sessionEventsSSE.addEventListener('sessions_changed', () => {
+      _scheduleSessionEventsRefresh('event');
+    });
+    _sessionEventsSSE.onerror = () => {
+      _sessionEventsNeedsRefreshOnOpen = true;
+      _closeSessionEventsSSE();
+      if(_sessionEventsReconnectTimer) return;
+      const delayMs = _sessionEventsReconnectDelayMs();
+      _sessionEventsReconnectAttempt = Math.min(_sessionEventsReconnectAttempt + 1, 6);
+      _sessionEventsReconnectTimer = setTimeout(() => {
+        _sessionEventsReconnectTimer = 0;
+        ensureSessionEventsSSE();
+      }, delayMs);
+    };
+  }catch(e){
+    _closeSessionEventsSSE();
+  }
+}
+
+if(typeof window!=='undefined') window.refreshSessionList = refreshSessionList;
 
 function startGatewayPollFallback(ms){
   const intervalMs = Math.max(5000, Number(ms) || _gatewayFallbackPollMs);
@@ -1967,6 +2463,7 @@ function startGatewaySSE(){
       }catch(e){ /* ignore parse errors */ }
     });
     _gatewaySSE.onerror = () => {
+      if(typeof recordClientSSEError==='function') recordClientSSEError('gateway-sessions',{ready_state:_gatewaySSE?_gatewaySSE.readyState:null,reason:'gateway EventSource.onerror'});
       if(_gatewaySSE){
         _gatewaySSE.close();
         _gatewaySSE = null;
@@ -2129,17 +2626,31 @@ function _isChildSession(s){
   return !!(s&&s.parent_session_id&&s.relationship_type==='child_session');
 }
 
-function _sessionLineageKey(s, sessionIdsInList){
+function _sessionLineageKey(s, sessionIdsInList, sessionsById){
   if(!s||!s.session_id) return null;
   if(_isChildSession(s)) return null;
   if(s.session_source==='fork') return null;
   const lineageKey=s._lineage_root_id||s.lineage_root_id||null;
   if(lineageKey) return lineageKey;
+  // WebUI-native context compression may only persist parent_session_id:
+  // the preserved parent snapshot is marked pre_compression_snapshot while
+  // the new continuation points at it.  When both rows are in the sidebar
+  // payload, still collapse them into one conversation (#2489).
+  const parent=s.parent_session_id&&sessionsById?sessionsById.get(s.parent_session_id):null;
+  if(s.pre_compression_snapshot||parent&&parent.pre_compression_snapshot){
+    let root=s;
+    const seen=new Set();
+    while(root&&root.parent_session_id&&sessionsById&&sessionsById.has(root.parent_session_id)&&!seen.has(root.parent_session_id)){
+      const next=sessionsById.get(root.parent_session_id);
+      if(!next||_isChildSession(next)||next.session_source==='fork'||!(root.pre_compression_snapshot||next.pre_compression_snapshot)) break;
+      seen.add(root.session_id);
+      root=next;
+    }
+    return root&&root.session_id||s.parent_session_id||s.session_id;
+  }
   // If parent_session_id points to another session in the current list,
   // this is a subagent/fork child without compression metadata — don't
-  // collapse it into lineage (#494). Compression continuations carry an
-  // explicit lineage root, even when stale optimistic rows leave parent
-  // segments in the browser cache during active compression.
+  // collapse it into lineage (#494).
   if(s.parent_session_id && sessionIdsInList && sessionIdsInList.has(s.parent_session_id)){
     return null;
   }
@@ -2152,6 +2663,39 @@ function _sessionLineageContainsSession(s, sid){
   if(Array.isArray(s._lineage_segments)&&s._lineage_segments.some(seg=>seg&&seg.session_id===sid)) return true;
   if(Array.isArray(s._child_sessions)&&s._child_sessions.some(child=>child&&child.session_id===sid)) return true;
   return false;
+}
+
+function _resolveSessionIdFromSidebarLineage(sid){
+  sid=String(sid||'').trim();
+  if(!sid||!Array.isArray(_allSessions)||!_allSessions.length) return sid||null;
+  const visibleRows=_collapseSessionLineageForSidebar(_allSessions).filter(row=>row&&!_isChildSession(row));
+  if(visibleRows.some(row=>row&&row.session_id===sid)) return sid;
+  const candidates=[];
+  for(const row of visibleRows){
+    if(!row||!row.session_id) continue;
+    if(row.session_source==='fork'||row.relationship_type==='child_session') continue;
+    const lineageLike=!!(
+      row._lineage_key||row._lineage_root_id||row.lineage_root_id||
+      row._compression_segment_count||row.pre_compression_snapshot||
+      (Array.isArray(row._lineage_segments)&&row._lineage_segments.length>1)
+    );
+    if(!lineageLike) continue;
+    const key=_sidebarLineageKeyForRow(row);
+    if(key===sid||row.parent_session_id===sid||row._lineage_root_id===sid||row.lineage_root_id===sid||_sessionLineageContainsSession(row,sid)){
+      candidates.push(row);
+    }
+  }
+  if(!candidates.length) return sid;
+  candidates.sort((a,b)=>{
+    const bSeg=Number(b&&b._compression_segment_count||b&&b._lineage_collapsed_count||0);
+    const aSeg=Number(a&&a._compression_segment_count||a&&a._lineage_collapsed_count||0);
+    if(bSeg!==aSeg) return bSeg-aSeg;
+    const bSnapshot=!!(b&&b.pre_compression_snapshot);
+    const aSnapshot=!!(a&&a.pre_compression_snapshot);
+    if(bSnapshot!==aSnapshot) return aSnapshot-bSnapshot;
+    return _sessionTimestampMs(b)-_sessionTimestampMs(a);
+  });
+  return candidates[0].session_id||sid;
 }
 
 function _sessionSegmentCount(s){
@@ -2315,9 +2859,10 @@ function _syncSidebarExpansionForActiveSession(rows, activeSid){
 function _collapseSessionLineageForSidebar(sessions){
   const result=[];
   const sessionIdsInList=new Set((sessions||[]).map(s=>s.session_id));
+  const sessionsById=new Map((sessions||[]).filter(s=>s&&s.session_id).map(s=>[s.session_id,s]));
   const groups=new Map();
   for(const s of sessions||[]){
-    const key=_sessionLineageKey(s, sessionIdsInList);
+    const key=_sessionLineageKey(s, sessionIdsInList, sessionsById);
     if(!key){result.push(s);continue;}
     if(!groups.has(key)) groups.set(key,[]);
     groups.get(key).push(s);
@@ -2330,6 +2875,13 @@ function _collapseSessionLineageForSidebar(sessions){
       if(bSeg||aSeg){
         if(bSeg!==aSeg) return bSeg-aSeg;
       }
+      // Preserved pre-compression parents can share the same backend segment
+      // count as the continuation. Prefer the non-snapshot tip before falling
+      // back to timestamps, otherwise a recently-polled parent reopens the
+      // older transcript and makes the active continuation look lost.
+      const bSnapshot=!!(b&&b.pre_compression_snapshot);
+      const aSnapshot=!!(a&&a.pre_compression_snapshot);
+      if(bSnapshot!==aSnapshot) return aSnapshot-bSnapshot;
       return _sessionTimestampMs(b)-_sessionTimestampMs(a);
     });
     const chosen=sorted[0];
@@ -2515,9 +3067,30 @@ function _markSessionListPointerUp(){
   if(_pendingSessionListPayload) _schedulePendingSessionListApply();
 }
 
+let _sessionVirtualResyncRaf = 0;
+function _resyncSessionVirtualWindowAfterRender(list, expectedScrollTop, virtualWindow){
+  if(!list||!virtualWindow||!virtualWindow.virtualized) return;
+  expectedScrollTop=Number(expectedScrollTop)||0;
+  if(expectedScrollTop<=0) return;
+  if(_sessionVirtualResyncRaf) cancelAnimationFrame(_sessionVirtualResyncRaf);
+  _sessionVirtualResyncRaf=requestAnimationFrame(()=>{
+    _sessionVirtualResyncRaf=0;
+    if(_renamingSid) return;
+    const actualScrollTop=Number(list.scrollTop)||0;
+    const tolerance=Math.max(2, Number(virtualWindow.itemHeight||SESSION_VIRTUAL_ROW_HEIGHT)/2);
+    if(Math.abs(actualScrollTop-expectedScrollTop)<=tolerance) return;
+    renderSessionListFromCache();
+  });
+}
+
 function renderSessionListFromCache(){
   // Don't re-render while user is actively renaming a session (would destroy the input)
   if(_renamingSid) return;
+  // Keep the per-conversation actions menu stable while the user is trying to
+  // click it. Sidebar syncs, stream/unread updates, and panel-resync repairs can
+  // all call this while the fixed-position menu is open; rebuilding the row DOM
+  // here removes the anchor and makes the menu feel unclickable.
+  if(_sessionActionMenu) return;
   closeSessionActionMenu();
   // Purge stale INFLIGHT entries for sessions the server confirms are NOT
   // streaming. This runs on every list refresh to prevent memory leaks from
@@ -2562,6 +3135,11 @@ function renderSessionListFromCache(){
   _syncSidebarExpansionForActiveSession(sessions, activeSidForSidebar);
   const archivedCount=projectFiltered.filter(s=>s.archived).length;
   const list=$('sessionList');
+  const animateRefresh=_sessionListRefreshAnimationPending;
+  _sessionListRefreshAnimationPending=false;
+  const enterAllAnimatedRows=animateRefresh&&_sessionListEnterAllAnimationPending;
+  _sessionListEnterAllAnimationPending=false;
+  const flipBefore=animateRefresh?_captureSessionListFlipPositions():null;
   const listScrollTopBeforeRender=list.scrollTop||0;
   list.innerHTML='';
   // Batch select bar (when in select mode)
@@ -2792,6 +3370,7 @@ function renderSessionListFromCache(){
     // scrollTop drops to 0 — producing a "scroll keeps jumping back" feel
     // when the list scrolls naturally. Fixed for #1669 follow-up.
     list.scrollTop=listScrollTopBeforeRender;
+    _resyncSessionVirtualWindowAfterRender(list, listScrollTopBeforeRender, virtualWindow);
   }
   // Select mode toggle button (only when NOT in select mode)
   if(!_sessionSelectMode){
@@ -2799,6 +3378,9 @@ function renderSessionListFromCache(){
     toggleBtn.textContent=t('session_select_mode');
     toggleBtn.onclick=(e)=>{e.stopPropagation();toggleSessionSelectMode();};
     list.appendChild(toggleBtn);
+  }
+  if(animateRefresh){
+    _playSessionListFlipAnimation(flipBefore);
   }
   // Note: declared after the groups loop but available via function hoisting.
   function _renderOneSession(s, isPinnedGroup=false){
@@ -2810,6 +3392,9 @@ function renderSessionListFromCache(){
     const hasUnread=_hasUnreadForSession(s)&&!isActive;
     const readOnly=_isReadOnlySession(s);
     el.className='session-item'+(isActive?' active':'')+(isActive&&S.session&&S.session._flash?' new-flash':'')+(s.archived?' archived':'')+(isStreaming?' streaming':'')+(hasUnread?' unread':'');
+    if(animateRefresh&&(enterAllAnimatedRows||!(flipBefore&&flipBefore.has(s.session_id)))){
+      el.classList.add('session-list-flip-enter');
+    }
     if(s.is_cli_session){
       el.classList.add('cli-session');
       el.dataset.source=_getChannelLabel(s)||'CLI';
@@ -3133,6 +3718,16 @@ function renderSessionListFromCache(){
       actions.appendChild(menuBtn);
       el.appendChild(actions);
     }
+    el.oncontextmenu=(e)=>{
+      if(readOnly) return;
+      e.preventDefault();
+      e.stopPropagation();
+      clearTimeout(_tapTimer);
+      _tapTimer=null;
+      _lastTapTime=0;
+      _clearPointerDragState();
+      _openSessionActionMenu(s, actions||el);
+    };
 
     // Use pointerup + manual double-tap detection instead of onclick/ondblclick.
     // onclick/ondblclick are unreliable on touch devices (iPad Safari especially):
@@ -3344,6 +3939,7 @@ async function deleteSession(sid){
   let response=null;
   try{
     response=await api('/api/session/delete',{method:'POST',body:JSON.stringify({session_id:sid})});
+    _optimisticallyRemoveSessionFromList(sid);
     _clearHandoffStorageForSession(sid);
   }catch(e){setStatus(`Delete failed: ${e.message}`);return;}
   if(S.session&&S.session.session_id===sid){
@@ -3354,7 +3950,7 @@ async function deleteSession(sid){
     if(remaining.sessions&&remaining.sessions.length){
       await loadSession(remaining.sessions[0].session_id);
     }else{
-      const _tt=$('topbarTitle');if(_tt)_tt.textContent=window._botName||'Hermes';
+      const _tt=$('topbarTitle');if(_tt)_tt.textContent=assistantDisplayName();
       const _tm=$('topbarMeta');if(_tm)_tm.textContent='Start a new conversation';
       $('msgInner').innerHTML='';
       $('emptyState').style.display='';
@@ -3364,7 +3960,7 @@ async function deleteSession(sid){
     }
   }
   showToast(_sessionResponseRetainsWorktree(response,session)?t('session_deleted_worktree'):t('session_deleted'));
-  await renderSessionList();
+  void renderSessionList();
 }
 
 // ── Project helpers ─────────────────────────────────────────────────────
@@ -3384,7 +3980,12 @@ function _showProjectPicker(session, anchorEl){
     picker.remove();
     document.removeEventListener('click',close);
     await api('/api/session/move',{method:'POST',body:JSON.stringify({session_id:session.session_id,project_id:null})});
-    session.project_id=null;
+    // Sidebar rows are shallow copies of _allSessions entries (see
+    // _attachChildSessionsToSidebarRows), so mutating `session` only updates
+    // the discarded copy. Write into the authoritative cache so the next
+    // renderSessionListFromCache() reflects the move. (#2551)
+    const idx=_allSessions.findIndex(s=>s&&s.session_id===session.session_id);
+    if(idx>=0) _allSessions[idx].project_id=null;
     renderSessionListFromCache();
     showToast('Removed from project');
   };
@@ -3406,7 +4007,9 @@ function _showProjectPicker(session, anchorEl){
       picker.remove();
       document.removeEventListener('click',close);
       await api('/api/session/move',{method:'POST',body:JSON.stringify({session_id:session.session_id,project_id:p.project_id})});
-      session.project_id=p.project_id;
+      // See #2551 — write to _allSessions, not the shallow sidebar copy.
+      const idx=_allSessions.findIndex(s=>s&&s.session_id===session.session_id);
+      if(idx>=0) _allSessions[idx].project_id=p.project_id;
       renderSessionListFromCache();
       showToast('Moved to '+p.name);
     };

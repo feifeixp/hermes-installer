@@ -68,7 +68,7 @@ What makes it different from other agentic tools:
   the results back into its own memory
 - **Self-hosted** — your conversations, your memory, your hardware
 
-**vs. the field** *(landscape is actively shifting — see [HERMES.md](HERMES.md) for the full breakdown)*:
+**vs. the field** *(landscape is actively shifting — see [docs/why-hermes.md](docs/why-hermes.md) for the full breakdown)*:
 
 | | OpenClaw | Claude Code | Codex CLI | OpenCode | Hermes |
 |---|---|---|---|---|---|
@@ -89,7 +89,7 @@ with memory, cron, and messaging. The key differences: Hermes writes and saves i
 automatically as a core behavior (OpenClaw's skill system centers on a community marketplace);
 Hermes is more stable across updates (OpenClaw has documented release regressions and ClawHub
 has had security incidents involving malicious skills); and Hermes runs natively in the Python
-ecosystem. See [HERMES.md](HERMES.md) for the full side-by-side.
+ecosystem. See [docs/why-hermes.md](docs/why-hermes.md) for the full side-by-side.
 
 ---
 
@@ -131,7 +131,14 @@ The bootstrap will:
 
 > Native Windows is not supported for this bootstrap yet. Use Linux, macOS, or WSL2.
 > For Windows / WSL auto-start at login, see [`docs/wsl-autostart.md`](docs/wsl-autostart.md).
-> A community-maintained native Windows guide is tracked in [#1952](https://github.com/nesquena/hermes-webui/issues/1952).
+
+A community-maintained native Windows setup is documented at [@markwang2658/hermes-windows-native-guide](https://github.com/markwang2658/hermes-windows-native-guide) (companion setup repo: [@markwang2658/hermes-windows-native](https://github.com/markwang2658/hermes-windows-native)). Notes from the community report in [#1952](https://github.com/nesquena/hermes-webui/issues/1952):
+
+- **Memory:** community-measured ~330 MB native vs ~1080 MB with WSL2+Docker (varies by configuration).
+- **What works:** chat, workspace browser, session management, all themes.
+- **Known limitations:** some POSIX-style file paths surface in the workspace browser; bash-assuming agent tools may not work natively.
+- **Native Windows setup:** install Python 3.11+, then from the hermes-agent root in PowerShell: `python -m venv venv` → `pip install -r requirements.txt` → `pwsh .\start.ps1` (it auto-discovers `venv\Scripts\python.exe`).
+- **WSL2 relationship:** not a prerequisite — a WSL2-built venv (`venv/bin/python`, ELF) isn't invokable by native Windows Python, so use the native setup above. WSL2 stays useful as a parallel install if you want the full `bootstrap.py` + Linux runtime.
 
 If provider setup is still incomplete after install, the onboarding wizard will point you to finish it with `hermes model` instead of trying to replicate the full CLI setup in-browser.
 For a step-by-step walkthrough of the wizard, provider choices, local model server Base URLs, and safe re-runs, see [`docs/onboarding.md`](docs/onboarding.md).
@@ -208,6 +215,8 @@ docker compose -f docker-compose.three-container.yml up -d
 Both compose files use **named Docker volumes** by default, which solves the UID/GID problem by construction. If you need bind mounts to share an existing host directory, see [`docs/docker.md`](docs/docker.md) for the full migration recipe.
 
 > **Known limitation (#681)**: in the two-container setup, tools triggered from the WebUI run in the **WebUI container**, not the agent container. If you need git/node/etc. on the WebUI's filesystem, either use the single-container setup, extend the WebUI Dockerfile, or use the community [all-in-one image](https://github.com/sunnysktsang/hermes-suite).
+>
+> **Source boundary note (#2453)**: the multi-container setup mounts `hermes-agent-src` read-only into the WebUI by default. This prevents WebUI-side source rewrites but is still an implementation-coupling bridge, not a stable Agent API boundary. See [`docs/rfcs/agent-source-boundary.md`](docs/rfcs/agent-source-boundary.md) for the current source/API decoupling inventory.
 
 ### Common failure modes
 
@@ -232,9 +241,9 @@ For the deep dive on each of these, see [`docs/docker.md`](docs/docker.md).
 
 | Thing | How it finds it |
 |---|---|
-| Hermes agent dir | `HERMES_WEBUI_AGENT_DIR` env, then `~/.hermes/hermes-agent`, then sibling `../hermes-agent` |
+| Hermes agent dir | `HERMES_WEBUI_AGENT_DIR` env, then `$HERMES_HOME/hermes-agent` (Windows default `%LOCALAPPDATA%\hermes\hermes-agent`, POSIX default `~/.hermes/hermes-agent`), then sibling `../hermes-agent` |
 | Python executable | Agent venv first, then `.venv` in this repo, then system `python3` |
-| State directory | `HERMES_WEBUI_STATE_DIR` env, then `~/.hermes/webui` |
+| State directory | `HERMES_WEBUI_STATE_DIR` env, then `$HERMES_HOME/webui` (Windows default `%LOCALAPPDATA%\hermes\webui`, POSIX default `~/.hermes/webui`) |
 | Default workspace | `HERMES_WEBUI_DEFAULT_WORKSPACE` env, then `~/workspace`, then state dir |
 | Port | `HERMES_WEBUI_PORT` env or first argument, default `8787` |
 
@@ -266,15 +275,16 @@ Full list of environment variables:
 | `HERMES_WEBUI_PYTHON` | auto-discovered | Python executable |
 | `HERMES_WEBUI_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for all IPv4, `::` for all IPv6, `::1` for IPv6 loopback) |
 | `HERMES_WEBUI_PORT` | `8787` | Port |
-| `HERMES_WEBUI_STATE_DIR` | `~/.hermes/webui` | Where sessions and state are stored |
+| `HERMES_WEBUI_STATE_DIR` | `$HERMES_HOME/webui` (Windows default `%LOCALAPPDATA%\hermes\webui`, POSIX default `~/.hermes/webui`) | Where sessions and state are stored |
 | `HERMES_WEBUI_DEFAULT_WORKSPACE` | `~/workspace` | Default workspace |
 | `HERMES_WEBUI_DEFAULT_MODEL` | *(provider default)* | Optional model override; leave unset to use the active Hermes provider default |
 | `HERMES_WEBUI_PASSWORD` | *(unset)* | Set to enable password authentication |
+| `HERMES_WEBUI_CSP_CONNECT_EXTRA` | *(unset)* | Optional space-separated `http(s)://` or `ws(s)://` origins to append to the report-only CSP `connect-src` directive for reverse-proxy or tunnel deployments |
 | `HERMES_WEBUI_EXTENSION_DIR` | *(unset)* | Optional local directory served at `/extensions/`; must point to an existing directory before extension injection is enabled |
 | `HERMES_WEBUI_EXTENSION_SCRIPT_URLS` | *(unset)* | Optional comma-separated same-origin script URLs to inject; see [WebUI Extensions](docs/EXTENSIONS.md) |
 | `HERMES_WEBUI_EXTENSION_STYLESHEET_URLS` | *(unset)* | Optional comma-separated same-origin stylesheet URLs to inject; see [WebUI Extensions](docs/EXTENSIONS.md) |
-| `HERMES_HOME` | `~/.hermes` | Base directory for Hermes state (affects all paths) |
-| `HERMES_CONFIG_PATH` | `~/.hermes/config.yaml` | Path to Hermes config file |
+| `HERMES_HOME` | Windows: `%LOCALAPPDATA%\hermes`; POSIX: `~/.hermes` | Base directory for Hermes state (affects all paths) |
+| `HERMES_CONFIG_PATH` | `$HERMES_HOME/config.yaml` | Path to Hermes config file |
 
 ---
 
@@ -327,6 +337,22 @@ HERMES_WEBUI_HOST=0.0.0.0 HERMES_WEBUI_PASSWORD=your-secret ./start.sh
 That's it. Traffic is encrypted end-to-end by WireGuard, and password auth
 protects the UI at the application level. You can add it to your home screen
 for an app-like experience.
+
+### Community field report: ARM64 Android via AVF
+
+A community report in [#2364](https://github.com/nesquena/hermes-webui/issues/2364)
+documents Hermes Agent + WebUI running on a mid-range ARM64 Android phone inside
+a Debian 12 VM via Android Virtualization Framework (AVF). The reported setup
+used a Xiaomi Redmi Note 13 Pro 4G, 3.8 GiB RAM allocated to the VM, 8 visible
+CPU cores, Chrome on Android at `localhost:8787`, and cloud-hosted inference.
+
+This is not an official support baseline or provider/model benchmark, but it is
+a useful compatibility signal for mobile ARM64 experiments: the WebUI rendered
+smoothly in Chrome, ARM64 Debian worked for the agent stack, and the total local
+footprint was about 1.7 GB. Practical caveats from the report: first install can
+take longer when dependencies compile from source, Android browser tabs may
+reload when switching apps, and disabling battery optimization for the terminal
+or VM host may be needed for longer-running sessions.
 
 > **Tip:** If using Docker, set `HERMES_WEBUI_HOST=0.0.0.0` in your
 > `docker-compose.yml` environment (already the default) and set
@@ -389,7 +415,7 @@ Production data and real cron jobs are never touched. Current snapshot:
 - Thinking/reasoning display -- collapsible gold-themed cards for Claude extended thinking and o3 reasoning blocks
 - Approval card for dangerous shell commands (allow once / session / always / deny)
 - SSE auto-reconnect on network blips (SSH tunnel resilience)
-- File attachments persist across page reloads
+- File attachments persist across page reloads and are stored outside the active workspace by default (`~/.hermes/webui/attachments/<session_id>/`, or `HERMES_WEBUI_ATTACHMENT_DIR/<session_id>/` when configured)
 - Message timestamps (HH:MM next to each message, full date on hover)
 - Code block copy button with "Copied!" feedback
 - Syntax highlighting via Prism.js (Python, JS, bash, JSON, SQL, and more)
@@ -442,6 +468,8 @@ Production data and real cron jobs are never touched. Current snapshot:
 ### Authentication and security
 - Optional password auth -- off by default, zero friction for localhost
 - Enable via `HERMES_WEBUI_PASSWORD` env var or Settings panel
+- Optional passkeys/WebAuthn -- register from Settings -> System after signing in with a password; the login page only shows passkey sign-in after at least one passkey exists
+- After registering at least one passkey, Settings -> System can remove the password and keep passkey-only sign-in enabled. Password auth remains the bootstrap/recovery path until you choose to go passwordless; passkeys are same-origin and stored locally in the WebUI state directory
 - Signed HMAC HTTP-only cookie with 24h TTL
 - Minimal dark-themed login page at `/login`
 - Security headers on all responses (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
@@ -449,10 +477,13 @@ Production data and real cron jobs are never touched. Current snapshot:
 - CDN resources pinned with SRI integrity hashes
 
 ### Themes
-- 7 built-in themes: Dark (default), Light, Slate, Solarized Dark, Monokai, Nord, OLED
-- Switch via Settings panel dropdown (instant live preview) or `/theme` command
+- Appearance is split into two axes: Theme (`system`, `dark`, `light`) and Skin
+  (`default`, `ares`, `mono`, `slate`, `poseidon`, `sisyphus`, `charizard`,
+  `sienna`, `catppuccin`, `nous`, `geist-contrast` / Geist Contrast)
+- Switch via Settings -> Appearance (instant live preview) or `/theme <theme-or-skin>`
 - Persists across reloads (server-side in settings.json + localStorage for flicker-free loading)
-- Custom themes: define a `:root[data-theme="name"]` CSS block and it works — see [THEMES.md](THEMES.md)
+- Skins use `data-skin` plus CSS variables; dark mode resolves through the
+  `.dark` class, not a `data-theme` custom-theme axis — see [THEMES.md](THEMES.md)
 
 ### Settings and configuration
 - **Hermes Control Center** (sidebar launcher button) -- Conversation tab (export/import/clear), Preferences tab (model, send key, theme, language, all toggles), System tab (version, password)
@@ -531,13 +562,15 @@ State lives outside the repo at `~/.hermes/webui/` by default
 
 ## Docs
 
-- `HERMES.md` -- why Hermes, mental model, and detailed comparison to Claude Code / Codex / OpenCode / Cursor
+- `docs/why-hermes.md` -- why Hermes, mental model, and detailed comparison to Claude Code / Codex / OpenCode / Cursor
 - `ROADMAP.md` -- feature roadmap and sprint history
 - `ARCHITECTURE.md` -- system design, all API endpoints, implementation notes
 - `TESTING.md` -- manual browser test plan and automated coverage reference
 - `CHANGELOG.md` -- release notes per sprint
 - `SPRINTS.md` -- forward sprint plan with CLI + Claude parity targets
 - `THEMES.md` -- theme system documentation, custom theme guide
+- `docs/CONTRACTS.md` -- project contract/RFC/design index for contributors and agents
+- `docs/UIUX-GUIDE.md` -- UI/UX principles sourced from existing design docs and visual inventories
 - `docs/docker.md` -- Docker compose setup, common failures, and bind-mount migration
 - `docs/supervisor.md` -- launchd, systemd, supervisord, runit, and s6 process-supervisor setup
 - `docs/onboarding.md` -- first-run wizard, provider setup, local model server Base URLs, and safe re-runs
