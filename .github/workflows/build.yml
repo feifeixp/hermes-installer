@@ -2,7 +2,12 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    # `main` covers production. `sync/**` covers in-progress upstream sync
+    # work — these branches go through long iteration cycles (re-build .exe
+    # → user retests Windows install → fix → re-push) and we want CI to
+    # rebuild on each push without depending on PR sync events, which can
+    # lag minutes behind a `git push` on busy days.
+    branches: [main, 'sync/**']
     tags: ['v*']
   pull_request:
     branches: [main]
