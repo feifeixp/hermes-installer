@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["main.py"],
       "port": 7891
+    },
+    {
+      "name": "webui-synced",
+      "runtimeExecutable": ".claude/run-webui.sh",
+      "runtimeArgs": [],
+      "port": 8787
     }
   ]
 }

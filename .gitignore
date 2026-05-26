@@ -22,9 +22,11 @@ __pycache__/
 # webui/static/.
 /mdmse-*.ico
 
-# IDE (only ignore common config dirs, keep launch.json for Claude)
+# IDE (only ignore common config dirs, keep launch.json + the sync-smoke
+# wrapper script for Claude)
 .claude/*
 !.claude/launch.json
+!.claude/run-webui.sh
 .vscode/
 .idea/
 
