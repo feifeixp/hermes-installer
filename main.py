@@ -617,8 +617,19 @@ def _start_webui_server_windows(port: int, host: str) -> subprocess.Popen:
     )
     # Open in append mode so logs survive across restarts
     server_log_fh = open(server_log_path, "ab")  # noqa: SIM115 (kept open for subprocess lifetime)
+    # Pass -X frozen_modules=off to work around a python-build-standalone
+    # bug: in some Python 3.11.x builds the frozen asyncio importer fails to
+    # bind `base_events` as a name on the asyncio package when imported via
+    # webui's lazy/multi-threaded import chain, raising
+    #   NameError: name 'base_events' is not defined
+    # at asyncio/__init__.py:25. The same Python works fine for hermes CLI
+    # (which imports asyncio first thing) — webui only hits it because
+    # api.routes / api.streaming / api.profiles import run_agent + cron
+    # deep in the chain. Disabling frozen modules forces the regular
+    # filesystem importer for stdlib, which doesn't trigger the bug.
+    # Startup cost (~50ms) is irrelevant next to webui's other init work.
     proc = subprocess.Popen(
-        [str(venv_python), str(server_py)],
+        [str(venv_python), "-X", "frozen_modules=off", str(server_py)],
         cwd=str(agent_dir),
         env=env,
         stdout=server_log_fh,
