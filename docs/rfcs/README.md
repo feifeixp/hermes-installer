@@ -42,5 +42,12 @@ First-time contributor RFCs should be discussed in an issue before opening a PR.
   event/control contract, runtime-state ownership matrix, acceptance catalog,
   and reversible migration gates for moving WebUI execution behind an explicit
   adapter boundary.
+- [`webui-run-state-consistency-contract.md`](webui-run-state-consistency-contract.md)
+  — #2361 consistency rules for keeping transcript, model context, live streams,
+  replay, compression, and session metadata coherent during active and recovered
+  WebUI runs.
+- [`canonical-session-resolution.md`](canonical-session-resolution.md) — #2361
+  focused contract for resolving URL, query parameter, localStorage, sidebar,
+  and compression-lineage session IDs to one canonical visible chat target.
 - [`turn-journal.md`](turn-journal.md) — Crash-safe WebUI turn journal for
   recovering interrupted chat submissions.
