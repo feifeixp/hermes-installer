@@ -779,22 +779,32 @@ def _set_hermes_home(home: Path):
     patch_skill_home_modules(home)
 
     # Patch cron/jobs module-level cache
+    #
+    # Broaden the exception clause beyond (ImportError, AttributeError):
+    # observed in the wild (Windows, uv-managed Python 3.11.11), the cron
+    # package's own internal `import asyncio` chain can raise NameError
+    # (from inside asyncio.__init__.py — likely a partial-import race in
+    # the python-build-standalone distribution). The NameError then bubbles
+    # past this try/except, kills the entire WebUI server start, and the
+    # user sees ERR_CONNECTION_REFUSED in the WebView with no diagnostic.
+    # WebUI must boot even if cron-package module patching fails — cron
+    # is a non-critical add-on, not load-bearing for the UI itself.
     try:
         import cron.jobs as _cj
         _cj.HERMES_DIR = home
         _cj.CRON_DIR = home / 'cron'
         _cj.JOBS_FILE = _cj.CRON_DIR / 'jobs.json'
         _cj.OUTPUT_DIR = _cj.CRON_DIR / 'output'
-    except (ImportError, AttributeError):
-        logger.debug("Failed to patch cron.jobs module")
+    except Exception as exc:
+        logger.debug("Failed to patch cron.jobs module: %s", exc)
 
     try:
         import cron.scheduler as _cs
         _cs._hermes_home = home
         _cs._LOCK_DIR = home / 'cron'
         _cs._LOCK_FILE = _cs._LOCK_DIR / '.tick.lock'
-    except (ImportError, AttributeError):
-        logger.debug("Failed to patch cron.scheduler module")
+    except Exception as exc:
+        logger.debug("Failed to patch cron.scheduler module: %s", exc)
 
 
 def _reload_dotenv(home: Path):

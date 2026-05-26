@@ -4962,10 +4962,24 @@ if _settings_file_exists:
 SESSIONS: collections.OrderedDict = collections.OrderedDict()
 
 # ── Profile state initialisation ────────────────────────────────────────────
-# Must run after all imports are resolved to correctly patch module-level caches
+# Must run after all imports are resolved to correctly patch module-level caches.
+#
+# Broaden the exception clause beyond bare ImportError: observed in the wild
+# on Windows + uv-managed Python 3.11.11, init_profile_state's nested
+# `import cron.scheduler` can transitively trigger a NameError from inside
+# Python's own asyncio.__init__.py (a partial-import race in the
+# python-build-standalone distribution). The original `except ImportError`
+# only handled "hermes_cli not installed" — but a NameError from stdlib
+# asyncio inside agent code would bubble past it and kill the entire WebUI
+# server start, leaving the user with ERR_CONNECTION_REFUSED in the WebView
+# and no diagnostic surface. Profile state init is not load-bearing for the
+# UI itself (you just lose the cron-scheduler profile isolation hook), so
+# absorb anything and let server.py finish booting.
 try:
     from api.profiles import init_profile_state
 
     init_profile_state()
-except ImportError:
-    pass  # hermes_cli not available -- default profile only
+except Exception as _exc:
+    logging.getLogger(__name__).debug(
+        "init_profile_state skipped due to import-time error: %r", _exc
+    )
