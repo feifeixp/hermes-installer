@@ -943,6 +943,61 @@ def main():
                  _win_server_proc.pid, port, WEBUI_STARTUP_TIMEOUT)
         ready = _wait_for_server(port, timeout=WEBUI_STARTUP_TIMEOUT)
 
+        # ── Windows: explicit diagnostics on startup failure ─────────────
+        # The old behavior was to silently open the WebView even when ready
+        # was False, leading to user-visible ERR_CONNECTION_REFUSED with no
+        # actionable error. Now we detect server-process crashes (poll
+        # returns non-None returncode), surface the last lines of the server
+        # log, and pop an alert with the failing details + log path so the
+        # user can copy-paste it for support — instead of having to know
+        # %APPDATA%\Hermes\webui-server.log exists.
+        if not ready:
+            returncode = _win_server_proc.poll()
+            server_log_path = _LOG_DIR / "webui-server.log"
+            tail = ""
+            try:
+                if server_log_path.exists():
+                    with open(server_log_path, "rb") as fh:
+                        # Read last ~6 KB; enough to capture a Python traceback
+                        try:
+                            fh.seek(0, 2)
+                            size = fh.tell()
+                            fh.seek(max(0, size - 6144))
+                            tail = fh.read().decode("utf-8", errors="replace")
+                        except OSError:
+                            tail = fh.read().decode("utf-8", errors="replace")
+            except Exception as exc:
+                log.debug("could not read server log tail: %s", exc)
+                tail = f"(无法读取日志: {exc})"
+
+            tail_short = tail.strip()
+            if len(tail_short) > 1500:
+                tail_short = "..." + tail_short[-1500:]
+
+            if returncode is not None:
+                # Process exited before binding the port. The log tail should
+                # carry the Python traceback from server.py.
+                log.error("server.py died early (rc=%s) — log tail follows:\n%s",
+                          returncode, tail)
+                _alert(
+                    "Hermes 启动失败",
+                    f"WebUI 服务在启动过程中崩溃（退出码 {returncode}）。\n\n"
+                    f"日志末尾：\n{tail_short or '(日志为空)'}\n\n"
+                    f"完整日志：{server_log_path}",
+                )
+            else:
+                # Process still alive but never bound the port within timeout.
+                log.error("server.py alive but port %d not bound after %ds — log tail:\n%s",
+                          port, WEBUI_STARTUP_TIMEOUT, tail)
+                _alert(
+                    "Hermes 启动超时",
+                    f"WebUI 服务在 {WEBUI_STARTUP_TIMEOUT} 秒内未绑定端口 {port}。\n"
+                    f"进程仍在运行 (PID {_win_server_proc.pid})。\n\n"
+                    f"日志末尾：\n{tail_short or '(日志为空)'}\n\n"
+                    f"完整日志：{server_log_path}",
+                )
+            sys.exit(1)
+
     else:
         # ── macOS / Linux: existing bootstrap.py path (unchanged) ────────
         python_exe = _find_bootstrap_python()
