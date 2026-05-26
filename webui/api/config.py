@@ -2545,9 +2545,19 @@ def _models_cache_catalog_fingerprint() -> dict:
         provider_catalog_sha = "unavailable"
 
     codex_home = Path(os.getenv("CODEX_HOME", "").strip() or (HOME / ".codex")).expanduser()
+    # Neowow distribution: include the HERMES_NEOWOW_ONLY mode in the cache
+    # fingerprint. The /api/models response is filtered to neowow-coding-plan
+    # (+ active provider, + custom:* groups) when the env var is set, so a
+    # cache built in one mode is invalid in the other. Without this, a cache
+    # from a pre-filter build leaks Anthropic/OpenAI groups into the picker
+    # on the next install — fingerprint stays the same since config/auth/
+    # catalog dicts didn't change, so the disk cache survives a process
+    # restart and the filter never gets re-applied.
+    neowow_only_mode = os.getenv("HERMES_NEOWOW_ONLY", "").strip().lower() in {"1", "true", "yes"}
     return {
         "provider_catalog_sha256": provider_catalog_sha,
         "codex_models_cache": _models_cache_file_fingerprint(codex_home / "models_cache.json"),
+        "neowow_only": neowow_only_mode,
     }
 
 
@@ -4258,6 +4268,32 @@ def get_available_models() -> dict:
             if g.get("models")
             or (g.get("provider_id") or "").startswith("custom:")
         ]
+
+        # ── Phase β.11: HERMES_NEOWOW_ONLY enforcement (model picker) ──────
+        # Mirrors the same filter applied to /api/providers in
+        # api.providers.get_providers — without this, the chat composer's
+        # model dropdown still surfaces Anthropic / OpenAI / OpenRouter
+        # groups even on a Coding-Plan-locked Neowow build, even though
+        # the Providers settings panel correctly hides them. Lazy import
+        # because api.providers imports from api.config (circular).
+        try:
+            from api.providers import _is_neowow_only_mode
+            if _is_neowow_only_mode(cfg=cfg):
+                _keep = {"neowow-coding-plan"}
+                if active_provider:
+                    _keep.add(active_provider)
+                # Keep custom:* groups too — they're user-defined and the
+                # Providers panel exposes them under HERMES_NEOWOW_ONLY only
+                # when active; here we just don't strip them out either.
+                groups = [
+                    g for g in groups
+                    if (g.get("provider_id") or "") in _keep
+                    or (g.get("provider_id") or "").startswith("custom:")
+                ]
+        except Exception:
+            # Filter is opportunistic — never break the picker if the
+            # neowow-mode check fails. Falls through to the unfiltered list.
+            pass
 
         # Sort groups: active provider first, then custom:* providers,
         # then providers with configured keys, then the rest alphabetically.
