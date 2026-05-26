@@ -452,11 +452,39 @@ def _find_system_python() -> "str | None":
 
     Returns the executable path, or None if not found. Used as a hint
     to uv so it doesn't need to download Python from the internet.
+
+    Microsoft Store Python (WindowsApps shim) is EXCLUDED — sandboxed,
+    can't load idna codec reliably, breaks C-extension wheels with
+    python313.dll conflicts. Two real-world users hit this:
+      - venv created on top of WindowsApps Python loses `encodings.idna`
+      - tools.* and run_agent fail with "Module use of python313.dll
+        conflicts with this version of Python"
+    Falling back to None makes uv download its own python-build-
+    standalone distribution, which doesn't have these issues.
     """
+    # Get the WindowsApps shim path so we can recognize / skip its hits.
+    # Path varies by user but always under LOCALAPPDATA\Microsoft\WindowsApps.
+    _windowsapps_dir = (
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps"
+    ).resolve(strict=False)
+
     for name in ("python3.13", "python3.12", "python3.11", "python3", "python"):
         found = shutil.which(name)
         if not found:
             continue
+        # Skip Microsoft Store stubs — they look like real python.exe but
+        # resolve to a sandboxed AppExecutionAlias under WindowsApps.
+        try:
+            found_resolved = Path(found).resolve(strict=False)
+            if str(_windowsapps_dir).lower() in str(found_resolved).lower():
+                log.info("skipping Microsoft Store Python at %s (sandboxed)", found)
+                continue
+            # Belt-and-braces: also skip anything in any \WindowsApps\ path
+            if "windowsapps" in str(found_resolved).lower():
+                log.info("skipping WindowsApps Python at %s (sandboxed)", found)
+                continue
+        except Exception:
+            pass
         try:
             result = subprocess.run(
                 [found, "-c",
@@ -548,7 +576,15 @@ def _windows_install_agent() -> None:
     py_hint = _find_system_python()
     py_arg = py_hint if py_hint else "3.11"
     log.info("Creating venv at %s, python arg: %s", venv_dir, py_arg)
-    _run_uv(uv_exe, ["venv", str(venv_dir), "--python", py_arg],
+    # --python-preference=managed: prefer uv-managed Python builds over
+    # whatever's on PATH. Belt-and-braces with the WindowsApps filter in
+    # _find_system_python: even if some other sandboxed Python sneaks
+    # through (Conda-Store, vendor distributions, etc.), uv will pick its
+    # own python-build-standalone first. Only-managed is too aggressive
+    # (would refuse a perfectly good user Python install); 'managed'
+    # gives us the right default with a downloadable fallback.
+    _run_uv(uv_exe, ["venv", str(venv_dir), "--python", py_arg,
+                     "--python-preference", "managed"],
             error_prefix="创建虚拟环境失败")
     print("      ✓ 虚拟环境创建完成", flush=True)
 
