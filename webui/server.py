@@ -3,6 +3,23 @@ Hermes Web UI -- Main server entry point.
 Thin routing shell: imports Handler, delegates to api/routes.py, runs server.
 All business logic lives in api/*.
 """
+# ─── asyncio preload (Windows + uv-managed Python 3.11.x workaround) ────────
+# Reported in the wild: when webui's import chain reaches `import asyncio`
+# transitively via api.profiles → cron.scheduler (during init_profile_state),
+# asyncio's __init__.py crashes with
+#   NameError: name 'base_events' is not defined
+# at line 25 (__all__ assignment). The same Python install loads asyncio
+# fine standalone (`python -c "import asyncio"` works). Importtime traces
+# show the asyncio submodule cascade *partially* completes — base_events
+# itself loads — but the parent package's __init__.py never finishes
+# binding base_events as a name in the asyncio namespace.
+#
+# Loading asyncio HERE as the very first import sidesteps the bug: once
+# asyncio is fully in sys.modules, every later `import asyncio` (from
+# cron.scheduler, run_agent, api.turn_journal, etc.) is a no-op that
+# returns the already-loaded module without re-executing __init__.py.
+# Verified fix on the affected Windows machine.
+import asyncio as _asyncio_preload  # noqa: F401 — load order matters
 import logging
 import os
 import re
