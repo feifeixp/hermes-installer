@@ -1,8 +1,8 @@
 """
 Hermes Web UI -- Self-update checker.
 
-Checks if the webui and hermes-agent git repos are behind their upstream
-branches. Results are cached server-side (30-min TTL) so git fetch runs
+Checks if the webui and hermes-agent git repos are behind their latest
+release tags. Results are cached server-side (30-min TTL) so git fetch runs
 at most twice per hour regardless of client count.
 
 Skips repos that are not git checkouts (e.g. Docker baked images where
@@ -10,10 +10,13 @@ Skips repos that are not git checkouts (e.g. Docker baked images where
 """
 import hashlib
 import json
+import os
 import re
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import urlparse
@@ -26,13 +29,35 @@ try:
 except ImportError:
     _AGENT_DIR = None
 
-_update_cache = {'webui': None, 'agent': None, 'checked_at': 0}
+_update_cache = {'webui': None, 'agent': None, 'checked_at': 0, 'include_agent': True}
 _SUMMARY_CACHE_MAX = 16
 _summary_cache: OrderedDict = OrderedDict()
 _cache_lock = threading.Lock()
 _check_in_progress = False
 _apply_lock = threading.Lock()   # prevents concurrent stash/pull/pop on same repo
 CACHE_TTL = 1800  # 30 minutes
+_GIT_DIAGNOSTIC_MAX_CHARS = 300
+_CREDENTIAL_IN_URL_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^/@\s'\"]+)@")
+_GITHUB_TOKEN_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b")
+_QUERY_SECRET_RE = re.compile(r"([?&](?:access_token|token|password|auth|key)=)[^&\s'\"]+", re.IGNORECASE)
+
+
+def _sanitize_git_diagnostic(output: str, *, limit: int = _GIT_DIAGNOSTIC_MAX_CHARS) -> str:
+    """Return a user-facing git diagnostic with credentials removed.
+
+    Git can echo remote URLs in failure output.  Keep the actionable error text,
+    but strip URL userinfo, common GitHub token shapes, and secret-looking query
+    parameter values before any message reaches the update-check API/UI.
+    """
+    if not output:
+        return ""
+    sanitized = _CREDENTIAL_IN_URL_RE.sub(r"\1<redacted>@", str(output))
+    sanitized = _GITHUB_TOKEN_RE.sub("<redacted>", sanitized)
+    sanitized = _QUERY_SECRET_RE.sub(r"\1<redacted>", sanitized)
+    sanitized = sanitized.strip()
+    if len(sanitized) > limit:
+        sanitized = sanitized[:limit].rstrip() + "…"
+    return sanitized
 
 
 def _active_stream_count() -> int:
@@ -86,6 +111,24 @@ def _run_git(args, cwd, timeout=10):
         return f'git failed to start: {exc}', False
 
 
+def _dirty_suffix(path: Path, timeout=1) -> str:
+    """Return a best-effort ``-dirty`` suffix without blocking version display."""
+    out, ok = _run_git(['diff-index', '--quiet', 'HEAD', '--'], path, timeout=timeout)
+    if ok:
+        return ""
+    # diff-index exits 1 with no output for a dirty tree. Timeouts and real git
+    # failures include a diagnostic; skip the suffix so the base version remains.
+    return "-dirty" if not out else ""
+
+
+def _describe_git_version(path: Path, *, timeout=5, dirty_timeout=1) -> str | None:
+    """Return a fast git version string for a checkout, if available."""
+    out, ok = _run_git(['describe', '--tags', '--always'], path, timeout=timeout)
+    if not (ok and out):
+        return None
+    return out + _dirty_suffix(path, timeout=dirty_timeout)
+
+
 def _detect_webui_version() -> str:
     """Detect the running WebUI version from git or a baked-in fallback file.
 
@@ -101,8 +144,8 @@ def _detect_webui_version() -> str:
     """
     # Timeout capped at 3s: git describe on a healthy local repo is <50ms;
     # a 10s stall on import (NFS-mounted .git, broken git binary) is unacceptable.
-    out, ok = _run_git(['describe', '--tags', '--always', '--dirty'], REPO_ROOT, timeout=3)
-    if ok and out:
+    out = _describe_git_version(REPO_ROOT)
+    if out:
         return out
 
     # Docker / baked-image fallback: api/_version.py written by CI at build time.
@@ -124,30 +167,104 @@ def _detect_webui_version() -> str:
     return 'unknown'
 
 
+def _read_agent_source_version(agent_dir: Path) -> str | None:
+    """Read Hermes Agent's package version from a copied source tree."""
+    init_file = agent_dir / 'hermes_cli' / '__init__.py'
+    try:
+        text = init_file.read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError):
+        return None
+    m = re.search(r"""__version__\s*=\s*['"]([^'"]+)['"]""", text)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    return None
+
+
+def _gateway_health_base_url() -> str:
+    """Return the configured/default Hermes Agent gateway base URL."""
+    raw = (
+        os.environ.get('GATEWAY_HEALTH_URL')
+        or os.environ.get('HERMES_GATEWAY_HEALTH_URL')
+        or 'http://hermes-agent:8642'
+    ).strip()
+    if raw.endswith('/health/detailed'):
+        raw = raw[: -len('/health/detailed')]
+    elif raw.endswith('/health'):
+        raw = raw[: -len('/health')]
+    return raw.rstrip('/')
+
+
+def _version_from_gateway_health_payload(payload: object) -> str | None:
+    """Extract a version string from a Hermes Agent gateway health payload."""
+    if not isinstance(payload, dict):
+        return None
+    for key in ('version', 'agent_version', 'hermes_version'):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    nested = payload.get('agent')
+    if isinstance(nested, dict):
+        value = nested.get('version')
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _detect_agent_version_from_gateway_health(timeout: float = 0.75) -> str | None:
+    """Best-effort cross-container gateway API fallback for Agent version."""
+    base = _gateway_health_base_url()
+    if not base:
+        return None
+    parsed = urlparse(base)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        return None
+    for path in ('/health', '/health/detailed'):
+        try:
+            with urllib.request.urlopen(f'{base}{path}', timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode('utf-8'))
+        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        version = _version_from_gateway_health_payload(payload)
+        if version:
+            return version
+    return None
+
+
 def _detect_agent_version() -> str:
     """Detect the running Hermes Agent version for UI display."""
-    if _AGENT_DIR is None:
-        return 'not detected'
+    agent_dir = Path(_AGENT_DIR) if _AGENT_DIR is not None else None
 
-    version_file = Path(_AGENT_DIR) / "VERSION"
-    try:
-        if version_file.exists():
-            text = version_file.read_text(encoding='utf-8').strip()
-            if text:
-                return text
-    except Exception:
-        pass
+    if agent_dir is not None:
+        version_file = agent_dir / "VERSION"
+        try:
+            if version_file.exists():
+                text = version_file.read_text(encoding='utf-8').strip()
+                if text:
+                    return text
+        except Exception:
+            pass
 
-    # Fallback: infer from git describe when the checkout exists but no VERSION
-    # file is available (common in source checkouts and developer environments).
-    if not Path(_AGENT_DIR).exists():
-        return 'not detected'
-    # Symmetric with _detect_webui_version() above — `--dirty` flags a
-    # locally-modified checkout so operators can see when their agent has
-    # uncommitted changes vs a clean tag. Per Opus advisor on stage-293.
-    out, ok = _run_git(['describe', '--tags', '--always', '--dirty'], _AGENT_DIR, timeout=3)
-    if ok and out:
-        return out
+        # Fallback: infer from git describe when the checkout exists but no VERSION
+        # file is available (common in source checkouts and developer environments).
+        if agent_dir.exists():
+            # Symmetric with _detect_webui_version() above — `--dirty` flags a
+            # locally-modified checkout so operators can see when their agent has
+            # uncommitted changes vs a clean tag. Per Opus advisor on stage-293.
+            out = _describe_git_version(agent_dir)
+            if out:
+                return out
+
+            # Docker two-container deployments often mount a copied agent source
+            # tree without .git metadata or a VERSION file.  The package version
+            # still lives in hermes_cli/__init__.py, so prefer that before giving
+            # up or relying on a live gateway probe.
+            source_version = _read_agent_source_version(agent_dir)
+            if source_version:
+                return source_version
+
+    gateway_version = _detect_agent_version_from_gateway_health()
+    if gateway_version:
+        return gateway_version
 
     return 'not detected'
 
@@ -211,15 +328,130 @@ def _detect_default_branch(path):
     return 'master'
 
 
-def _check_repo(path, name):
-    """Check if a git repo is behind its upstream. Returns dict or None."""
-    if path is None or not (path / '.git').exists():
+def _release_tags(path):
+    """Return release tags newest-first, using the repo's version-sort order."""
+    out, ok = _run_git(['tag', '--list', 'v*', '--sort=-v:refname'], path)
+    if not (ok and out):
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _current_release_tag(path):
+    """Return the latest release tag reachable from HEAD, if one exists."""
+    out, ok = _run_git(['describe', '--tags', '--abbrev=0'], path)
+    return out if ok and out else None
+
+
+def _release_gap(tags, current, latest):
+    """Count release tags between current and latest in a newest-first list."""
+    if not latest or current == latest:
+        return 0
+    if current in tags:
+        return tags.index(current)
+    return 1
+
+
+def _head_is_past_latest_tag(path, current_tag):
+    """Return True when HEAD has moved past the latest reachable release tag.
+
+    `git describe --tags --always` returns the bare tag name (e.g. ``v2026.5.16``)
+    when HEAD is exactly on the tag, and a ``v2026.5.16-608-g1d22b9c2`` suffix
+    when HEAD has moved 608 commits past it. Used by both the update check and
+    the update apply path so they agree on which ref to advance to — see #2653
+    (check side) and #2846 (apply side).
+    """
+    if not current_tag:
+        return False
+    full_desc, ok = _run_git(['describe', '--tags', '--always'], path)
+    return bool(ok and full_desc and full_desc != current_tag)
+
+
+def _select_apply_compare_ref(path):
+    """Return the same remote ref family that the update check reports.
+
+    The update banner prefers published release tags when they exist. Applying
+    an update must therefore advance to the latest release tag too; otherwise a
+    checkout on a local/fork tracking branch can report release updates, pull a
+    different branch that is already current, restart, and still remain behind.
+
+    When HEAD is past the latest tag (the agent repo's day-to-day state between
+    tagged releases), the check side falls through to the branch comparison via
+    `_check_repo_release` returning None. The apply side must mirror that
+    decision — otherwise we run `git pull --ff-only <latest-tag>` against a
+    checkout that's already past the tag, no-op, restart, and the banner
+    re-appears with the same N commits available. See #2846.
+    """
+    tags = _release_tags(path)
+    if tags:
+        latest_tag = tags[0]
+        current_tag = _current_release_tag(path)
+        behind = _release_gap(tags, current_tag, latest_tag)
+        # Mirror the check side exactly: only fall through when behind == 0
+        # AND HEAD has moved past its nearest tag (case A: bench between
+        # tagged releases). Otherwise the tag is correct — including the
+        # case where HEAD is on an older release tag with commits on top
+        # AND a newer tag exists (case D), where `behind > 0` means the
+        # user is genuinely behind the latest release and should advance
+        # to it. Pre-#2855 the apply path only consulted `latest_tag`
+        # without the `behind`/`current_tag` predicate, so case D fell
+        # through to `origin/<branch>` and the pull landed past the
+        # advertised tag. See #2846 + Opus pre-release review for #2855.
+        if not (behind == 0 and _head_is_past_latest_tag(path, current_tag)):
+            return latest_tag
+
+    upstream, ok = _run_git(['rev-parse', '--abbrev-ref', '@{upstream}'], path)
+    if ok and upstream:
+        return upstream
+
+    branch = _detect_default_branch(path)
+    return f'origin/{branch}'
+
+
+def _check_repo_release(path, name):
+    """Check if a git repo is behind its latest published release tag."""
+    tags = _release_tags(path)
+    if not tags:
         return None
 
+    latest_tag = tags[0]
+    current_tag = _current_release_tag(path)
+    behind = _release_gap(tags, current_tag, latest_tag)
+
+    # If behind == 0 but HEAD has moved past the tag (e.g. the agent repo
+    # keeps committing to master between tagged releases), the release check
+    # would report "Up to date" even though hundreds of commits are missing.
+    # Fall through to _check_repo_branch so the real commit count is reported
+    # instead. The same predicate is used by _select_apply_compare_ref so the
+    # check and apply sides cannot drift again. See #2653 (check), #2846 (apply).
+    if behind == 0 and _head_is_past_latest_tag(path, current_tag):
+        return None
+
+    remote_url, _ = _run_git(['remote', 'get-url', 'origin'], path)
+    remote_url = _normalize_remote_url(remote_url)
+
+    return {
+        'name': name,
+        'behind': behind,
+        # GitHub compare URLs accept tag names, and tag-to-tag links are the
+        # clearest "what changed in this release?" view for operators.
+        'current_sha': current_tag,
+        'latest_sha': latest_tag,
+        'branch': latest_tag,
+        'repo_url': remote_url,
+        'release_based': True,
+        'current_version': current_tag,
+        'latest_version': latest_tag,
+    }
+
+
+def _check_repo_branch(path, name, *, fetch=True):
+    """Fallback: check if a git repo is behind its upstream branch."""
+
     # Fetch latest from origin (network call, cached by TTL)
-    _, fetch_ok = _run_git(['fetch', 'origin', '--quiet'], path, timeout=15)
-    if not fetch_ok:
-        return {'name': name, 'behind': 0, 'error': 'fetch failed'}
+    if fetch:
+        _, fetch_ok = _run_git(['fetch', 'origin', '--quiet'], path, timeout=15)
+        if not fetch_ok:
+            return {'name': name, 'behind': 0, 'error': 'fetch failed'}
 
     # Use the current branch's upstream tracking branch, not the repo default.
     # This avoids false "N updates behind" alerts when the user is on a feature
@@ -283,11 +515,60 @@ def _check_repo(path, name):
     }
 
 
-def check_for_updates(force=False):
+def _check_repo(path, name):
+    """Check if a git repo is behind its latest release. Returns dict or None."""
+    if path is None or not (path / '.git').exists():
+        return None
+
+    # Fetch tags first so update prompts track published releases, not every
+    # development commit that lands on master/main after the latest release.
+    #
+    # --force is required because the WebUI is a release-tracking consumer:
+    # it never pushes tags, so it should always defer to whatever the remote
+    # says a release tag points to. Without --force, a remote re-tag (e.g.
+    # after a squash-merge that re-points a release tag at a new SHA) jams
+    # the update path indefinitely with "would clobber existing tag" errors.
+    # See #2756.
+    fetch_out, fetch_ok = _run_git(['fetch', 'origin', '--tags', '--force'], path, timeout=15)
+    if not fetch_ok:
+        release_info = _check_repo_release(path, name)
+        message = 'fetch failed'
+        if fetch_out:
+            message = f'{message}: {_sanitize_git_diagnostic(fetch_out)}'
+        if release_info is not None:
+            release_info = dict(release_info)
+            release_info['error'] = message
+            release_info['stale_check'] = True
+            return release_info
+        return {
+            'name': name,
+            'behind': None,
+            'error': message,
+            'stale_check': True,
+        }
+
+    release_info = _check_repo_release(path, name)
+    if release_info is not None:
+        return release_info
+
+    return _check_repo_branch(path, name, fetch=False)
+
+
+def _ignored_agent_update_info() -> dict:
+    """Return a stable update-check payload for intentionally ignored Agent updates."""
+    return {'name': 'agent', 'behind': 0, 'ignored': True}
+
+
+def check_for_updates(force=False, *, include_agent=True):
     """Return cached update status for webui and agent repos."""
     global _check_in_progress
+    include_agent = bool(include_agent)
     with _cache_lock:
-        if not force and time.time() - _update_cache['checked_at'] < CACHE_TTL:
+        if (
+            not force
+            and _update_cache.get('include_agent') == include_agent
+            and time.time() - _update_cache['checked_at'] < CACHE_TTL
+        ):
             return dict(_update_cache)
         if _check_in_progress:
             return dict(_update_cache)  # another thread is already checking
@@ -296,12 +577,13 @@ def check_for_updates(force=False):
     try:
         # Run checks outside the lock (network I/O)
         webui_info = _check_repo(REPO_ROOT, 'webui')
-        agent_info = _check_repo(_AGENT_DIR, 'agent')
+        agent_info = _check_repo(_AGENT_DIR, 'agent') if include_agent else _ignored_agent_update_info()
 
         with _cache_lock:
             _update_cache['webui'] = webui_info
             _update_cache['agent'] = agent_info
             _update_cache['checked_at'] = time.time()
+            _update_cache['include_agent'] = include_agent
             return dict(_update_cache)
     finally:
         _check_in_progress = False
@@ -417,6 +699,8 @@ def _categorized_summary_bullets_from_text(text: str) -> tuple[list[str], list[s
             notice_items.append(body)
         elif category == 'worth':
             worth_items.append(body)
+        elif re.match(r'^\s*(?:[-*•]+|\d+[.)])?\s*[A-Za-z][A-Za-z ]{1,32}\s*:', str(line or '')):
+            notice_items.append(body)
     return _unique_summary_bullets(notice_items), _unique_summary_bullets(worth_items)
 
 
@@ -675,19 +959,17 @@ def apply_force_update(target: str) -> dict:
         if path is None or not (path / '.git').exists():
             return {'ok': False, 'message': 'Not a git repository'}
 
-        _, fetch_ok = _run_git(['fetch', 'origin', '--quiet'], path, timeout=15)
+        # --force so a remote re-tag (e.g. squash-merge that re-points an
+        # existing release tag) doesn't jam the apply path with "would clobber
+        # existing tag". See #2756.
+        _, fetch_ok = _run_git(['fetch', 'origin', '--quiet', '--tags', '--force'], path, timeout=15)
         if not fetch_ok:
             return {
                 'ok': False,
                 'message': 'Could not reach the remote repository. Check your connection.',
             }
 
-        upstream, ok = _run_git(['rev-parse', '--abbrev-ref', '@{upstream}'], path)
-        if ok and upstream:
-            compare_ref = upstream
-        else:
-            branch = _detect_default_branch(path)
-            compare_ref = f'origin/{branch}'
+        compare_ref = _select_apply_compare_ref(path)
 
         # Discard local modifications then reset to remote HEAD
         _run_git(['checkout', '.'], path)
@@ -756,17 +1038,11 @@ def _apply_update_inner(target):
     if path is None or not (path / '.git').exists():
         return {'ok': False, 'message': 'Not a git repository'}
 
-    # Use the current branch's upstream for pull, matching the behaviour
-    # of _check_repo. Falls back to default branch if no upstream is set.
-    upstream, ok = _run_git(['rev-parse', '--abbrev-ref', '@{upstream}'], path)
-    if ok and upstream:
-        compare_ref = upstream
-    else:
-        branch = _detect_default_branch(path)
-        compare_ref = f'origin/{branch}'
-
-    # Fetch before any pull/rebase so the remote ref is current.
-    _, fetch_ok = _run_git(['fetch', 'origin', '--quiet'], path, timeout=15)
+    # Fetch before attempting pull, so the remote ref is current.
+    # --force so a remote re-tag doesn't block the update path (see #2756).
+    # compare_ref is selected below by _select_apply_compare_ref (which mirrors
+    # the check side and already covers our previous @{upstream}-first fallback).
+    _, fetch_ok = _run_git(['fetch', 'origin', '--quiet', '--tags', '--force'], path, timeout=15)
     if not fetch_ok:
         return {
             'ok': False,
@@ -775,6 +1051,8 @@ def _apply_update_inner(target):
                 'Check your internet connection and try again.'
             ),
         }
+
+    compare_ref = _select_apply_compare_ref(path)
 
     # Check for dirty working tree (ignore untracked files — git stash
     # doesn't include them, so stashing on '??' alone leaves nothing to pop).
@@ -835,7 +1113,7 @@ def _apply_via_ffonly(target, path, compare_ref, status_out):
     if remote:
         pull_args.extend([remote, branch])
     else:
-        pull_args.append(compare_ref)
+        pull_args.extend(['origin', compare_ref])
     pull_out, pull_ok = _run_git(pull_args, path, timeout=30)
     if not pull_ok:
         if stashed:

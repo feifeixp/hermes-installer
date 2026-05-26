@@ -1,10 +1,11 @@
 """
-Hermes Web UI -- Optional authentication.
+Hermes Web UI -- optional authentication.
 
 Three auth modes (set via HERMES_WEBUI_AUTH_MODE):
   • "none"      — no auth (default for local single-user installs)
   • "password"  — single shared password (HERMES_WEBUI_PASSWORD env var
-                  or Settings UI). Current default for self-hosted.
+                  or Settings UI). Can also register passkeys and then
+                  go passwordless. Current default for self-hosted.
   • "neodomain" — JWT cookie issued by app.neowow.studio. Used by the
                   cloud-hosted chat.neowow.studio deployment so users
                   log in via Neodomain OAuth on the dashboard, then the
@@ -63,11 +64,13 @@ def _resolve_session_ttl() -> int:
 PUBLIC_PATHS = frozenset({
     '/login', '/health', '/favicon.ico', '/sw.js',
     '/api/auth/login', '/api/auth/status',
+    '/api/auth/passkey/options', '/api/auth/passkey/login',
     '/manifest.json', '/manifest.webmanifest',
     '/session/manifest.json', '/session/manifest.webmanifest',
 })
 
 COOKIE_NAME = 'hermes_session'
+CSRF_HEADER_NAME = 'X-Hermes-CSRF-Token'
 
 _SESSIONS_FILE = STATE_DIR / '.sessions.json'
 
@@ -303,11 +306,9 @@ def get_password_hash() -> str | None:
         return result
 
 
-def is_auth_enabled() -> bool:
-    """True if any non-`none` auth mode is active. Both password and
-    neodomain modes count — both require the user to authenticate
-    before reaching API or page routes."""
-    return get_auth_mode() != "none"
+def is_password_auth_enabled() -> bool:
+    """True if a password is configured (env var or settings)."""
+    return get_password_hash() is not None
 
 
 # ── Mode dispatch ──────────────────────────────────────────────────────
@@ -454,6 +455,62 @@ def parse_neo_cookie(handler) -> str | None:
         return None
 
 
+def _passkey_feature_flag_enabled() -> bool:
+    """Return True if the passkey/WebAuthn surface is enabled for this deployment.
+
+    Passkey support is opt-in default-off behind a feature flag so deployments
+    that don't want the WebAuthn surface (or whose RP-ID setup isn't ready for
+    non-localhost hosts) can disable it entirely with no UI surface, no
+    endpoints, no credential storage. To enable:
+
+      - Set ``HERMES_WEBUI_PASSKEY=1`` in the environment, OR
+      - Set ``webui_passkey_enabled: true`` in the per-profile config.yaml
+
+    With the flag off, ``are_passkeys_enabled()`` always returns False even if
+    credentials were registered in the past, and ``/login`` shows password-only.
+    """
+    env_value = os.getenv("HERMES_WEBUI_PASSKEY", "")
+    if env_value:
+        return env_value.strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        from api.config import get_config
+
+        cfg = get_config()
+        if isinstance(cfg, dict):
+            raw = cfg.get("webui_passkey_enabled")
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, str):
+                return raw.strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        pass
+    return False
+
+
+def are_passkeys_enabled() -> bool:
+    """True if the passkey feature flag is on AND at least one local passkey credential is registered."""
+    if not _passkey_feature_flag_enabled():
+        return False
+    try:
+        from api.passkeys import passkeys_available
+
+        return passkeys_available()
+    except Exception as exc:
+        logger.debug("Failed to inspect passkey availability: %s", exc)
+        return False
+
+
+def is_auth_enabled() -> bool:
+    """True if any non-`none` auth surface is configured.
+
+    Covers all three: password (env var or settings), passkey-only,
+    and Neodomain JWT cookie. Both password and neodomain modes count
+    because both require the user to authenticate before reaching
+    API or page routes.
+    """
+    return get_auth_mode() != "none" or are_passkeys_enabled()
+
+
 def verify_password(plain: str) -> bool:
     """Verify a plaintext password against the stored hash.
 
@@ -526,6 +583,37 @@ def verify_session(cookie_value: str) -> bool:
     return True
 
 
+def _session_token_from_cookie_value(cookie_value: str) -> str | None:
+    """Return the raw server-side session token from a signed cookie value."""
+    if not cookie_value or '.' not in cookie_value:
+        return None
+    token, _sig = cookie_value.rsplit('.', 1)
+    return token or None
+
+
+def csrf_token_for_session(cookie_value: str) -> str | None:
+    """Return the CSRF token bound to an authenticated WebUI session.
+
+    The browser can read this token from the authenticated shell and echoes it
+    in ``X-Hermes-CSRF-Token`` on unsafe API requests. The token is derived
+    from the HttpOnly session cookie's server-side token, so it automatically
+    rotates on login and is invalidated when the auth session expires or logs
+    out. Callers must still verify the auth session before trusting it.
+    """
+    token = _session_token_from_cookie_value(cookie_value)
+    if not token:
+        return None
+    return hmac.new(_signing_key(), f"csrf:{token}".encode(), hashlib.sha256).hexdigest()
+
+
+def verify_csrf_token(cookie_value: str, csrf_token: str) -> bool:
+    """Verify a submitted CSRF token against the authenticated session."""
+    if not cookie_value or not csrf_token or not verify_session(cookie_value):
+        return False
+    expected = csrf_token_for_session(cookie_value)
+    return bool(expected and hmac.compare_digest(str(csrf_token), expected))
+
+
 def invalidate_session(cookie_value) -> None:
     """Remove a session token."""
     if cookie_value and '.' in cookie_value:
@@ -583,10 +671,12 @@ def check_auth(handler, parsed) -> bool:
         return True
     # Not authorized
     if parsed.path.startswith('/api/'):
+        body = b'{"error":"Authentication required"}'
         handler.send_response(401)
         handler.send_header('Content-Type', 'application/json')
+        handler.send_header('Content-Length', str(len(body)))
         handler.end_headers()
-        handler.wfile.write(b'{"error":"Authentication required"}')
+        handler.wfile.write(body)
     else:
         handler.send_response(302)
         # Pass the original path as ?next= so login.js redirects back after auth.
@@ -616,6 +706,7 @@ def check_auth(handler, parsed) -> bool:
         # `?`, `&`, `=`) gets percent-encoded.
         _next = _urlparse.quote(_path_with_query, safe='/')
         handler.send_header('Location', 'login?next=' + _next)
+        handler.send_header('Content-Length', '0')
         handler.end_headers()
     return False
 
