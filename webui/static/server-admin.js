@@ -24,6 +24,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 let _serverAdminPollTimer = null;
+let _serverAdminLiveTimer = null;
 let _serverAdminBusy      = false;
 
 function _saToast(msg, isError = false) {
@@ -209,6 +210,25 @@ function _saRenderStatus(s) {
   if (state === 'spawning' || state === 'cloud_init') {
     _serverAdminPollTimer = setTimeout(serverAdminLoad, 4000);
   }
+
+  // Live re-render: when the stopped-duration block is on-screen, advance
+  // "已停机 X" + "启动时延长至 Y" every 30s without re-fetching status.
+  // We re-derive stoppedMs locally from stoppedAt; estimatedNewExpiresAt
+  // is recomputed from the cached plan.expiresAt baseline.
+  if (_serverAdminLiveTimer) { clearInterval(_serverAdminLiveTimer); _serverAdminLiveTimer = null; }
+  if (state === 'stopped' && s.stoppedAt) {
+    const baselineExpiry = s.estimatedNewExpiresAt && s.stoppedMs != null
+      ? Date.parse(s.estimatedNewExpiresAt) - s.stoppedMs   // recover plan.expiresAt baseline
+      : null;
+    _serverAdminLiveTimer = setInterval(() => {
+      const liveMs = Date.now() - Date.parse(s.stoppedAt);
+      if (liveMs <= 0) return;
+      const liveEstimated = baselineExpiry != null
+        ? new Date(baselineExpiry + liveMs).toISOString()
+        : null;
+      _saRenderStatus({ ...s, stoppedMs: liveMs, estimatedNewExpiresAt: liveEstimated });
+    }, 30_000);
+  }
 }
 
 // ─── Actions ───────────────────────────────────────────────────────────
@@ -244,8 +264,15 @@ async function serverAdminStart() {
   _serverAdminBusy = true;
   _saToast('正在启动…');
   try {
-    await _saPost('/api/neowow/instance/start');
-    _saToast('启动指令已发送');
+    const resp = await _saPost('/api/neowow/instance/start');
+    if (resp && resp.extendedBy && resp.extendedBy.ms > 0) {
+      _saToast(t('server_admin_start_success_extended', {
+        duration: _saFormatDuration(resp.extendedBy.ms),
+        date:     _saFmtTime(resp.newExpiresAt),
+      }));
+    } else {
+      _saToast(t('server_admin_start_success_no_extend'));
+    }
     await serverAdminLoad();
   } catch (e) {
     _saToast('启动失败:' + e.message, true);
@@ -357,4 +384,5 @@ function escapeHtml(s) {
 // Cancel any pending poll when the user navigates away from the panel.
 window.addEventListener('beforeunload', () => {
   if (_serverAdminPollTimer) clearTimeout(_serverAdminPollTimer);
+  if (_serverAdminLiveTimer) clearInterval(_serverAdminLiveTimer);
 });
