@@ -171,6 +171,29 @@ function _saRenderStatus(s) {
           <tr><td>创建时间</td><td>${_saFmtTime(s.createdAt)}</td></tr>
           <tr><td>最后心跳</td><td>${_saFmtTime(s.lastHeartbeatAt)}</td></tr>
         </table>
+        ${(state === 'stopped' && s.stoppedAt) ? `
+          <div class="server-admin-stopped-extension" data-server-admin-live="1"
+               style="margin-top:14px;padding:12px;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border);">
+            <div style="font-weight:600;margin-bottom:4px">
+              ${escapeHtml(t('server_admin_stopped_duration', { duration: _saFormatDuration(s.stoppedMs || 0) }))}
+            </div>
+            ${s.estimatedNewExpiresAt ? `
+              <div style="font-size:12px;color:var(--muted)">
+                ${escapeHtml(t('server_admin_estimated_new_expiry', {
+                  date:     _saFmtTime(s.estimatedNewExpiresAt),
+                  duration: _saFormatDuration(s.stoppedMs || 0),
+                }))}
+              </div>` : ''}
+          </div>
+        ` : ''}
+        ${(state === 'running' && (s.extendedByMs || 0) > 0) ? `
+          <div class="server-admin-cycle-extended"
+               style="margin-top:12px;font-size:12px;color:var(--muted)">
+            ${escapeHtml(t('server_admin_extended_by_this_cycle', {
+              duration: _saFormatDuration(s.extendedByMs),
+            }))}
+          </div>
+        ` : ''}
       </div>
     </div>`;
 
