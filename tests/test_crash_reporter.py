@@ -71,3 +71,22 @@ def test_queue_file_has_0600_permissions(isolated_queue):
     assert files
     mode = files[0].stat().st_mode & 0o777
     assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+
+def test_report_timeout_returns_within_budget(isolated_queue):
+    """Slow POST → report() returns within ~0.6s even if network would take 10s."""
+    def slow_urlopen(*args, **kwargs):
+        time.sleep(2.0)
+        m = MagicMock()
+        m.__enter__.return_value = m
+        m.__exit__.return_value = False
+        m.status = 204
+        return m
+
+    with patch.object(cr.urllib.request, "urlopen", slow_urlopen):
+        t0 = time.monotonic()
+        result = cr.report("main_unhandled", "slow network")
+        elapsed = time.monotonic() - t0
+
+    assert result is False, "should return False since we didn't wait for completion"
+    assert elapsed < 0.8, f"report() blocked {elapsed:.2f}s — should be < 0.8s"

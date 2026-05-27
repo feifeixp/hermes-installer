@@ -134,20 +134,50 @@ def _drop_oldest_if_full() -> None:
         pass
 
 
+def _sanitize_payload(payload: dict) -> dict:
+    """Apply PII filter to text fields. Stub for now — implemented in Task 5."""
+    return payload
+
+
+def _read_log_tail(path: str | None) -> str | None:
+    """Read the last N bytes of a log file. Stub for now — implemented in Task 6."""
+    return None
+
+
+def _attach_jwt(headers: dict) -> None:
+    """Attach Bearer JWT from ~/.hermes/webui/neowow.json. Stub for now — implemented in Task 8."""
+    return
+
+
 def report(phase, error, *, traceback=None, log_path=None, extra=None) -> bool:
+    """Send a crash report. Non-blocking — main thread returns within JOIN_BUDGET_SECONDS."""
     if phase not in PHASES:
         logger.warning("crash_reporter: unknown phase %r — sending anyway", phase)
-    payload = _build_payload(phase, error, traceback, None, extra)
+
+    log_tail = _read_log_tail(log_path) if log_path else None
+    payload = _build_payload(phase, error, traceback, log_tail, extra)
+    payload = _sanitize_payload(payload)
     headers = {"Content-Type": "application/json"}
-    try:
-        if _post(payload, headers):
-            return True
+    _attach_jwt(headers)
+
+    # Shared state between main thread and worker: was it a clean success?
+    result = {"success": False}
+
+    def _worker():
+        try:
+            if _post(payload, headers):
+                result["success"] = True
+                return
+        except Exception as exc:
+            logger.debug("crash_reporter: post failed: %s", exc)
         _enqueue(payload)
-        return False
-    except Exception as exc:
-        logger.debug("crash_reporter: _post failed (%s), enqueueing", exc)
-        _enqueue(payload)
-        return False
+
+    t = threading.Thread(target=_worker, name="crash-reporter", daemon=True)
+    t.start()
+    t.join(timeout=JOIN_BUDGET_SECONDS)
+    # If the thread is still running, it'll continue in background.
+    # We can only report definitive success if it finished AND set the flag.
+    return bool(result["success"])
 
 
 # ── Queue management ─────────────────────────────────────────────────────────
