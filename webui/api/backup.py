@@ -45,9 +45,18 @@ def _get_jwt() -> str | None:
 def _dashboard_url() -> str:
     return os.environ.get("NEOWOW_DASHBOARD_URL", "https://app.neowow.studio").rstrip("/")
 
+# Cloudflare in front of app.neowow.studio rejects urllib's default
+# 'Python-urllib/3.11' UA with error 1010 (browser_signature_banned),
+# so every Bearer call here needs an explicit Hermes/* UA — same gate
+# the sibling neowow.py / skills.py callers already work around.
+_DASHBOARD_UA = "Hermes/neowow-backup"
+
 def _dashboard_get(path: str, jwt: str) -> dict:
     url = f"{_dashboard_url()}{path}"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {jwt}"})
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {jwt}", "User-Agent": _DASHBOARD_UA},
+    )
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read())
 
@@ -56,7 +65,11 @@ def _dashboard_post(path: str, jwt: str, body: dict) -> dict:
     payload = json.dumps(body).encode()
     req     = urllib.request.Request(
         url, data=payload, method="POST",
-        headers={"Authorization": f"Bearer {jwt}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {jwt}",
+            "Content-Type":  "application/json",
+            "User-Agent":    _DASHBOARD_UA,
+        },
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
@@ -280,7 +293,7 @@ def delete_backup(backup_id: str) -> dict:
     url = f"{_dashboard_url()}/api/me/backups/{backup_id}"
     req = urllib.request.Request(
         url, method="DELETE",
-        headers={"Authorization": f"Bearer {jwt}"},
+        headers={"Authorization": f"Bearer {jwt}", "User-Agent": _DASHBOARD_UA},
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         raw = resp.read()

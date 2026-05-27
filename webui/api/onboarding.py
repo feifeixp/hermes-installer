@@ -971,9 +971,16 @@ def _fetch_neowow_plan_models() -> tuple[list[dict], str | None]:
         return _neowow_coding_plan_default_models(), None
     url = f"{_neowow_dashboard_base()}/api/me/plan"
     try:
+        # Cloudflare's Bot Fight Mode in front of app.neowow.studio rejects
+        # urllib's default User-Agent ('Python-urllib/3.11') with error 1010
+        # ("browser signature banned") → 403. Sibling neowow.py callers all
+        # set a Hermes/* UA for the same reason; mirror that here so the
+        # plan-models fetch succeeds and users see their real catalogue
+        # instead of the trial fallback.
         req = urllib.request.Request(url, method="GET", headers={
             "Authorization": f"Bearer {jwt}",
             "Accept":        "application/json",
+            "User-Agent":    "Hermes/neowow-plan-models",
         })
         # 3s is enough for a CF Workers round-trip from any region; if it's
         # really down, the user gets the static fallback list and a probe
