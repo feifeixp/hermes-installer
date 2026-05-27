@@ -414,10 +414,19 @@ def _check_webview2_windows() -> "str | None":
 # ══════════════════════════════════════════════════════════════════════════
 
 def _is_agent_installed() -> bool:
-    """Return True if the hermes-agent venv exists and run_agent is importable.
+    """Return True if the hermes-agent venv exists, is healthy, and run_agent is importable.
 
     Windows-only check. Fast (<1 s) — runs on every startup to decide
     whether to show the install wizard.
+
+    Health check (added v1.4.2): also verifies the venv's Python isn't
+    broken by previous-system-Python pollution. Specifically checks:
+      - encodings.idna can be loaded (socket.getfqdn needs it; Microsoft
+        Store Python + some custom Python installs miss this)
+      - run_agent imports without 'Module use of pythonXXX.dll' conflicts
+        (caused by mixing wheels from a parallel-installed Python version)
+    If the health check fails, returns False so the caller wipes and
+    re-creates the venv (with v1.4.2's only-managed Python preference).
     """
     venv_python = (
         Path.home() / ".hermes" / "hermes-agent" / "venv" / "Scripts" / "python.exe"
@@ -426,24 +435,73 @@ def _is_agent_installed() -> bool:
         log.info("agent not installed: venv python not found at %s", venv_python)
         return False
     agent_dir = Path.home() / ".hermes" / "hermes-agent"
+
+    # ── Health check: idna codec + run_agent import ───────────────────────
+    # Both are quick. If either fails with a recognisable wheel-conflict /
+    # missing-codec signature, return False so the venv gets rebuilt with
+    # uv-managed Python.
+    health_script = (
+        "import encodings.idna; "  # missing → user Python install is broken
+        "import codecs; codecs.lookup('idna'); "
+        "import run_agent; "  # python313.dll conflicts surface here
+        "print('ok')"
+    )
     try:
         result = subprocess.run(
-            [str(venv_python), "-c", "import run_agent; print('ok')"],
+            [str(venv_python), "-c", health_script],
             capture_output=True,
             timeout=10,
             env={**os.environ, "PYTHONPATH": str(agent_dir)},
         )
         if result.returncode == 0:
-            log.info("agent installed and importable at %s", venv_python)
+            log.info("agent installed and healthy at %s", venv_python)
             return True
-        log.info(
-            "agent check failed (rc=%s): %s",
-            result.returncode,
-            result.stderr.decode("utf-8", errors="replace")[:200],
-        )
+        stderr = result.stderr.decode("utf-8", errors="replace")[:400]
+        log.info("agent health check failed (rc=%s): %s", result.returncode, stderr)
+        # Pollution markers worth surfacing explicitly so future logs are
+        # easier to grep for the wipe-and-rebuild path.
+        if "python313.dll" in stderr or "python312.dll" in stderr or "python310.dll" in stderr:
+            log.warning("agent venv contaminated by cross-version DLL — will rebuild")
+        elif "unknown encoding: idna" in stderr or "encodings.idna" in stderr:
+            log.warning("agent venv missing idna codec — will rebuild")
+        elif "websockets" in stderr.lower() or "No module named" in stderr:
+            # Missing pip dep — not a venv corruption, real install issue.
+            # Don't trigger wipe (rebuild won't help if requirements changed).
+            log.info("agent missing a dep (not a venv corruption) — leaving as-is")
+            return True
         return False
     except Exception as exc:
         log.info("agent check exception: %s", exc)
+        return False
+
+
+def _wipe_contaminated_agent_venv() -> bool:
+    """Delete a contaminated hermes-agent venv so the install wizard rebuilds it.
+
+    Called when _is_agent_installed() returns False on a venv that DOES exist
+    (i.e. the venv is corrupted by previous-system-Python pollution rather
+    than absent). Returns True if a wipe happened, False if the path didn't
+    exist. Never raises — wipe failure logs and returns False.
+    """
+    agent_dir = Path.home() / ".hermes" / "hermes-agent"
+    venv_dir = agent_dir / "venv"
+    if not venv_dir.exists():
+        return False
+    log.info("Wiping contaminated agent venv at %s", venv_dir)
+    try:
+        # Whole agent_dir, not just venv: the extracted bundle source can
+        # also be partially corrupted, and recreating it from
+        # hermes_agent_bundle.zip is cheap (<5 s).
+        shutil.rmtree(agent_dir, ignore_errors=False)
+        log.info("Agent dir wiped successfully")
+        return True
+    except Exception as exc:
+        log.error("Failed to wipe agent dir: %s — install will likely fail again", exc)
+        # Best-effort: try removing just venv subdir
+        try:
+            shutil.rmtree(venv_dir, ignore_errors=True)
+        except Exception:
+            pass
         return False
 
 
@@ -573,18 +631,26 @@ def _windows_install_agent() -> None:
 
     # ── Step 2: Create venv ────────────────────────────────────────────────
     print("[2/3] 正在创建 Python 虚拟环境...", flush=True)
-    py_hint = _find_system_python()
-    py_arg = py_hint if py_hint else "3.11"
-    log.info("Creating venv at %s, python arg: %s", venv_dir, py_arg)
-    # --python-preference=managed: prefer uv-managed Python builds over
-    # whatever's on PATH. Belt-and-braces with the WindowsApps filter in
-    # _find_system_python: even if some other sandboxed Python sneaks
-    # through (Conda-Store, vendor distributions, etc.), uv will pick its
-    # own python-build-standalone first. Only-managed is too aggressive
-    # (would refuse a perfectly good user Python install); 'managed'
-    # gives us the right default with a downloadable fallback.
-    _run_uv(uv_exe, ["venv", str(venv_dir), "--python", py_arg,
-                     "--python-preference", "managed"],
+    # ALWAYS use uv-managed python-build-standalone, NEVER system Python.
+    #
+    # The v1.4.1 fix ('--python-preference managed' + WindowsApps filter)
+    # wasn't enough — when we passed a system Python EXECUTABLE PATH to
+    # `uv venv --python <path>`, uv used that path verbatim regardless of
+    # the preference setting (the preference only applies when uv has
+    # to RESOLVE a version spec like "3.11", not when given a concrete
+    # path). Users with corrupted system Python (idna codec missing,
+    # python313.dll wheel conflicts from a prior parallel Python 3.13
+    # install) hit hard fails inside the venv even after v1.4.1.
+    #
+    # Going `only-managed` + version spec "3.11" forces uv to download
+    # and use its own python-build-standalone distribution. ~30 MB
+    # one-time download, then cached. This eliminates an entire class
+    # of "user's Python install is broken" issues — installer ships
+    # with a known-good Python every time.
+    log.info("Creating venv at %s (uv-managed python-build-standalone 3.11)", venv_dir)
+    _run_uv(uv_exe, ["venv", str(venv_dir),
+                     "--python", "3.11",
+                     "--python-preference", "only-managed"],
             error_prefix="创建虚拟环境失败")
     print("      ✓ 虚拟环境创建完成", flush=True)
 
@@ -949,6 +1015,21 @@ def main():
         # bootstrap.py has ensure_supported_platform() that blocks Windows.
         # We handle install + launch inline instead.
         if not _is_agent_installed():
+            # Distinguish "not installed yet" from "installed but contaminated"
+            # by checking if the venv dir exists. Contaminated venv = wipe and
+            # rebuild with v1.4.2's only-managed Python; the v1.4.1 path used
+            # a system Python that was broken (Microsoft Store sandboxed,
+            # python.org install with python313.dll wheel pollution, etc.).
+            existing_venv = Path.home() / ".hermes" / "hermes-agent" / "venv"
+            if existing_venv.exists():
+                log.info(
+                    "Existing venv failed health check — wiping for clean reinstall"
+                )
+                print("\n" + "=" * 56, flush=True)
+                print("   检测到旧版本环境损坏，正在清理并重新安装...", flush=True)
+                print("=" * 56 + "\n", flush=True)
+                _wipe_contaminated_agent_venv()
+
             log.info("First run: hermes-agent not installed — starting Windows setup")
             # Show the console so the user can watch install progress.
             _show_console()
