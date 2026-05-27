@@ -35,6 +35,11 @@ PLATFORM_ASSETS = {
 }
 
 
+def _platform_asset_for(platform: str) -> str | None:
+    """Return the asset filename for the given sys.platform, or None if unsupported."""
+    return PLATFORM_ASSETS.get(platform)
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 def check_installer_update(current_version: str | None = None) -> dict:
     """Return current installer-update status. TTL-cached for 15 minutes.
