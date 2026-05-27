@@ -576,6 +576,23 @@
         <button class="reconnect-btn" onclick="refreshSession()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-1px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Reload</button>
       </div>
     </div>
+    <!-- Installer-update banner (filled in by boot.js#renderInstallerUpdateBanner) -->
+    <div class="installer-update-banner" id="installerUpdateBanner" hidden>
+      <div class="installer-update-banner-row">
+        <span class="installer-update-banner-icon" aria-hidden="true">🚀</span>
+        <div class="installer-update-banner-text">
+          <div class="installer-update-banner-title" id="installerUpdateBannerTitle"></div>
+          <div class="installer-update-banner-subtitle" id="installerUpdateBannerSubtitle"></div>
+        </div>
+        <div class="installer-update-banner-actions">
+          <button type="button" class="installer-update-btn primary" id="installerUpdateDownloadBtn"></button>
+          <button type="button" class="installer-update-btn" id="installerUpdateNotesBtn"></button>
+          <button type="button" class="installer-update-btn ghost" id="installerUpdateSkipBtn"></button>
+          <button type="button" class="installer-update-banner-dismiss" id="installerUpdateDismissBtn" aria-label="dismiss">✕</button>
+        </div>
+      </div>
+      <div class="installer-update-banner-notes" id="installerUpdateBannerNotes" hidden></div>
+    </div>
     <div class="offline-banner" id="offlineBanner" role="status" aria-live="assertive" hidden>
       <div class="offline-copy">
         <strong id="offlineTitle" data-i18n="offline_title">Connection lost</strong>
