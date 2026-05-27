@@ -3887,6 +3887,24 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/health":
         return _handle_health(handler, parsed)
 
+    if parsed.path == "/api/installer-update/check":
+        from api.installer_update import check_installer_update
+        try:
+            # Current version comes from main.py if importable (frozen
+            # installer); fall back to the env var that the bootstrap sets,
+            # then to "unknown" for dev mode.
+            try:
+                from main import _get_app_version
+                current = _get_app_version()
+            except Exception:
+                current = os.environ.get("HERMES_INSTALLER_VERSION", "unknown")
+            result = check_installer_update(current_version=current)
+        except Exception as exc:
+            logger.exception("installer-update check failed: %s", exc)
+            result = {"ok": False, "reason": "internal_error"}
+        j(handler, result)
+        return True
+
     if parsed.path == "/api/health/agent":
         return j(handler, build_agent_health_payload())
 
