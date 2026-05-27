@@ -2964,8 +2964,9 @@ main.main > #mainWorkspaces,
 main.main > #mainProfiles,
 main.main > #mainInsights,
 main.main > #mainLogs,
-main.main > #mainBackup{display:none;}
-main.main:not(.showing-settings):not(.showing-skills):not(.showing-memory):not(.showing-tasks):not(.showing-kanban):not(.showing-workspaces):not(.showing-profiles):not(.showing-insights):not(.showing-logs):not(.showing-backup) > #mainChat{display:flex;}
+main.main > #mainBackup,
+main.main > #mainServer{display:none;}
+main.main:not(.showing-settings):not(.showing-skills):not(.showing-memory):not(.showing-tasks):not(.showing-kanban):not(.showing-workspaces):not(.showing-profiles):not(.showing-insights):not(.showing-logs):not(.showing-backup):not(.showing-server) > #mainChat{display:flex;}
 main.main.showing-settings > #mainSettings{display:flex;overflow-y:auto;}
 main.main.showing-skills > #mainSkills{display:flex;}
 main.main.showing-memory > #mainMemory{display:flex;}
@@ -2975,8 +2976,48 @@ main.main.showing-workspaces > #mainWorkspaces{display:flex;}
 main.main.showing-profiles > #mainProfiles{display:flex;}
 main.main.showing-logs > #mainLogs{display:flex;}
 main.main.showing-backup > #mainBackup{display:flex;}
+main.main.showing-server > #mainServer{display:flex;overflow-y:auto;}
 #mainBackup > iframe{flex:1;width:100%;border:none;min-height:0;}
 #mainSettings{overflow-y:auto;}
+
+/* ── Server-admin panel ─────────────────────────────────────────────── */
+.server-admin-card{
+  background:var(--input-bg);border:1px solid var(--border2);
+  border-radius:12px;padding:18px 20px;
+}
+.server-admin-loading{
+  text-align:center;padding:30px 16px;color:var(--muted);font-size:14px;
+}
+.server-admin-info-table{
+  width:100%;border-collapse:collapse;font-size:13px;
+}
+.server-admin-info-table td{
+  padding:8px 0;border-bottom:1px solid var(--border);vertical-align:top;
+}
+.server-admin-info-table tr:last-child td{border-bottom:none;}
+.server-admin-info-table td:first-child{
+  color:var(--muted);width:110px;padding-right:12px;
+}
+.server-admin-info-table td:last-child{color:var(--text);word-break:break-all;}
+.server-admin-actions-grid{
+  display:grid;gap:10px;
+  grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+}
+.server-admin-action{
+  display:flex;align-items:flex-start;gap:12px;padding:14px 16px;
+  background:var(--input-bg);border:1px solid var(--border2);
+  border-radius:10px;color:var(--text);cursor:pointer;text-align:left;
+  transition:border-color .15s,background .15s,transform .1s;
+  font-family:inherit;text-decoration:none;
+}
+.server-admin-action:hover:not(:disabled){
+  border-color:var(--accent);background:var(--accent-bg);
+  transform:translateY(-1px);
+}
+.server-admin-action-icon{font-size:22px;line-height:1;flex-shrink:0;}
+.server-admin-action-body{display:flex;flex-direction:column;gap:3px;flex:1;}
+.server-admin-action-label{font-weight:600;font-size:14px;line-height:1.3;}
+.server-admin-action-hint{font-size:12px;color:var(--muted);line-height:1.4;}
 
 /* Sidebar menu (lives in the left sidebar under the cog panel) */
 .panel-view#panelSettings{gap:0;padding:0;}

@@ -4639,6 +4639,38 @@ def handle_get(handler, parsed) -> bool:
             logger.exception("neowow whoami failed")
             return bad(handler, str(e), status=500)
 
+    # ── Server-admin panel proxies ────────────────────────────────────────
+    # These four endpoints power the "服务器" (instance management) panel.
+    # All four forward to /api/me/instance/* on app.neowow.studio using
+    # the locally-stored JWT — the JWT never reaches the browser. Same
+    # auth-fail handling as the other /api/neowow/* routes above.
+    if parsed.path == "/api/neowow/instance/status":
+        from api.neowow import get_instance_status
+        try:
+            return j(handler, get_instance_status())
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow instance status failed")
+            return bad(handler, str(e), status=500)
+
+    if parsed.path == "/api/neowow/instance/backup":
+        from api.neowow import get_instance_backup_url
+        try:
+            return j(handler, get_instance_backup_url())
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            # 404 'no_backup' from upstream comes through as a RuntimeError
+            # with the body included — preserve it so the UI can detect
+            # "user has never backed up yet" cleanly.
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow instance backup failed")
+            return bad(handler, str(e), status=500)
+
     # Local-only inspect of ~/.hermes/skills/_neowow/ — disk read,
     # never network.  Used by the panel to render "you have N synced
     # skills" without forcing a round-trip on every open.
@@ -7058,6 +7090,37 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e), status=502)
         except Exception as e:
             logger.exception("neowow deploy failed")
+            return bad(handler, str(e), status=500)
+
+    # ── Server-admin panel: start / stop the cloud ECS instance ──────────
+    # Both routes are no-body POSTs (stop accepts an optional `destroy`
+    # flag in the body for the irreversible "delete my session" path).
+    # The "restart" button in the panel does stop+start client-side
+    # rather than introducing a new endpoint — keeps the dashboard
+    # surface narrower and gives the user a visible progress step.
+    if parsed.path == "/api/neowow/instance/start":
+        try:
+            from api.neowow import instance_start
+            return j(handler, instance_start())
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow instance start failed")
+            return bad(handler, str(e), status=500)
+
+    if parsed.path == "/api/neowow/instance/stop":
+        try:
+            from api.neowow import instance_stop
+            destroy = bool((body or {}).get("destroy", False))
+            return j(handler, instance_stop(destroy=destroy))
+        except ValueError as e:
+            return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("neowow instance stop failed")
             return bad(handler, str(e), status=500)
 
     if parsed.path == "/api/neowow/cloud-apply":

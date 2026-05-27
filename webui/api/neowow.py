@@ -1601,6 +1601,86 @@ def _dashboard_get_with_jwt(path: str) -> dict:
         raise RuntimeError(f"Cannot reach Neowow dashboard: {e.reason}")
 
 
+def _dashboard_post_with_jwt(path: str, body: dict | None = None) -> dict:
+    """POST <_NEOWOW_BASE><path> with the saved JWT as Bearer auth.
+
+    Mirrors ``_dashboard_get_with_jwt`` shape so the routes layer can
+    use either with the same error-handling reflexes. Body may be
+    omitted (sent as empty `{}`) — the dashboard's instance start/stop
+    handlers accept that.
+    """
+    jwt = get_jwt()
+    if not jwt:
+        raise ValueError(
+            "未登录 Neowow。点击下方「登录 Neowow」按钮先完成授权。"
+        )
+    url = _NEOWOW_BASE + path
+    payload = json.dumps(body or {}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {jwt}",
+            "Content-Type":  "application/json",
+            "Accept":        "application/json",
+            "User-Agent":    "Hermes/instance-admin-proxy",
+        },
+        method="POST",
+    )
+    try:
+        # Longer timeout — instance start/stop walks the cloud provider
+        # API (Aliyun ECS / Tencent CVM) which can spend 20-40 s
+        # waiting for the provider to confirm. 60 s is generous but
+        # still bounded so a stuck request doesn't hang the WebUI worker
+        # thread indefinitely.
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body_str = ""
+        try:
+            body_str = e.read().decode("utf-8")
+            err = (json.loads(body_str) or {}).get("error") or body_str
+        except Exception:
+            err = body_str or str(e)
+        if e.code in (401, 403):
+            _auto_clear_revoked(body_str, err, e.code)
+            raise RuntimeError(
+                f"Neowow Instance API 拒绝访问 ({e.code})：{err}。"
+                "可能 JWT 已过期，请重新登录。"
+            )
+        raise RuntimeError(f"Neowow Instance API error ({e.code}): {err}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cannot reach Neowow dashboard: {e.reason}")
+
+
+def get_instance_status() -> dict:
+    """Proxy GET /api/me/instance/status — the cloud ECS state for the
+    logged-in user. Powers the 服务器 panel's status card."""
+    return _dashboard_get_with_jwt("/api/me/instance/status")
+
+
+def instance_start() -> dict:
+    """Proxy POST /api/me/instance/start — boot the user's stopped ECS,
+    or spawn fresh if no row exists yet."""
+    return _dashboard_post_with_jwt("/api/me/instance/start")
+
+
+def instance_stop(destroy: bool = False) -> dict:
+    """Proxy POST /api/me/instance/stop {destroy} — power off the ECS.
+    ``destroy=True`` is the irreversible "delete my session" path; the
+    UI only sends that after an explicit confirm. Default is the
+    resumable stop the 关机 button uses."""
+    return _dashboard_post_with_jwt("/api/me/instance/stop", {"destroy": bool(destroy)})
+
+
+def get_instance_backup_url() -> dict:
+    """Proxy GET /api/me/instance/backup — returns a 15-min pre-signed
+    OSS URL the browser can use to download the user's latest
+    sessions_backup.zip directly from OSS (no traffic through this
+    WebUI or the dashboard)."""
+    return _dashboard_get_with_jwt("/api/me/instance/backup")
+
+
 def get_coding_plan() -> dict:
     """Return the user's Coding Plan summary as a flat dict the UI can
     render directly:

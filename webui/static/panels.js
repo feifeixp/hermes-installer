@@ -243,7 +243,7 @@ async function switchPanel(name, opts = {}) {
   // showing-<name> class on <main>; no class means chat (the default).
   const mainEl = document.querySelector('main.main');
   if (mainEl) {
-    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs','backup'].forEach(p => {
+    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs','backup','server'].forEach(p => {
       mainEl.classList.toggle('showing-' + p, nextPanel === p);
     });
   }
@@ -252,6 +252,13 @@ async function switchPanel(name, opts = {}) {
     // Lazy-load the backup iframe on first visit to avoid startup API calls
     const bkpIframe = document.getElementById('backupIframe');
     if (bkpIframe && !bkpIframe.src) bkpIframe.src = '/static/backup.html';
+  }
+  // Server-admin panel — always re-fetch on open so the user sees
+  // current state (running/stopped) rather than stale info from the
+  // last visit. The status endpoint is cheap (one TableStore getRow +
+  // an optional provider.status call upstream).
+  if (nextPanel === 'server' && typeof serverAdminLoad === 'function') {
+    serverAdminLoad();
   }
   if (nextPanel === 'tasks') await loadCrons();
   if (nextPanel === 'kanban') await loadKanban();
