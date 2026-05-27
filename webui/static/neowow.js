@@ -416,7 +416,12 @@
         codingPlan.creditsRemaining >= 100 ? 0 : 1,
       );
       const limit = (codingPlan.creditsLimit ?? 0).toLocaleString();
-      const planChipBg = codingPlan.planId === 'max'   ? 'linear-gradient(135deg,#f59e0b,#ef4444)'
+      // Plan-chip color. Kept in sync with planChipBg() in
+      // neowow.studio's dashboard/src/app/admin/CodingPlanTab.tsx so a
+      // user upgrading from Max to Max ×5 sees a visually distinct
+      // chip on both sides.
+      const planChipBg = codingPlan.planId === 'max5x' ? 'linear-gradient(135deg,#ef4444,#7c3aed)'
+                       : codingPlan.planId === 'max'   ? 'linear-gradient(135deg,#f59e0b,#ef4444)'
                        : codingPlan.planId === 'pro'   ? 'linear-gradient(135deg,#8b5cf6,#7c3aed)'
                        : codingPlan.planId === 'basic' ? 'linear-gradient(135deg,#3b82f6,#2563eb)'
                        :                                 'linear-gradient(135deg,#94a3b8,#64748b)';
