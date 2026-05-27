@@ -63,6 +63,31 @@ def _compare_versions(current: str, latest: str) -> bool:
     return l > c
 
 
+def _fetch_github_latest_release() -> dict | None:
+    """Fetch the latest release metadata from GitHub. Returns None on any failure."""
+    headers = {
+        "Accept":     "application/vnd.github+json",
+        "User-Agent": "hermes-installer-update-check",  # GitHub requires UA
+    }
+    req = urllib.request.Request(GITHUB_RELEASES_API, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=GITHUB_TIMEOUT) as resp:
+            raw = resp.read()
+        return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        logger.debug("installer_update: GitHub HTTP %s: %s", exc.code, exc.reason)
+        return None
+    except urllib.error.URLError as exc:
+        logger.debug("installer_update: GitHub URL error: %s", exc)
+        return None
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.debug("installer_update: GitHub returned non-JSON: %s", exc)
+        return None
+    except Exception as exc:
+        logger.warning("installer_update: GitHub fetch unexpected error: %s", exc)
+        return None
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 def check_installer_update(current_version: str | None = None) -> dict:
     """Return current installer-update status. TTL-cached for 15 minutes.

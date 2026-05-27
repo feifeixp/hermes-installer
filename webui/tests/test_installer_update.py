@@ -76,3 +76,59 @@ def test_compare_versions_rejects_invalid_inputs():
     assert iu._compare_versions("unknown", "v1.5.0") is False
     assert iu._compare_versions("v1.4.2-3-g6d5a", "v1.5.0") is False
     assert iu._compare_versions("v1.4.2", "v1.5.0-rc1") is False
+
+
+def _make_github_response(tag: str = "v1.5.0", prerelease: bool = False, body: str = "## What's Changed\n- fix") -> MagicMock:
+    """Build a mock urlopen response shaped like GitHub Releases API."""
+    payload = json.dumps({
+        "tag_name": tag,
+        "prerelease": prerelease,
+        "body": body,
+        "html_url": f"https://github.com/feifeixp/hermes-installer/releases/tag/{tag}",
+        "assets": [
+            {"name": "Hermes-Installer-macOS.dmg"},
+            {"name": "Hermes-Installer-Windows.zip"},
+        ],
+    }).encode("utf-8")
+    resp = MagicMock()
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
+    resp.read.return_value = payload
+    return resp
+
+
+def test_fetch_github_returns_parsed_release():
+    """Successful 200 → returns dict with tag_name/prerelease/body/html_url."""
+    with patch.object(iu.urllib.request, "urlopen", MagicMock(return_value=_make_github_response())):
+        release = iu._fetch_github_latest_release()
+    assert release is not None
+    assert release["tag_name"] == "v1.5.0"
+    assert release["prerelease"] is False
+    assert "What's Changed" in release["body"]
+
+
+def test_fetch_github_returns_none_on_403_rate_limit():
+    """GitHub secondary rate-limit (403) → None, no exception."""
+    err = iu.urllib.error.HTTPError("url", 403, "rate limited", {}, None)
+    with patch.object(iu.urllib.request, "urlopen", MagicMock(side_effect=err)):
+        release = iu._fetch_github_latest_release()
+    assert release is None
+
+
+def test_fetch_github_returns_none_on_network_error():
+    """URLError → None, no exception."""
+    err = iu.urllib.error.URLError("connection refused")
+    with patch.object(iu.urllib.request, "urlopen", MagicMock(side_effect=err)):
+        release = iu._fetch_github_latest_release()
+    assert release is None
+
+
+def test_fetch_github_returns_none_on_malformed_json():
+    """Body not valid JSON → None."""
+    resp = MagicMock()
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
+    resp.read.return_value = b"not-json"
+    with patch.object(iu.urllib.request, "urlopen", MagicMock(return_value=resp)):
+        release = iu._fetch_github_latest_release()
+    assert release is None
