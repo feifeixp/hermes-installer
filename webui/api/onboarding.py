@@ -1228,8 +1228,19 @@ def get_onboarding_status() -> dict:
     )
 
     neowow_auto_completed = False
+    # Also trigger when the user already has onboarding_completed=true
+    # in settings.json but model.provider is missing from config.yaml.
+    # That state is reachable when a prior run marked settings.json
+    # complete (e.g. the user clicked through the welcome screen, or
+    # an earlier auto-onboard reached save_settings but failed before
+    # _save_yaml_config), or when config.yaml is deleted out from
+    # under us. Without this branch we get stuck: JWT in neowow.json,
+    # settings says done, /api/models returns empty groups forever.
+    _no_model_provider = not _existing_provider
     _should_auto_onboard = _neowow_only_enabled() and (
-        not settings.get("onboarding_completed") or _needs_neowow_overwrite
+        not settings.get("onboarding_completed")
+        or _needs_neowow_overwrite
+        or _no_model_provider
     )
     if _should_auto_onboard:
         # ── Phase ζ.5 safety gate: bail BEFORE writing config.yaml if

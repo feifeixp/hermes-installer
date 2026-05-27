@@ -678,6 +678,57 @@ def _windows_install_agent() -> None:
         "--extra-index-url", "https://repo.huaweicloud.com/repository/pypi/simple/",
         "--extra-index-url", "https://pypi.org/simple/",
     ], error_prefix="依赖安装失败")
+    # ── Step 3.5: Patch hermes-agent with neowow-coding-plan ─────────────
+    # Upstream hermes-agent's PROVIDER_REGISTRY doesn't know about
+    # `neowow-coding-plan`. The Docker image runs this same script after
+    # pip install; native Windows installs were skipping it, so the WebUI
+    # would write `model.provider = neowow-coding-plan` into config.yaml
+    # but hermes_cli would reject every chat with "Unknown provider".
+    # Auto-onboarding silently bailed out via _agent_recognizes_provider,
+    # leaving /api/models empty and the user wondering where the catalog
+    # went. Run the patch here so the agent CLI knows the provider before
+    # the WebUI server boots.
+    print("[3.5/3] 正在为 hermes-agent 注入 neowow-coding-plan provider...", flush=True)
+    patch_script = BASE_DIR / "docker" / "patch_hermes_agent.py"
+    if patch_script.exists():
+        try:
+            # --skip-import-verify: the script's verifier uses venv/bin/python
+            # which doesn't exist on Windows (venv/Scripts/python.exe). We do
+            # our own import check below.
+            patch_proc = subprocess.run(
+                [str(venv_python_path), str(patch_script),
+                 "--agent-dir", str(agent_dir), "--skip-import-verify"],
+                capture_output=True, text=True, timeout=30,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+            )
+            log.info("patch_hermes_agent stdout:\n%s", patch_proc.stdout)
+            if patch_proc.stderr:
+                log.info("patch_hermes_agent stderr:\n%s", patch_proc.stderr)
+            # The script exits non-zero on a final cosmetic UnicodeEncodeError
+            # (print "✓") under Windows GBK terminals — the patches themselves
+            # have already landed. Verify by importing.
+            verify = subprocess.run(
+                [str(venv_python_path), "-c",
+                 "from hermes_cli.auth import PROVIDER_REGISTRY; "
+                 "import sys; "
+                 "sys.exit(0 if 'neowow-coding-plan' in PROVIDER_REGISTRY else 1)"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if verify.returncode != 0:
+                raise RuntimeError(
+                    f"patch_hermes_agent appeared to run but PROVIDER_REGISTRY "
+                    f"still lacks 'neowow-coding-plan'. stderr: {verify.stderr[:300]}"
+                )
+            print("      ✓ provider 注入完成", flush=True)
+        except Exception as exc:
+            log.exception("patch_hermes_agent failed: %s", exc)
+            raise RuntimeError(
+                f"为 hermes-agent 注入 neowow-coding-plan 失败：\n{exc}\n\n"
+                "WebUI 仍可启动,但默认模型会不可用。"
+            ) from exc
+    else:
+        log.warning("patch script not found at %s — skipping", patch_script)
+
     print("\n      ✓ 安装完成！Hermes 即将启动...\n", flush=True)
     log.info("Windows agent install complete — venv at %s", venv_dir)
 

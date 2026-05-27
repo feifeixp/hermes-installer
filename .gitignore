@@ -43,5 +43,8 @@ hermes_agent.zip
 hermes_agent_bundle.zip
 hermes_agent_bundle/
 
+# Downloaded by build.bat / build.sh — bundled uv.exe / uv binary
+tools/
+
 # Static assets (unused placeholder)
 /static/
