@@ -96,15 +96,57 @@ def _post(payload: dict, headers: dict) -> bool:
         return 200 <= resp.status < 300
 
 
+def _enqueue(payload: dict, attempt: int = 1) -> Path | None:
+    """Persist payload to the queue for later retry. Returns the file path or None on failure."""
+    try:
+        QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        _drop_oldest_if_full()
+        body = json.dumps(payload).encode("utf-8")
+        if len(body) > MAX_QUEUE_ENTRY_BYTES:
+            logger.warning("crash_reporter: payload too large (%d B), truncating", len(body))
+            body = body[:MAX_QUEUE_ENTRY_BYTES]
+        # Filename: <epoch_ns>.attempt-<N>.json
+        path = QUEUE_DIR / f"{time.time_ns()}.attempt-{attempt}.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(body)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass  # Windows: ignore chmod failure
+        os.replace(tmp, path)  # atomic
+        return path
+    except Exception as exc:
+        logger.error("crash_reporter: enqueue failed: %s", exc)
+        return None
+
+
+def _drop_oldest_if_full() -> None:
+    """If queue at capacity, remove oldest entry to make room (FIFO)."""
+    try:
+        entries = sorted(QUEUE_DIR.glob("*.json"))
+        while len(entries) >= MAX_QUEUE_ENTRIES:
+            oldest = entries.pop(0)
+            try:
+                oldest.unlink()
+            except OSError:
+                pass
+    except FileNotFoundError:
+        pass
+
+
 def report(phase, error, *, traceback=None, log_path=None, extra=None) -> bool:
     if phase not in PHASES:
         logger.warning("crash_reporter: unknown phase %r — sending anyway", phase)
     payload = _build_payload(phase, error, traceback, None, extra)
     headers = {"Content-Type": "application/json"}
     try:
-        return _post(payload, headers)
+        if _post(payload, headers):
+            return True
+        _enqueue(payload)
+        return False
     except Exception as exc:
-        logger.debug("crash_reporter: _post failed (%s) — not enqueued yet", exc)
+        logger.debug("crash_reporter: _post failed (%s), enqueueing", exc)
+        _enqueue(payload)
         return False
 
 

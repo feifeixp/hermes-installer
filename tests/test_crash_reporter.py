@@ -43,3 +43,31 @@ def test_report_success_204(isolated_queue):
         result = cr.report("main_unhandled", "test error")
     assert result is True
     assert not isolated_queue.exists() or not any(isolated_queue.iterdir())
+
+
+def test_report_network_fail_enqueues(isolated_queue):
+    """When POST fails, payload lands in the queue."""
+    failing_urlopen = MagicMock(side_effect=cr.urllib.error.URLError("connection refused"))
+    with patch.object(cr.urllib.request, "urlopen", failing_urlopen):
+        result = cr.report("main_unhandled", "boom")
+    assert result is False
+    files = list(isolated_queue.glob("*.json"))
+    assert len(files) == 1, f"expected 1 queued report, got {len(files)}"
+    # Filename is epoch-ns + .attempt-N.json
+    assert files[0].name.endswith(".attempt-1.json")
+    payload = json.loads(files[0].read_text(encoding="utf-8"))
+    assert payload["phase"] == "main_unhandled"
+    assert payload["error"] == "boom"
+
+
+def test_queue_file_has_0600_permissions(isolated_queue):
+    """Queue files must be 0600 — they contain JWT."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX permissions don't apply on Windows")
+    failing_urlopen = MagicMock(side_effect=cr.urllib.error.URLError("nope"))
+    with patch.object(cr.urllib.request, "urlopen", failing_urlopen):
+        cr.report("main_unhandled", "boom")
+    files = list(isolated_queue.glob("*.json"))
+    assert files
+    mode = files[0].stat().st_mode & 0o777
+    assert mode == 0o600, f"expected 0600, got {oct(mode)}"
