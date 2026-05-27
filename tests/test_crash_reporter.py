@@ -160,3 +160,26 @@ def test_pii_api_key_and_jwt_redacted(isolated_queue):
                    "secretvalue123456789",
                    "secret-cookie-value"]:
         assert secret not in payload["traceback"], f"secret {secret[:10]}... leaked"
+
+
+def test_log_tail_reads_last_n_bytes(tmp_path):
+    """Large log file → only the tail is read."""
+    log_file = tmp_path / "big.log"
+    # Write 1 MB of distinct lines
+    lines = [f"line {i:06d}\n" for i in range(50_000)]
+    log_file.write_text("".join(lines), encoding="utf-8")
+    assert log_file.stat().st_size > 200_000
+
+    tail = cr._read_log_tail(str(log_file))
+    assert tail is not None
+    assert len(tail.encode("utf-8")) <= cr.MAX_LOG_TAIL_BYTES
+    # Should contain the LAST line, not the FIRST
+    assert "line 049999" in tail
+    assert "line 000000" not in tail
+
+
+def test_log_tail_missing_file_ok(tmp_path):
+    """Non-existent path → None, no exception."""
+    missing = tmp_path / "nope.log"
+    result = cr._read_log_tail(str(missing))
+    assert result is None

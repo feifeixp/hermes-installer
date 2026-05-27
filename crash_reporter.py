@@ -186,8 +186,24 @@ def _sanitize_payload(payload: dict) -> dict:
 
 
 def _read_log_tail(path: str | None) -> str | None:
-    """Read the last N bytes of a log file. Stub for now — implemented in Task 6."""
-    return None
+    """Return the last MAX_LOG_TAIL_BYTES bytes of a log file, decoded as UTF-8."""
+    if not path:
+        return None
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return None
+        size = p.stat().st_size
+        with p.open("rb") as f:
+            if size > MAX_LOG_TAIL_BYTES:
+                f.seek(size - MAX_LOG_TAIL_BYTES)
+                # Drop the (likely partial) first line for clean boundary
+                _ = f.readline()
+            raw = f.read()
+        return raw.decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.debug("crash_reporter: _read_log_tail(%s) failed: %s", path, exc)
+        return None
 
 
 def _attach_jwt(headers: dict) -> None:
