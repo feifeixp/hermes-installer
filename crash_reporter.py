@@ -207,8 +207,18 @@ def _read_log_tail(path: str | None) -> str | None:
 
 
 def _attach_jwt(headers: dict) -> None:
-    """Attach Bearer JWT from ~/.hermes/webui/neowow.json. Stub for now — implemented in Task 8."""
-    return
+    """Read JWT from ~/.hermes/webui/neowow.json and add Authorization header."""
+    try:
+        jwt_path = Path.home() / ".hermes" / "webui" / "neowow.json"
+        if not jwt_path.is_file():
+            return
+        data = json.loads(jwt_path.read_text(encoding="utf-8"))
+        jwt = (data.get("jwt") or data.get("accessToken")
+               or data.get("authorization") or "")
+        if isinstance(jwt, str) and jwt.count(".") == 2:
+            headers["Authorization"] = f"Bearer {jwt}"
+    except Exception as exc:
+        logger.debug("crash_reporter: _attach_jwt failed: %s", exc)
 
 
 def report(phase, error, *, traceback=None, log_path=None, extra=None) -> bool:

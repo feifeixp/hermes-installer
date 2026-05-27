@@ -240,3 +240,44 @@ def test_flush_5s_budget_respected(isolated_queue):
         elapsed = time.monotonic() - t0
     assert elapsed < cr.FLUSH_TIME_BUDGET_SECONDS + 1.0, \
         f"flush took {elapsed:.2f}s, budget is {cr.FLUSH_TIME_BUDGET_SECONDS}s + slack"
+
+
+def test_attach_jwt_from_neowow_file(isolated_queue, tmp_path, monkeypatch):
+    """When ~/.hermes/webui/neowow.json has a JWT, it goes into Authorization."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    jwt_file = tmp_path / ".hermes" / "webui" / "neowow.json"
+    jwt_file.parent.mkdir(parents=True)
+    jwt_value = "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOiJ1MTIzIn0.signature123"
+    jwt_file.write_text(json.dumps({"jwt": jwt_value}))
+
+    captured = {}
+    def capture_urlopen(req, timeout=None):
+        captured["auth"] = req.headers.get("Authorization", "")
+        m = MagicMock()
+        m.__enter__.return_value = m
+        m.__exit__.return_value = False
+        m.status = 204
+        return m
+
+    with patch.object(cr.urllib.request, "urlopen", capture_urlopen):
+        cr.report("main_unhandled", "test")
+    time.sleep(0.6)
+
+    assert captured["auth"] == f"Bearer {jwt_value}"
+
+
+def test_attach_jwt_missing_file_ok(isolated_queue, tmp_path, monkeypatch):
+    """No neowow.json → no Authorization header, no error."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    captured = {}
+    def capture_urlopen(req, timeout=None):
+        captured["auth"] = req.headers.get("Authorization", None)
+        m = MagicMock()
+        m.__enter__.return_value = m
+        m.__exit__.return_value = False
+        m.status = 204
+        return m
+    with patch.object(cr.urllib.request, "urlopen", capture_urlopen):
+        cr.report("main_unhandled", "test")
+    time.sleep(0.6)
+    assert captured["auth"] is None
