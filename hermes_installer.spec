@@ -78,6 +78,12 @@ a = Analysis(
         + ([("hermes_agent_bundle.zip", ".")] if Path("hermes_agent_bundle.zip").exists() else [])
         # uv.exe: Windows-only install tool, bundled so users don't need internet for uv itself
         + ([("tools/uv.exe", "tools")] if IS_WIN and Path("tools/uv.exe").exists() else [])
+        # patch_hermes_agent.py: injects the neowow-coding-plan ProviderConfig
+        # into hermes_cli/auth.py + providers.py after pip install. Without
+        # this file in the bundle, _windows_install_agent's Step 3.5 logs
+        # "patch script not found ... skipping" and chat dispatch later
+        # fails with "Unknown provider 'neowow-coding-plan'".
+        + ([("docker/patch_hermes_agent.py", "docker")] if Path("docker/patch_hermes_agent.py").exists() else [])
     ),
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],

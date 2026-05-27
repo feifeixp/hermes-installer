@@ -431,6 +431,42 @@ def _check_webview2_windows() -> "str | None":
 # Windows install helpers
 # ══════════════════════════════════════════════════════════════════════════
 
+def _clean_subprocess_env(*, extra: dict | None = None) -> dict:
+    """Return an env dict safe to pass to a venv-Python subprocess.
+
+    When the installer is a PyInstaller-frozen exe (always, in production),
+    sys.executable is a Python 3.13 interpreter that lives inside
+    ``_MEI<random>/`` along with its own ``python313.dll``. PyInstaller
+    leaks a handful of env vars into os.environ that, if inherited by a
+    child venv Python 3.11, make Windows resolve ``python3.dll`` /
+    ``python313.dll`` from the parent's _MEI dir before the venv's
+    cpython-3.11 prefix — every native .pyd then fails with
+    ``Module use of python313.dll conflicts with this version of Python``
+    AND the stdlib's ``encodings.idna`` codec can't be located via the
+    expected path (``LookupError: unknown encoding: idna`` inside
+    socket.getfqdn → gethostbyaddr).
+
+    Strip the leaks:
+      - ``PYTHONHOME`` / ``PYTHONPATH``: anchor stdlib to _MEI's 3.13 layout
+      - ``_PYI_*`` / ``_MEIPASS2``: PyInstaller internals that bootloader sets
+      - Any ``_MEI<n>``-prefixed entry in PATH
+
+    Then layer caller-supplied vars on top (``extra``).
+    """
+    env = os.environ.copy()
+    for var in ("PYTHONHOME", "PYTHONPATH", "_PYI_APPLICATION_HOME_DIR",
+                "_PYI_LINK_TARGET", "_PYI_ARCHIVE_FILE", "_MEIPASS2"):
+        env.pop(var, None)
+    # Drop _MEI* dirs from PATH (Win) / colon-PATH (POSIX, defensive).
+    sep = ";" if sys.platform == "win32" else ":"
+    parts = env.get("PATH", "").split(sep)
+    parts = [p for p in parts if "_MEI" not in p]
+    env["PATH"] = sep.join(parts)
+    if extra:
+        env.update(extra)
+    return env
+
+
 def _is_agent_installed() -> bool:
     """Return True if the hermes-agent venv exists, is healthy, and run_agent is importable.
 
@@ -458,10 +494,17 @@ def _is_agent_installed() -> bool:
     # Both are quick. If either fails with a recognisable wheel-conflict /
     # missing-codec signature, return False so the venv gets rebuilt with
     # uv-managed Python.
+    # Also do a real socket bind — gethostbyaddr is the C-level codec path
+    # that server.py's QuietHTTPServer crashes on, and it can fail when the
+    # Python-level `import encodings.idna` succeeds. Without this the health
+    # check returns False positive on frozen-exe-leaked python313.dll envs.
     health_script = (
         "import encodings.idna; "  # missing → user Python install is broken
         "import codecs; codecs.lookup('idna'); "
         "import run_agent; "  # python313.dll conflicts surface here
+        "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer; "
+        "srv = ThreadingHTTPServer(('127.0.0.1', 0), BaseHTTPRequestHandler); "
+        "srv.server_close(); "
         "print('ok')"
     )
     try:
@@ -469,7 +512,7 @@ def _is_agent_installed() -> bool:
             [str(venv_python), "-c", health_script],
             capture_output=True,
             timeout=10,
-            env={**os.environ, "PYTHONPATH": str(agent_dir)},
+            env=_clean_subprocess_env(extra={"PYTHONPATH": str(agent_dir)}),
         )
         if result.returncode == 0:
             log.info("agent installed and healthy at %s", venv_python)
@@ -588,7 +631,7 @@ def _run_uv(uv_exe: Path, args: "list[str]", error_prefix: str = "uv 命令失�
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        env={**os.environ, "UV_NO_PROGRESS": "1", "PYTHONUTF8": "1"},
+        env=_clean_subprocess_env(extra={"UV_NO_PROGRESS": "1", "PYTHONUTF8": "1"}),
     )
     output_lines: list[str] = []
     for raw in proc.stdout:
@@ -717,7 +760,7 @@ def _windows_install_agent() -> None:
                 [str(venv_python_path), str(patch_script),
                  "--agent-dir", str(agent_dir), "--skip-import-verify"],
                 capture_output=True, text=True, timeout=30,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+                env=_clean_subprocess_env(extra={"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}),
             )
             log.info("patch_hermes_agent stdout:\n%s", patch_proc.stdout)
             if patch_proc.stderr:
@@ -731,6 +774,7 @@ def _windows_install_agent() -> None:
                  "import sys; "
                  "sys.exit(0 if 'neowow-coding-plan' in PROVIDER_REGISTRY else 1)"],
                 capture_output=True, text=True, timeout=15,
+                env=_clean_subprocess_env(),
             )
             if verify.returncode != 0:
                 raise RuntimeError(
@@ -774,12 +818,13 @@ def _start_webui_server_windows(port: int, host: str) -> subprocess.Popen:
             "请重新下载 Hermes Installer。"
         )
 
-    env = os.environ.copy()
-    env["HERMES_WEBUI_PORT"] = str(port)
-    env["HERMES_WEBUI_HOST"] = host
-    env["HERMES_WEBUI_AGENT_DIR"] = str(agent_dir)
-    env["PYTHONUNBUFFERED"] = "1"
-    env["PYTHONUTF8"] = "1"
+    env = _clean_subprocess_env(extra={
+        "HERMES_WEBUI_PORT":      str(port),
+        "HERMES_WEBUI_HOST":      host,
+        "HERMES_WEBUI_AGENT_DIR": str(agent_dir),
+        "PYTHONUNBUFFERED":       "1",
+        "PYTHONUTF8":             "1",
+    })
 
     server_log_path = _LOG_DIR / "webui-server.log"
     log.info(
@@ -1205,11 +1250,12 @@ def main():
                    f"请确认 webui/ 目录与 main.py 在同一文件夹下。")
             sys.exit(1)
 
-        env = os.environ.copy()
-        env["HERMES_WEBUI_PORT"] = str(port)
-        env["HERMES_WEBUI_HOST"] = host
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PYTHONUTF8"] = "1"
+        env = _clean_subprocess_env(extra={
+            "HERMES_WEBUI_PORT": str(port),
+            "HERMES_WEBUI_HOST": host,
+            "PYTHONUNBUFFERED":  "1",
+            "PYTHONUTF8":        "1",
+        })
 
         log.info("Launching bootstrap.py: %s %s", python_exe, BOOTSTRAP_PY)
 
