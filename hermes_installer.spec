@@ -32,7 +32,14 @@ if IS_WIN:
     _WIN_VERSION_FILE.write_text(windows_version_info_text(), encoding="utf-8")
 
 # ── Hidden imports ─────────────────────────────────────────────────────────
-HIDDEN_IMPORTS = []
+HIDDEN_IMPORTS = [
+    # crash_reporter is imported by both main.py and webui/server.py via
+    # HERMES_INSTALLER_BASE_DIR. PyInstaller's static analyzer usually picks
+    # this up from main.py, but list it explicitly as insurance so the module
+    # is guaranteed to be in the bundle for both the frozen exe and the
+    # webui venv subprocess that resolves it from the bundled source tree.
+    "crash_reporter",
+]
 
 if IS_WIN:
     HIDDEN_IMPORTS += [
