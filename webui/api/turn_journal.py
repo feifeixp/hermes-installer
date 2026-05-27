@@ -20,6 +20,10 @@ try:  # pragma: no cover - fcntl is unavailable on Windows.
 except ImportError:  # pragma: no cover
     _fcntl = None
 
+# os.O_DIRECTORY is POSIX-only; on Windows there's no equivalent and the
+# parent-directory fsync below is a no-op anyway.
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", None)
+
 TURN_JOURNAL_DIR_NAME = "_turn_journal"
 _TERMINAL_EVENTS = {"completed", "interrupted"}
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -94,14 +98,15 @@ def append_turn_journal_event(
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
-    try:
-        dir_fd = os.open(path.parent, os.O_DIRECTORY)
+    if _O_DIRECTORY is not None:
         try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except OSError:
-        pass
+            dir_fd = os.open(path.parent, _O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
     return payload
 
 
