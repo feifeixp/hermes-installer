@@ -40,6 +40,29 @@ def _platform_asset_for(platform: str) -> str | None:
     return PLATFORM_ASSETS.get(platform)
 
 
+_CLEAN_SEMVER_RE = re.compile(r'^v\d+\.\d+\.\d+$')
+
+
+def _is_clean_semver(v: str | None) -> bool:
+    """True iff `v` matches v<MAJOR>.<MINOR>.<PATCH> exactly."""
+    if not v:
+        return False
+    return bool(_CLEAN_SEMVER_RE.match(v.strip()))
+
+
+def _compare_versions(current: str, latest: str) -> bool:
+    """Return True iff `latest` is strictly newer than `current`.
+
+    Both inputs must be clean v<x>.<y>.<z> semver — otherwise returns False
+    so dev-mode / unknown versions don't false-positive an update.
+    """
+    if not _is_clean_semver(current) or not _is_clean_semver(latest):
+        return False
+    c = tuple(int(x) for x in current.lstrip('v').split('.'))
+    l = tuple(int(x) for x in latest.lstrip('v').split('.'))
+    return l > c
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 def check_installer_update(current_version: str | None = None) -> dict:
     """Return current installer-update status. TTL-cached for 15 minutes.
