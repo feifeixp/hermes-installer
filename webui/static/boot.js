@@ -1898,3 +1898,163 @@ function _showServerStopped() {
   var stoppedMsg = (typeof t === 'function' ? t('settings_shutdown_stopped_message') : 'Server stopped. You can close this tab.');
   document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--muted);font-family:system-ui,ui-sans-serif;font-size:14px"><p>' + stoppedMsg + '</p></div>';
 }
+
+// ── Installer update banner ───────────────────────────────────────────────
+// Polls /api/installer-update/check once per boot; if a new installer
+// release is on GitHub AND the OSS mirror has it AND the user hasn't
+// explicitly skipped this version, render a top banner with download /
+// view-notes / skip / dismiss actions. See docs/superpowers/specs/
+// 2026-05-27-installer-update-reminder-design.md
+(function setupInstallerUpdateBanner(){
+  function $(id){ return document.getElementById(id); }
+
+  // i18n helper — falls back to the key if no t() is available yet.
+  function tx(key, vars){
+    if (typeof t === 'function') {
+      let s = t(key) || key;
+      if (vars) for (const k in vars) s = s.replaceAll('{' + k + '}', vars[k]);
+      return s;
+    }
+    return key;
+  }
+
+  function hide(){
+    const b = $('installerUpdateBanner');
+    if (b) b.setAttribute('hidden', '');
+  }
+
+  function show(){
+    const b = $('installerUpdateBanner');
+    if (b) b.removeAttribute('hidden');
+  }
+
+  function renderNotes(markdown){
+    const box = $('installerUpdateBannerNotes');
+    if (!box) return;
+    // streaming-markdown is exposed as window.smd by index.html.
+    if (typeof smd === 'undefined' || !smd) {
+      // Fallback: plain text in a <pre>.
+      box.innerHTML = '';
+      const pre = document.createElement('pre');
+      pre.style.whiteSpace = 'pre-wrap';
+      pre.textContent = markdown;
+      box.appendChild(pre);
+      return;
+    }
+    box.innerHTML = '';
+    const renderer = smd.default_renderer(box);
+    const parser = smd.parser(renderer);
+    smd.parser_write(parser, markdown);
+    smd.parser_end(parser);
+  }
+
+  async function postSkip(version){
+    try {
+      const r = await fetch('/api/installer-update/skip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version }),
+      });
+      return r.ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function wireActions(payload){
+    const dl    = $('installerUpdateDownloadBtn');
+    const notes = $('installerUpdateNotesBtn');
+    const skip  = $('installerUpdateSkipBtn');
+    const dism  = $('installerUpdateDismissBtn');
+    const notesBox = $('installerUpdateBannerNotes');
+
+    if (dl) {
+      dl.textContent = '📥 ' + tx('installer_update_download');
+      dl.onclick = () => {
+        const url = payload.download_url || payload.fallback_url;
+        if (url) window.open(url, '_blank', 'noopener');
+      };
+    }
+    if (notes) {
+      notes.textContent = '📋 ' + tx('installer_update_view_notes');
+      let expanded = false;
+      notes.onclick = () => {
+        expanded = !expanded;
+        if (notesBox) {
+          if (expanded) {
+            renderNotes(payload.release_notes || tx('installer_update_view_notes'));
+            notesBox.removeAttribute('hidden');
+          } else {
+            notesBox.setAttribute('hidden', '');
+          }
+        }
+      };
+    }
+    if (skip) {
+      skip.textContent = tx('installer_update_skip_version');
+      skip.onclick = async () => {
+        const original = skip.textContent;
+        skip.disabled = true;
+        skip.textContent = tx('installer_update_skipping');
+        const ok = await postSkip(payload.latest_version);
+        skip.disabled = false;
+        if (ok) {
+          hide();
+        } else {
+          skip.textContent = tx('installer_update_skip_failed', { error: 'network' });
+          setTimeout(() => { skip.textContent = original; }, 3000);
+        }
+      };
+    }
+    if (dism) {
+      dism.onclick = hide;  // in-memory only
+    }
+  }
+
+  async function check(){
+    // Read skipped version from settings. Try the global S.settings first
+    // (set by boot.js's main async init), else hit the endpoint.
+    let skippedVersion = '';
+    try {
+      const s = (typeof S === 'object' && S && S.settings) ? S.settings
+              : await fetch('/api/settings').then(r => r.json());
+      skippedVersion = (s && s.installer_skipped_version) || '';
+    } catch (e) {
+      // Best-effort; default to empty skip list.
+    }
+
+    let payload;
+    try {
+      const r = await fetch('/api/installer-update/check');
+      if (!r.ok) return;
+      payload = await r.json();
+    } catch (e) {
+      return;
+    }
+
+    if (!payload || !payload.ok) return;
+    if (!payload.update_available) return;
+    if (!payload.oss_ready) return;
+    if (payload.is_prerelease) return;
+    if (payload.latest_version === skippedVersion) return;
+
+    // Populate banner copy
+    const titleEl = $('installerUpdateBannerTitle');
+    const subEl   = $('installerUpdateBannerSubtitle');
+    if (titleEl) titleEl.textContent = tx('installer_update_banner_title',
+                                          { version: payload.latest_version });
+    if (subEl)   subEl.textContent   = tx('installer_update_banner_current',
+                                          { current: payload.current_version });
+    wireActions(payload);
+    show();
+  }
+
+  // Run after DOMContentLoaded + a short delay so t() is installed and
+  // settings have been fetched. Total cost: 1 fetch to /check.
+  function start(){ setTimeout(check, 2000); }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    start();
+  }
+})();

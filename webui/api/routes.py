@@ -3932,6 +3932,24 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/health":
         return _handle_health(handler, parsed)
 
+    if parsed.path == "/api/installer-update/check":
+        from api.installer_update import check_installer_update
+        try:
+            # Current version comes from main.py if importable (frozen
+            # installer); fall back to the env var that the bootstrap sets,
+            # then to "unknown" for dev mode.
+            try:
+                from main import _get_app_version
+                current = _get_app_version()
+            except Exception:
+                current = os.environ.get("HERMES_INSTALLER_VERSION", "unknown")
+            result = check_installer_update(current_version=current)
+        except Exception as exc:
+            logger.exception("installer-update check failed: %s", exc)
+            result = {"ok": False, "reason": "internal_error"}
+        j(handler, result)
+        return True
+
     if parsed.path == "/api/health/agent":
         return j(handler, build_agent_health_payload())
 
@@ -6297,6 +6315,29 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, _sanitize_error(e))
         except RuntimeError as e:
             return bad(handler, str(e), 409)
+
+    if parsed.path == "/api/installer-update/skip":
+        # body has already been JSON-parsed into a dict by read_body() above.
+        if not isinstance(body, dict):
+            bad(handler, "request body must be a JSON object", status=400)
+            return True
+        version = str(body.get("version", "")).strip()
+        # Cap length before regex to avoid DoS via huge payloads.
+        # v<MAJOR>.<MINOR>.<PATCH> with realistic components fits in 32 chars.
+        if len(version) > 32 or not re.fullmatch(r"v\d+\.\d+\.\d+", version):
+            bad(handler, "version must be in v<MAJOR>.<MINOR>.<PATCH> format", status=400)
+            return True
+        from api.config import load_settings, save_settings
+        try:
+            settings = load_settings()
+            settings["installer_skipped_version"] = version
+            save_settings(settings)
+        except Exception as exc:
+            logger.exception("failed to persist installer_skipped_version: %s", exc)
+            bad(handler, "could not save setting", status=500)
+            return True
+        j(handler, {"ok": True, "skipped_version": version})
+        return True
 
     # ── Settings (POST) ──
     if parsed.path == "/api/settings":
