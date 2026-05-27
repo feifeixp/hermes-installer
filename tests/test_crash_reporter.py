@@ -183,3 +183,60 @@ def test_log_tail_missing_file_ok(tmp_path):
     missing = tmp_path / "nope.log"
     result = cr._read_log_tail(str(missing))
     assert result is None
+
+
+def test_flush_resends_queued_entries(isolated_queue):
+    """flush_queue() POSTs each enqueued entry and deletes it on success."""
+    # First, fail a report to populate queue
+    with patch.object(cr.urllib.request, "urlopen",
+                      MagicMock(side_effect=cr.urllib.error.URLError("down"))):
+        cr.report("main_unhandled", "boom 1")
+    time.sleep(0.6)
+
+    assert len(list(isolated_queue.glob("*.json"))) == 1
+
+    # Then flush with a working endpoint
+    with patch.object(cr.urllib.request, "urlopen", _mock_urlopen_ok()):
+        n = cr.flush_queue()
+    assert n == 1
+    assert not list(isolated_queue.glob("*.json")), "queued file should be deleted"
+
+
+def test_flush_moves_to_dlq_after_max_attempts(isolated_queue):
+    """A payload that fails 5 times is moved to quarantine."""
+    # Manually drop a payload at attempt-5 (simulates 4 prior failures)
+    isolated_queue.mkdir(parents=True, exist_ok=True)
+    stale = isolated_queue / "1234567890.attempt-5.json"
+    stale.write_text(json.dumps({"phase": "main_unhandled", "error": "old", "extra": {}}))
+
+    with patch.object(cr.urllib.request, "urlopen",
+                      MagicMock(side_effect=cr.urllib.error.URLError("still down"))):
+        cr.flush_queue()
+
+    dlq_dir = isolated_queue / "quarantine"
+    assert not stale.exists(), "should be moved out of queue"
+    assert len(list(dlq_dir.glob("*.json"))) == 1, "should be in DLQ"
+
+
+def test_flush_5s_budget_respected(isolated_queue):
+    """flush_queue total runtime is bounded even with many slow entries."""
+    # Pre-populate 10 entries
+    isolated_queue.mkdir(parents=True, exist_ok=True)
+    for i in range(10):
+        (isolated_queue / f"100000000{i:02d}.attempt-1.json").write_text(
+            json.dumps({"phase": "main_unhandled", "error": f"e{i}", "extra": {}}))
+
+    def slow_urlopen(*args, **kwargs):
+        time.sleep(0.7)
+        m = MagicMock()
+        m.__enter__.return_value = m
+        m.__exit__.return_value = False
+        m.status = 204
+        return m
+
+    with patch.object(cr.urllib.request, "urlopen", slow_urlopen):
+        t0 = time.monotonic()
+        cr.flush_queue()
+        elapsed = time.monotonic() - t0
+    assert elapsed < cr.FLUSH_TIME_BUDGET_SECONDS + 1.0, \
+        f"flush took {elapsed:.2f}s, budget is {cr.FLUSH_TIME_BUDGET_SECONDS}s + slack"

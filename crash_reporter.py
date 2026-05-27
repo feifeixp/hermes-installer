@@ -243,6 +243,83 @@ def report(phase, error, *, traceback=None, log_path=None, extra=None) -> bool:
 
 
 # ── Queue management ─────────────────────────────────────────────────────────
+_ATTEMPT_RE = re.compile(r"\.attempt-(\d+)\.json$")
+
+
+def _parse_attempt(path: Path) -> int:
+    """Extract attempt-N from filename; default 1 if absent."""
+    m = _ATTEMPT_RE.search(path.name)
+    return int(m.group(1)) if m else 1
+
+
+def _move_to_dlq(path: Path) -> None:
+    """Move a payload file to the dead-letter quarantine."""
+    try:
+        DLQ_DIR.mkdir(parents=True, exist_ok=True)
+        os.replace(path, DLQ_DIR / path.name)
+        logger.warning("crash_reporter: moved %s to DLQ after %d attempts",
+                       path.name, MAX_ATTEMPTS_BEFORE_DLQ)
+    except Exception as exc:
+        logger.error("crash_reporter: DLQ move failed: %s", exc)
+
+
+def _bump_attempt(path: Path) -> Path:
+    """Rename a queue file to increment its attempt counter. Returns new path."""
+    cur = _parse_attempt(path)
+    base = _ATTEMPT_RE.sub("", path.name)
+    new_path = path.with_name(f"{base}.attempt-{cur + 1}.json")
+    try:
+        os.replace(path, new_path)
+        return new_path
+    except Exception:
+        return path  # best-effort; leave as-is
+
+
 def flush_queue() -> int:
-    """Re-send all pending crash reports. Called from main.py at startup."""
-    raise NotImplementedError  # filled in by Task 7
+    """Re-send all pending reports. Returns the number successfully sent.
+
+    Budget: FLUSH_TIME_BUDGET_SECONDS. Entries that exceed MAX_ATTEMPTS_BEFORE_DLQ
+    are moved to quarantine. Called from main.py at startup.
+    """
+    if not QUEUE_DIR.is_dir():
+        return 0
+    dlq_count = len(list(DLQ_DIR.glob("*.json"))) if DLQ_DIR.is_dir() else 0
+    if dlq_count:
+        logger.warning("crash_reporter: %d dead-letter payloads in %s", dlq_count, DLQ_DIR)
+
+    entries = sorted(QUEUE_DIR.glob("*.json"))  # exclude subdirs (quarantine/)
+    entries = [p for p in entries if p.is_file()]
+    sent = 0
+    deadline = time.monotonic() + FLUSH_TIME_BUDGET_SECONDS
+
+    for path in entries:
+        if time.monotonic() >= deadline:
+            logger.info("crash_reporter: flush budget exceeded, %d entries remain", len(entries) - sent)
+            break
+
+        attempt = _parse_attempt(path)
+        if attempt >= MAX_ATTEMPTS_BEFORE_DLQ:
+            _move_to_dlq(path)
+            continue
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("crash_reporter: malformed queue file %s — dropping", path)
+            try: path.unlink()
+            except OSError: pass
+            continue
+
+        headers = {"Content-Type": "application/json"}
+        _attach_jwt(headers)
+        try:
+            if _post(payload, headers):
+                path.unlink()
+                sent += 1
+                continue
+        except Exception as exc:
+            logger.debug("crash_reporter: flush retry failed: %s", exc)
+        # Bump attempt counter and move on (will retry next startup)
+        _bump_attempt(path)
+
+    return sent
