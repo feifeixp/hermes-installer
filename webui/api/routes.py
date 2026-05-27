@@ -6241,9 +6241,13 @@ def handle_post(handler, parsed) -> bool:
 
     if parsed.path == "/api/installer-update/skip":
         # body has already been JSON-parsed into a dict by read_body() above.
+        if not isinstance(body, dict):
+            bad(handler, "request body must be a JSON object", status=400)
+            return True
         version = str(body.get("version", "")).strip()
-        # Validate format: must be exactly v<x>.<y>.<z>
-        if not re.fullmatch(r"v\d+\.\d+\.\d+", version):
+        # Cap length before regex to avoid DoS via huge payloads.
+        # v<MAJOR>.<MINOR>.<PATCH> with realistic components fits in 32 chars.
+        if len(version) > 32 or not re.fullmatch(r"v\d+\.\d+\.\d+", version):
             bad(handler, "version must be in v<MAJOR>.<MINOR>.<PATCH> format", status=400)
             return True
         from api.config import load_settings, save_settings
