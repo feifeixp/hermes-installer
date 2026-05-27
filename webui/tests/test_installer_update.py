@@ -132,3 +132,44 @@ def test_fetch_github_returns_none_on_malformed_json():
     with patch.object(iu.urllib.request, "urlopen", MagicMock(return_value=resp)):
         release = iu._fetch_github_latest_release()
     assert release is None
+
+
+def _make_oss_head_response(status: int = 200) -> MagicMock:
+    resp = MagicMock()
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
+    resp.status = status
+    return resp
+
+
+def test_oss_head_returns_true_on_200():
+    """OSS asset exists → True."""
+    with patch.object(iu.urllib.request, "urlopen", MagicMock(return_value=_make_oss_head_response(200))):
+        assert iu._check_oss_asset("v1.5.0", "Hermes-Installer-macOS.dmg") is True
+
+
+def test_oss_head_returns_false_on_404():
+    """OSS asset not yet mirrored → False."""
+    err = iu.urllib.error.HTTPError("url", 404, "not found", {}, None)
+    with patch.object(iu.urllib.request, "urlopen", MagicMock(side_effect=err)):
+        assert iu._check_oss_asset("v1.5.0", "Hermes-Installer-macOS.dmg") is False
+
+
+def test_oss_head_returns_false_on_network_error():
+    """Network failure → False, no exception."""
+    err = iu.urllib.error.URLError("dns failure")
+    with patch.object(iu.urllib.request, "urlopen", MagicMock(side_effect=err)):
+        assert iu._check_oss_asset("v1.5.0", "Hermes-Installer-macOS.dmg") is False
+
+
+def test_oss_head_uses_correct_url():
+    """URL constructed as OSS_BASE/<tag>/<asset>."""
+    captured = {}
+    def capture_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["method"] = req.get_method()
+        return _make_oss_head_response(200)
+    with patch.object(iu.urllib.request, "urlopen", capture_urlopen):
+        iu._check_oss_asset("v1.5.0", "Hermes-Installer-macOS.dmg")
+    assert captured["url"] == "https://neowow.oss-cn-hangzhou.aliyuncs.com/hermes/v1.5.0/Hermes-Installer-macOS.dmg"
+    assert captured["method"] == "HEAD"

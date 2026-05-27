@@ -88,6 +88,27 @@ def _fetch_github_latest_release() -> dict | None:
         return None
 
 
+def _check_oss_asset(tag: str, asset: str) -> bool:
+    """HEAD-probe the OSS mirror to confirm `<tag>/<asset>` is downloadable.
+
+    Returns True iff HTTP 2xx; False on 4xx/5xx/network error.
+    """
+    url = f"{OSS_BASE}/{tag}/{asset}"
+    req = urllib.request.Request(url, method="HEAD")
+    try:
+        with urllib.request.urlopen(req, timeout=OSS_HEAD_TIMEOUT) as resp:
+            return 200 <= resp.status < 300
+    except urllib.error.HTTPError as exc:
+        logger.debug("installer_update: OSS HEAD %s → %s", url, exc.code)
+        return False
+    except urllib.error.URLError as exc:
+        logger.debug("installer_update: OSS HEAD network error: %s", exc)
+        return False
+    except Exception as exc:
+        logger.warning("installer_update: OSS HEAD unexpected: %s", exc)
+        return False
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 def check_installer_update(current_version: str | None = None) -> dict:
     """Return current installer-update status. TTL-cached for 15 minutes.
