@@ -34,6 +34,14 @@ name: build-image
 on:
   push:
     branches: [main]
+    # Version-tag pushes (e.g. `git tag v1.4.9 && git push origin v1.4.9`)
+    # ALSO trigger the build. This pushes a v<version>-tagged image
+    # alongside `latest` and `main-<sha7>`, so downstream deployments can
+    # pin to a specific release (e.g. for rollback or audit) without
+    # losing the rolling-`latest` convenience.
+    # The path filter below is ignored for tag pushes — GitHub treats
+    # tag events as unconditional, which is what we want here.
+    tags: ['v*']
     paths:
       # Rebuild when image-relevant files change. Keep this list narrow
       # so doc-only commits don't burn build minutes.
@@ -105,17 +113,32 @@ jobs:
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          # If this run was triggered by a `vX.Y.Z` tag push, also emit a
+          # version-tagged image. github.ref looks like `refs/tags/v1.4.9`
+          # in that case; strip the prefix and you get the tag name.
+          # Empty for main-branch pushes / workflow_dispatch runs.
+          VERSION_TAG=""
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION_TAG="${{ github.ref_name }}"
+          fi
+          echo "version_tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
           # Newline-separated tag list, used by both push targets.
           {
             echo "ghcr_tags<<EOF"
             echo "ghcr.io/feifeixp/hermes-webui:latest"
             echo "ghcr.io/feifeixp/hermes-webui:main-${SHORT_SHA}"
+            if [[ -n "$VERSION_TAG" ]]; then
+              echo "ghcr.io/feifeixp/hermes-webui:${VERSION_TAG}"
+            fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           {
             echo "acr_tags<<EOF"
             echo "${ACR_REGISTRY}/${ACR_NAMESPACE}/hermes-webui:latest"
             echo "${ACR_REGISTRY}/${ACR_NAMESPACE}/hermes-webui:main-${SHORT_SHA}"
+            if [[ -n "$VERSION_TAG" ]]; then
+              echo "${ACR_REGISTRY}/${ACR_NAMESPACE}/hermes-webui:${VERSION_TAG}"
+            fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           # Enterprise ACR tags — only emitted when both vars are set,
@@ -128,6 +151,9 @@ jobs:
             if [[ -n "$ENT_REGISTRY" && -n "$ENT_NAMESPACE" ]]; then
               echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/${ENT_REPO}:latest"
               echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/${ENT_REPO}:main-${SHORT_SHA}"
+              if [[ -n "$VERSION_TAG" ]]; then
+                echo "${ENT_REGISTRY}/${ENT_NAMESPACE}/${ENT_REPO}:${VERSION_TAG}"
+              fi
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
@@ -242,9 +268,12 @@ jobs:
           # SAME built image to all listed tags — single build, multi
           # destination. ~half the time of "build, push, build, push".
           tags: ${{ steps.tags.outputs.all }}
-          # Bake the commit SHA into api/_version.py so ?v= cache-busting
-          # on static assets gets a real value instead of "unknown".
-          build-args: HERMES_VERSION=main-${{ steps.meta.outputs.short_sha }}
+          # Bake the version (tag if available, else main-<sha7>) into
+          # api/_version.py so ?v= cache-busting on static assets gets a
+          # meaningful value, and downstream "what version is running?"
+          # checks (release page, /api/updates/version, oncall dashboards)
+          # show v1.4.9 instead of main-abcdef0 on tag builds.
+          build-args: HERMES_VERSION=${{ steps.meta.outputs.version_tag || format('main-{0}', steps.meta.outputs.short_sha) }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false   # cleaner image; no SBOM/attestation file
