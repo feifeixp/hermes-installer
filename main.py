@@ -16,6 +16,24 @@ if sys.platform == "win32" and os.environ.get("_HERMES_MAIN") == "1":
 if sys.platform == "win32":
     os.environ["_HERMES_MAIN"] = "1"
 
+# ── Force UTF-8 stdout/stderr ─────────────────────────────────────────────
+# On Chinese Windows the console codepage is GBK (cp936) by default and the
+# frozen exe inherits stdout/stderr bound to that codec. Any print() that
+# emits '✓' (U+2713), '→', '←', etc. raises UnicodeEncodeError. The install
+# wizard prints those chars during every step, so first-run install on a
+# Chinese Windows machine died at "Step 1 ✓ 解压完成" before we touched a
+# single byte of agent code.
+#
+# Same mitigation bundle_source.py uses on Windows CI; harmless no-op on
+# POSIX (already utf-8). PYTHONIOENCODING is belt-and-suspenders for any
+# child Python process that inherits our env.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # pragma: no cover — defensive for older Python
+    pass
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
 # ── Now safe to import everything ─────────────────────────────────────────
 import multiprocessing
 multiprocessing.freeze_support()
