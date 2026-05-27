@@ -4640,6 +4640,12 @@ _SETTINGS_DEFAULTS = {
     "show_previous_messaging_sessions": False,  # show older Telegram/Discord/etc. reset segments
     "sync_to_insights": False,  # mirror WebUI token usage to state.db for /insights
     "check_for_updates": True,  # check if webui/agent repos are behind upstream
+    # Empty string = no version has been explicitly skipped. When the user
+    # clicks "跳过这个版本" in the installer-update banner, we write the
+    # release tag (e.g. "v1.5.0") here; the banner stays hidden until a
+    # newer tag is released. See docs/superpowers/specs/2026-05-27-installer-
+    # update-reminder-design.md
+    "installer_skipped_version": "",
     "ignore_agent_updates": False,  # keep WebUI update notices but suppress Agent update checks
     "whats_new_summary_enabled": False,  # show an LLM-written What's New summary before diff links
     # Appearance defaults — Neowow distribution: follow system + Marvis.
