@@ -29,13 +29,41 @@ import asyncio as _asyncio_preload  # noqa: F401 — load order matters
 # docs/superpowers/specs/2026-05-27-crash-reporter-design.md
 import sys as _sys, os as _os
 
+# Load crash_reporter from HERMES_INSTALLER_BASE_DIR (the frozen exe's
+# PyInstaller extraction dir, set by main.py before subprocess spawn).
+# Use importlib.util.spec_from_file_location to load by EXPLICIT path
+# WITHOUT touching sys.path.
+#
+# History: we previously did `sys.path.insert(0, _installer_dir)` here.
+# In the frozen-exe spawn scenario _installer_dir is `_MEI<rand>/` —
+# the PyInstaller extraction directory which contains the frozen
+# Python 3.13's stdlib .pyd files (unicodedata.pyd, _socket.pyd, …,
+# _cffi_backend.cp313-win_amd64.pyd). Putting that on sys.path[0]
+# made the venv Python 3.11 import unicodedata from there ahead of
+# its own cpython-3.11/DLLs, triggering
+#   "Module use of python313.dll conflicts with this version of Python"
+# and then a cascading "LookupError: unknown encoding: idna" inside
+# socket.getfqdn → gethostbyaddr → encodings.idna lookup. server.py
+# died at QuietHTTPServer.server_bind and the WebUI never came up.
+#
+# Same anti-pattern + same fix as the v1.4.6 webui/api/__init__.py
+# repair. The two fixes are independent — this one was introduced
+# later (Phase η.5 crash-reporter integration) and went unnoticed
+# because the runtime health check happens to pass in the
+# `_clean_subprocess_env` env even though the live spawn fails.
+_cr = None
 _installer_dir = _os.environ.get("HERMES_INSTALLER_BASE_DIR")
-if _installer_dir and _installer_dir not in _sys.path:
-    _sys.path.insert(0, _installer_dir)
-try:
-    import crash_reporter as _cr
-except ImportError:
-    _cr = None  # Running in docker / dev mode without the installer bundle.
+if _installer_dir:
+    try:
+        import importlib.util as _ilu
+        _cr_path = _os.path.join(_installer_dir, "crash_reporter.py")
+        if _os.path.isfile(_cr_path):
+            _spec = _ilu.spec_from_file_location("crash_reporter", _cr_path)
+            if _spec and _spec.loader:
+                _cr = _ilu.module_from_spec(_spec)
+                _spec.loader.exec_module(_cr)
+    except Exception:
+        _cr = None  # Best-effort — crash reporter is itself non-critical.
 
 _main_started = False  # Flipped to True at the top of main()
 
