@@ -90,3 +90,73 @@ def test_report_timeout_returns_within_budget(isolated_queue):
 
     assert result is False, "should return False since we didn't wait for completion"
     assert elapsed < 0.8, f"report() blocked {elapsed:.2f}s — should be < 0.8s"
+
+
+def test_pii_windows_username_filtered(isolated_queue):
+    """C:\\Users\\Alice\\foo → C:\\Users\\<USER>\\foo in traceback."""
+    captured = {}
+    def capture_urlopen(req, timeout=None):
+        captured["body"] = req.data.decode("utf-8")
+        m = MagicMock()
+        m.__enter__.return_value = m
+        m.__exit__.return_value = False
+        m.status = 204
+        return m
+    with patch.object(cr.urllib.request, "urlopen", capture_urlopen):
+        cr.report(
+            "main_unhandled",
+            "Error in C:\\Users\\Alice\\.hermes\\webui\\foo.py",
+            traceback="File C:\\Users\\Alice\\AppData\\Local\\Temp\\x.py",
+        )
+    time.sleep(0.6)  # let worker thread finish
+    payload = json.loads(captured["body"])
+    assert "Alice" not in payload["error"], f"Alice leaked: {payload['error']!r}"
+    assert "<USER>" in payload["error"]
+    assert "Alice" not in payload["traceback"]
+    assert "<USER>" in payload["traceback"]
+
+
+def test_pii_unix_username_filtered(isolated_queue):
+    """/Users/alice/foo → /Users/<USER>/foo on macOS-style paths."""
+    captured = {}
+    def capture_urlopen(req, timeout=None):
+        captured["body"] = req.data.decode("utf-8")
+        m = MagicMock()
+        m.__enter__.return_value = m
+        m.__exit__.return_value = False
+        m.status = 204
+        return m
+    with patch.object(cr.urllib.request, "urlopen", capture_urlopen):
+        cr.report("main_unhandled", "Crash in /Users/alice/.hermes/server.py")
+    time.sleep(0.6)
+    payload = json.loads(captured["body"])
+    assert "alice" not in payload["error"]
+    assert "/Users/<USER>" in payload["error"]
+
+
+def test_pii_api_key_and_jwt_redacted(isolated_queue):
+    """API keys + JWTs are not transmitted in plaintext."""
+    secrets = [
+        "sk-abcdefghijklmnopqrstuvwxyz1234567890",
+        "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        "api_key=secretvalue123456789",
+        "neoToken=secret-cookie-value",
+    ]
+    body = "stuff\n" + "\n".join(secrets) + "\nmore stuff"
+    captured = {}
+    def capture_urlopen(req, timeout=None):
+        captured["body"] = req.data.decode("utf-8")
+        m = MagicMock()
+        m.__enter__.return_value = m
+        m.__exit__.return_value = False
+        m.status = 204
+        return m
+    with patch.object(cr.urllib.request, "urlopen", capture_urlopen):
+        cr.report("main_unhandled", "ok", traceback=body)
+    time.sleep(0.6)
+    payload = json.loads(captured["body"])
+    for secret in ["abcdefghijklmnopqrstuvwxyz1234567890",
+                   "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+                   "secretvalue123456789",
+                   "secret-cookie-value"]:
+        assert secret not in payload["traceback"], f"secret {secret[:10]}... leaked"

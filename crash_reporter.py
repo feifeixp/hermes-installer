@@ -34,6 +34,42 @@ MAX_ATTEMPTS_BEFORE_DLQ = 5
 QUEUE_DIR = Path.home() / ".hermes" / "pending-crash-reports"
 DLQ_DIR = QUEUE_DIR / "quarantine"
 
+_PII_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # Windows: C:\Users\Alice\foo  →  C:\Users\<USER>\foo
+    (re.compile(r'([A-Za-z]:[\\/])Users[\\/][^\\/\s\"\']+', re.IGNORECASE),
+     r'\1Users\\<USER>'),
+    # macOS: /Users/alice/foo  →  /Users/<USER>/foo
+    (re.compile(r'/Users/[^/\s\"\']+'), '/Users/<USER>'),
+    # Linux: /home/alice/foo  →  /home/<USER>/foo
+    (re.compile(r'/home/[^/\s\"\']+'), '/home/<USER>'),
+    # API keys (prefix sk-)
+    (re.compile(r'sk-[A-Za-z0-9_-]{20,}'), 'sk-***REDACTED***'),
+    # api_key= or api-key=
+    (re.compile(r'api[_-]?key[=:][\"\']?[^\s\"\',;)]+', re.IGNORECASE),
+     'api_key=***REDACTED***'),
+    # Authorization: Bearer ...
+    (re.compile(r'Authorization:\s*Bearer\s+\S+', re.IGNORECASE),
+     'Authorization: Bearer ***REDACTED***'),
+    # Bearer <token> (loose)
+    (re.compile(r'Bearer\s+[A-Za-z0-9._-]{20,}'), 'Bearer ***REDACTED***'),
+    # neoToken cookie
+    (re.compile(r'neoToken=[^;\s]+'), 'neoToken=***REDACTED***'),
+    # JWT fallback (3 base64url segments)
+    (re.compile(r'\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b'),
+     '<JWT_REDACTED>'),
+]
+
+
+def _sanitize_pii(text: str) -> str:
+    """Apply all PII redaction patterns to a string."""
+    if not text:
+        return text
+    out = text
+    for pat, repl in _PII_PATTERNS:
+        out = pat.sub(repl, out)
+    return out
+
+
 PHASES = frozenset({
     # main.py — existing
     "startup_webview2_missing",
@@ -135,8 +171,18 @@ def _drop_oldest_if_full() -> None:
 
 
 def _sanitize_payload(payload: dict) -> dict:
-    """Apply PII filter to text fields. Stub for now — implemented in Task 5."""
-    return payload
+    """Apply PII filter to text fields (error, traceback, logTail, extra values)."""
+    out = dict(payload)
+    for k in ("error", "traceback", "logTail"):
+        if k in out and isinstance(out[k], str):
+            out[k] = _sanitize_pii(out[k])
+    extra = out.get("extra")
+    if isinstance(extra, dict):
+        out["extra"] = {
+            k: _sanitize_pii(v) if isinstance(v, str) else v
+            for k, v in extra.items()
+        }
+    return out
 
 
 def _read_log_tail(path: str | None) -> str | None:
