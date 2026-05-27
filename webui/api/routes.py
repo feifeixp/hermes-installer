@@ -6239,6 +6239,25 @@ def handle_post(handler, parsed) -> bool:
         except RuntimeError as e:
             return bad(handler, str(e), 409)
 
+    if parsed.path == "/api/installer-update/skip":
+        # body has already been JSON-parsed into a dict by read_body() above.
+        version = str(body.get("version", "")).strip()
+        # Validate format: must be exactly v<x>.<y>.<z>
+        if not re.fullmatch(r"v\d+\.\d+\.\d+", version):
+            bad(handler, "version must be in v<MAJOR>.<MINOR>.<PATCH> format", status=400)
+            return True
+        from api.config import load_settings, save_settings
+        try:
+            settings = load_settings()
+            settings["installer_skipped_version"] = version
+            save_settings(settings)
+        except Exception as exc:
+            logger.exception("failed to persist installer_skipped_version: %s", exc)
+            bad(handler, "could not save setting", status=500)
+            return True
+        j(handler, {"ok": True, "skipped_version": version})
+        return True
+
     # ── Settings (POST) ──
     if parsed.path == "/api/settings":
         from api.auth import (
