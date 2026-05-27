@@ -54,6 +54,27 @@ function _saStateBadge(state) {
   </span>`;
 }
 
+function _saFormatDuration(ms) {
+  // Returns localized strings via t() — see server_admin_duration_*
+  // keys in i18n.js. Pure: no DOM access, no time math beyond ms math.
+  if (ms < 60_000)      return t('server_admin_duration_less_than_minute');
+  if (ms < 3_600_000)   return t('server_admin_duration_minutes', { n: Math.floor(ms / 60_000) });
+  if (ms < 86_400_000) {
+    const h = Math.floor(ms / 3_600_000);
+    const m = Math.floor((ms % 3_600_000) / 60_000);
+    return m === 0
+      ? t('server_admin_duration_hours', { n: h })
+      : t('server_admin_duration_hours', { n: h }) + ' ' +
+        t('server_admin_duration_minutes', { n: m });
+  }
+  const d = Math.floor(ms / 86_400_000);
+  const h = Math.floor((ms % 86_400_000) / 3_600_000);
+  return h === 0
+    ? t('server_admin_duration_days',  { n: d })
+    : t('server_admin_duration_days',  { n: d }) + ' ' +
+      t('server_admin_duration_hours', { n: h });
+}
+
 function _saFmtTime(iso) {
   if (!iso) return '—';
   try {
