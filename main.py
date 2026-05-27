@@ -855,6 +855,70 @@ def _start_webui_server_windows(port: int, host: str) -> subprocess.Popen:
     return proc
 
 
+def _start_gateway_windows() -> "subprocess.Popen | None":
+    """Start ``hermes gateway run`` as a background subprocess on Windows.
+
+    The gateway is the long-lived daemon hermes-agent uses for messaging
+    platforms (Telegram/Discord/etc.) and scheduled-job ticks. Without it
+    the WebUI's 计划任务 (scheduled jobs) panel shows
+    "GATEWAY NOT CONFIGURED" — jobs can still be created and run manually,
+    but periodic ticks never fire.
+
+    The frozen exe spawns this alongside server.py so the user gets a
+    fully-functional install out of the box. Set
+    ``HERMES_AUTO_START_GATEWAY=0`` to opt out (e.g. for users who want
+    `hermes gateway install` as a Scheduled Task instead, or who don't
+    want the ~50 MB gateway resident in memory).
+
+    Returns the Popen handle (caller appends pid to server_pids for
+    atexit cleanup) or None when skipped / missing.
+    """
+    if os.environ.get("HERMES_AUTO_START_GATEWAY", "1").strip().lower() in {"0", "false", "no", "off"}:
+        log.info("HERMES_AUTO_START_GATEWAY=0 — skipping gateway auto-start")
+        return None
+
+    agent_dir = Path.home() / ".hermes" / "hermes-agent"
+    hermes_exe = agent_dir / "venv" / "Scripts" / "hermes.exe"
+    if not hermes_exe.exists():
+        log.warning("hermes.exe not found at %s — skipping gateway auto-start", hermes_exe)
+        return None
+
+    gateway_log = _LOG_DIR / "gateway.log"
+    log.info("Starting hermes gateway: exe=%s log=%s", hermes_exe, gateway_log)
+    try:
+        gw_log_fh = open(gateway_log, "ab")  # noqa: SIM115 — kept open for subprocess lifetime
+        # --replace: take over if a stale instance is around (e.g. user
+        #            crashed the previous Hermes window without atexit
+        #            cleanup firing). --quiet: gateway is chatty by default
+        #            and we don't want to flood gateway.log with INFO when
+        #            the user has no messaging platforms configured.
+        # --accept-hooks: avoid blocking on hook prompts inside a headless
+        #                 background process (no TTY available).
+        proc = subprocess.Popen(
+            [str(hermes_exe), "gateway", "run", "--quiet", "--replace", "--accept-hooks"],
+            cwd=str(agent_dir),
+            env=_clean_subprocess_env(extra={
+                "PYTHONUNBUFFERED": "1",
+                "PYTHONUTF8":       "1",
+                # Auto-accept any hooks the gateway encounters at runtime
+                # — same default we use for `hermes` CLI invocations
+                # elsewhere in the installer.
+                "HERMES_ACCEPT_HOOKS": "1",
+            }),
+            stdout=gw_log_fh,
+            stderr=subprocess.STDOUT,
+            # CREATE_NO_WINDOW: hide the new console window the gateway
+            # would otherwise spawn on Windows (subprocess.Popen creates
+            # a fresh console by default when the parent has one).
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        log.info("hermes gateway PID=%s — log at %s", proc.pid, gateway_log)
+        return proc
+    except Exception as exc:
+        log.warning("gateway auto-start failed (non-fatal): %s", exc)
+        return None
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Native window — pywebview (macOS cocoa + Windows edgechromium)
 # ══════════════════════════════════════════════════════════════════════════
@@ -1239,6 +1303,16 @@ def main():
                     f"完整日志：{server_log_path}",
                 )
             sys.exit(1)
+
+        # ── Auto-start the hermes gateway daemon ─────────────────────────
+        # Required for the 计划任务 (scheduled jobs) panel's tick scheduler
+        # — without it the panel surfaces "GATEWAY NOT CONFIGURED". Best-
+        # effort: gateway is optional, so failures here only WARN (chat
+        # still works). The PID joins server_pids so atexit/SIGTERM cleans
+        # it up alongside server.py.
+        _gw_proc = _start_gateway_windows()
+        if _gw_proc is not None:
+            server_pids.append(_gw_proc.pid)
 
     else:
         # ── macOS / Linux: existing bootstrap.py path (unchanged) ────────
