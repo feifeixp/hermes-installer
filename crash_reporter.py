@@ -229,7 +229,13 @@ def report(phase, error, *, traceback=None, log_path=None, extra=None) -> bool:
     log_tail = _read_log_tail(log_path) if log_path else None
     payload = _build_payload(phase, error, traceback, log_tail, extra)
     payload = _sanitize_payload(payload)
-    headers = {"Content-Type": "application/json"}
+    # User-Agent must not be Python's default "Python-urllib/3.X" — Cloudflare
+    # blocks it with error 1010 ("bad bot"). Use a benign identifier that
+    # also helps backend log parsers attribute reports to the right release.
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": f"hermes-installer-crash-reporter/{os.environ.get('HERMES_INSTALLER_VERSION', '1.x')} ({sys.platform})",
+    }
     _attach_jwt(headers)
 
     # Shared state between main thread and worker: was it a clean success?
@@ -320,7 +326,11 @@ def flush_queue() -> int:
             except OSError: pass
             continue
 
-        headers = {"Content-Type": "application/json"}
+        # See _USER_AGENT comment near the other call site.
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"hermes-installer-crash-reporter/{os.environ.get('HERMES_INSTALLER_VERSION', '1.x')} ({sys.platform})",
+        }
         _attach_jwt(headers)
         try:
             if _post(payload, headers):
