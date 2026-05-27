@@ -42,6 +42,7 @@ import atexit
 import shutil
 import signal
 import subprocess
+import threading
 import time
 import socket
 import logging
@@ -364,48 +365,40 @@ def _get_app_version() -> str:
     return "unknown"
 
 
+# ── Crash reporter (shared with webui/server.py) ────────────────────────────
+# The actual implementation lives in crash_reporter.py at repo root. Imported
+# here via the BASE_DIR-on-sys.path machinery already set up above. webui side
+# uses the HERMES_INSTALLER_BASE_DIR env var (also set above) to find it.
+try:
+    import crash_reporter as _crash_reporter
+except ImportError as _cr_exc:
+    log.warning("crash_reporter import failed (%s) — reports disabled this run", _cr_exc)
+    _crash_reporter = None
+
+
 def _send_crash_report(phase: str, error: str, extra: "dict | None" = None) -> None:
-    """Fire-and-forget POST to admin backend. All errors are swallowed.
+    """Backward-compat shim — forwards to crash_reporter.report().
 
-    The report is stored server-side under the user's usr_ journey row
-    (if a JWT is cached) so admins see it in /admin → 云实例. Even
-    without a userId, the server logs it to CF console for manual review.
+    Kept as a named function so existing call sites don't need touching.
+    New triggers in main.py call crash_reporter.report() directly.
     """
-    import json as _json
-    import urllib.request
-    payload: dict = {
-        "app":      "hermes-installer",
-        "version":  _get_app_version(),
-        "platform": sys.platform,
-        "phase":    phase,
-        "error":    str(error)[:500],
-    }
-    if extra:
-        payload.update(extra)
-
-    headers = {"Content-Type": "application/json"}
-    # Try to attach userId so the admin row gets updated
+    if _crash_reporter is None:
+        return
     try:
-        jwt_path = Path.home() / ".hermes" / "webui" / "neowow.json"
-        if jwt_path.exists():
-            data = _json.loads(jwt_path.read_text(encoding="utf-8"))
-            jwt = (data.get("jwt") or data.get("accessToken")
-                   or data.get("authorization") or "")
-            if isinstance(jwt, str) and jwt.count(".") == 2:
-                headers["Authorization"] = f"Bearer {jwt}"
-    except Exception:
-        pass
-
-    try:
-        body = _json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            "https://app.neowow.studio/api/client-log",
-            data=body, headers=headers, method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            log.info("crash report sent: HTTP %s", resp.status)
+        _crash_reporter.report(phase, error, extra=extra)
     except Exception as exc:
-        log.debug("crash report send failed: %s", exc)
+        log.debug("crash report dispatch failed: %s", exc)
+
+
+# Flush any pending crash reports from a previous (likely-crashed) run.
+# Best-effort: don't let queue-flush exceptions block the installer.
+try:
+    if _crash_reporter is not None:
+        _flushed = _crash_reporter.flush_queue()
+        if _flushed:
+            log.info("flushed %d pending crash reports from previous run", _flushed)
+except Exception as _exc:
+    log.debug("flush_queue at startup failed: %s", _exc)
 
 
 def _check_webview2_windows() -> "str | None":
@@ -544,8 +537,34 @@ def _is_agent_installed() -> bool:
         # easier to grep for the wipe-and-rebuild path.
         if "python313.dll" in stderr or "python312.dll" in stderr or "python310.dll" in stderr:
             log.warning("agent venv contaminated by cross-version DLL — will rebuild")
+            if _crash_reporter is not None:
+                try:
+                    _crash_reporter.report(
+                        phase="venv_health_check_failed",
+                        error=stderr[:200] or f"venv health check failed rc={result.returncode}",
+                        extra={
+                            "returncode": result.returncode,
+                            "stderr_tail": stderr[:1000],
+                            "venv_python": str(venv_python),
+                        },
+                    )
+                except Exception:
+                    pass
         elif "unknown encoding: idna" in stderr or "encodings.idna" in stderr:
             log.warning("agent venv missing idna codec — will rebuild")
+            if _crash_reporter is not None:
+                try:
+                    _crash_reporter.report(
+                        phase="venv_health_check_failed",
+                        error=stderr[:200] or f"venv health check failed rc={result.returncode}",
+                        extra={
+                            "returncode": result.returncode,
+                            "stderr_tail": stderr[:1000],
+                            "venv_python": str(venv_python),
+                        },
+                    )
+                except Exception:
+                    pass
         elif "websockets" in stderr.lower() or "No module named" in stderr:
             # Missing pip dep — not a venv corruption, real install issue.
             # Don't trigger wipe (rebuild won't help if requirements changed).
@@ -576,6 +595,15 @@ def _wipe_contaminated_agent_venv() -> bool:
         # hermes_agent_bundle.zip is cheap (<5 s).
         shutil.rmtree(agent_dir, ignore_errors=False)
         log.info("Agent dir wiped successfully")
+        if _crash_reporter is not None:
+            try:
+                _crash_reporter.report(
+                    phase="windows_install_dir_wiped",
+                    error="auto-rebuild triggered by health check failure",
+                    extra={"agent_dir": str(agent_dir)},
+                )
+            except Exception:
+                pass
         return True
     except Exception as exc:
         log.error("Failed to wipe agent dir: %s — install will likely fail again", exc)
@@ -1323,6 +1351,22 @@ def main():
                     f"日志末尾：\n{tail_short or '(日志为空)'}\n\n"
                     f"完整日志：{server_log_path}",
                 )
+            # ── Report timeout to backend so we can see how often this happens ──
+            if not ready and _crash_reporter is not None:
+                try:
+                    _crash_reporter.report(
+                        phase="wait_for_server_timeout",
+                        error=f"webui server did not bind port {port} within {WEBUI_STARTUP_TIMEOUT}s",
+                        log_path=str(_LOG_DIR / "webui-server.log"),
+                        extra={
+                            "port": port,
+                            "subprocess_returncode": (
+                                _win_server_proc.poll() if _win_server_proc else None
+                            ),
+                        },
+                    )
+                except Exception as exc:
+                    log.debug("wait_for_server_timeout report failed: %s", exc)
             sys.exit(1)
 
         # ── Auto-start the hermes gateway daemon ─────────────────────────
@@ -1382,6 +1426,23 @@ def main():
             time.sleep(30)
             ready = _wait_for_server(port, timeout=10)
 
+        # ── Report timeout to backend so we can see how often this happens ──
+        if not ready and _crash_reporter is not None:
+            try:
+                _crash_reporter.report(
+                    phase="wait_for_server_timeout",
+                    error=f"webui server did not bind port {port} within {WEBUI_STARTUP_TIMEOUT}s",
+                    log_path=str(_LOG_DIR / "webui-server.log"),
+                    extra={
+                        "port": port,
+                        "subprocess_returncode": (
+                            proc.poll() if proc else None
+                        ),
+                    },
+                )
+            except Exception as exc:
+                log.debug("wait_for_server_timeout report failed: %s", exc)
+
         # bootstrap.py spawns server.py detached then exits — find it by port
         server_pids = _pids_on_port(port) if ready else []
 
@@ -1414,6 +1475,34 @@ def main():
     title = "Hermes"
 
     log.info("Opening WebUI: %s (server ready=%s)", url, ready)
+
+    # ── Monitor subprocess for unexpected death after webview opens ──
+    if locals().get("_win_server_proc") is not None and _crash_reporter is not None:
+        _win_proc_ref = _win_server_proc
+
+        def _monitor_webui_subprocess():
+            while True:
+                rc = _win_proc_ref.poll()
+                if rc is None:
+                    time.sleep(2)
+                    continue
+                log.error("webui server.py exited rc=%s while installer alive", rc)
+                try:
+                    _crash_reporter.report(
+                        phase="webui_subprocess_exit_unexpected",
+                        error=f"server.py exited rc={rc} while installer was running",
+                        log_path=str(_LOG_DIR / "webui-server.log"),
+                        extra={"returncode": rc},
+                    )
+                except Exception as exc:
+                    log.debug("subprocess-exit report failed: %s", exc)
+                break
+
+        threading.Thread(
+            target=_monitor_webui_subprocess,
+            name="hermes-webui-subprocess-monitor",
+            daemon=True,
+        ).start()
 
     try:
         _open_native_window(title, url, on_close=_cleanup_servers, current_mode="local")

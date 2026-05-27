@@ -20,6 +20,58 @@ All business logic lives in api/*.
 # returns the already-loaded module without re-executing __init__.py.
 # Verified fix on the affected Windows machine.
 import asyncio as _asyncio_preload  # noqa: F401 — load order matters
+
+# ── Crash reporter sys.excepthook (Windows reliability hardening) ────────
+# Catches any unhandled exception during import or main() execution and
+# reports it to https://app.neowow.studio/api/client-log. Without this,
+# webui crashes leave only a local log file behind that nobody on the
+# backend can see without the user pasting it. Sourced from
+# docs/superpowers/specs/2026-05-27-crash-reporter-design.md
+import sys as _sys, os as _os
+
+_installer_dir = _os.environ.get("HERMES_INSTALLER_BASE_DIR")
+if _installer_dir and _installer_dir not in _sys.path:
+    _sys.path.insert(0, _installer_dir)
+try:
+    import crash_reporter as _cr
+except ImportError:
+    _cr = None  # Running in docker / dev mode without the installer bundle.
+
+_main_started = False  # Flipped to True at the top of main()
+
+
+def _default_webui_log_path() -> "str | None":
+    """Compute the webui-server.log path. Mirrors the formula in main.py:_LOG_DIR
+    so we don't need any cross-process env-var coordination."""
+    if _sys.platform == "win32":
+        base = _os.environ.get("APPDATA") or _os.environ.get("TEMP")
+        return _os.path.join(base, "Hermes", "webui-server.log") if base else None
+    if _sys.platform == "darwin":
+        return _os.path.expanduser("~/Library/Logs/Hermes/webui-server.log")
+    base = _os.environ.get("TMPDIR", "/tmp")
+    return _os.path.join(base, "hermes", "webui-server.log")
+
+
+def _excepthook(exc_type, exc_value, tb):
+    """Catch unhandled webui exceptions and report them before letting Python exit."""
+    if _cr is None:
+        return _sys.__excepthook__(exc_type, exc_value, tb)
+    import traceback as _tb
+    phase = "webui_startup_crash" if _main_started else "webui_pre_main_import_error"
+    try:
+        _cr.report(
+            phase=phase,
+            error=f"{exc_type.__name__}: {exc_value}",
+            traceback="".join(_tb.format_exception(exc_type, exc_value, tb)),
+            log_path=_default_webui_log_path(),
+        )
+    except Exception:
+        pass  # IRON RULE: reporting must never re-raise into the hook
+    return _sys.__excepthook__(exc_type, exc_value, tb)
+
+
+_sys.excepthook = _excepthook
+
 import logging
 import os
 import re
@@ -419,6 +471,8 @@ def _raise_fd_soft_limit(target: int = 4096) -> dict:
 
 
 def main() -> None:
+    global _main_started
+    _main_started = True
     from api.config import print_startup_config, verify_hermes_imports, _HERMES_FOUND
 
     print_startup_config()

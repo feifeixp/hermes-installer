@@ -52,6 +52,51 @@ _CLIENT_DISCONNECT_ERRORS = (
     OSError,
 )
 
+# ── Crash-reporter glue (wraps handle_get/post/etc. for 500 surfacing) ──
+# crash_reporter is loaded by webui/server.py at import time; we just grab it
+# from sys.modules so this module stays import-order-agnostic.
+def _report_handler_crash(method: str, path: str, exc: BaseException) -> None:
+    """Forward an unhandled handler exception to the crash_reporter.
+
+    SSE / client-disconnect errors are excluded (they're normal). Anything
+    in _CLIENT_DISCONNECT_ERRORS is treated as benign and not reported.
+    """
+    if isinstance(exc, _CLIENT_DISCONNECT_ERRORS):
+        return
+    cr = sys.modules.get("crash_reporter")
+    if cr is None:
+        return
+    import traceback as _tb
+    try:
+        cr.report(
+            phase="webui_runtime_exception",
+            error=f"{method} {path}: {type(exc).__name__}: {exc}",
+            traceback=_tb.format_exc(),
+        )
+    except Exception:
+        pass  # IRON RULE: report path may not re-raise
+
+
+def _wrap_handler(method: str):
+    """Decorator: catch unhandled exceptions in a handle_* dispatcher."""
+    from functools import wraps
+
+    def deco(fn):
+        @wraps(fn)
+        def wrapped(handler, parsed):
+            try:
+                return fn(handler, parsed)
+            except _CLIENT_DISCONNECT_ERRORS:
+                raise
+            except Exception as exc:
+                _report_handler_crash(method, parsed.path, exc)
+                raise
+
+        return wrapped
+
+    return deco
+
+
 # ── Cron run tracking ────────────────────────────────────────────────────────
 # Track job IDs currently being executed so the frontend can poll status.
 _RUNNING_CRON_JOBS: dict[str, float] = {}  # job_id → start_timestamp
@@ -13654,3 +13699,14 @@ def _handle_mcp_server_update(handler, name, body):
     _save_yaml_config_file(_get_config_path(), cfg)
     reload_config()
     return j(handler, {"ok": True, "server": _server_summary(name, server_cfg)})
+
+
+# ── Wrap dispatchers with crash-reporter glue ──────────────────────────────
+# Applied at module end so the wrapped name shadows the original definitions
+# for any later importer. _CLIENT_DISCONNECT_ERRORS bypass keeps SSE / browser
+# disconnect noise out of the report stream.
+handle_get    = _wrap_handler("GET")(handle_get)
+handle_post   = _wrap_handler("POST")(handle_post)
+handle_patch  = _wrap_handler("PATCH")(handle_patch)
+handle_delete = _wrap_handler("DELETE")(handle_delete)
+handle_put    = _wrap_handler("PUT")(handle_put)
