@@ -251,7 +251,7 @@ export async function updateInstance(
     c.columnValue    = expectedStoppedAt;
     c.comparator     = TableStore.ComparatorType.EQUAL;
     c.passIfMissing  = false;  // missing column ≠ match
-    c.latestVersionsOnly = true;
+    c.latestVersionOnly = true;  // SDK field is singular
     columnCondition = c;
   }
 
