@@ -1231,7 +1231,15 @@ $('msg').addEventListener('paste',e=>{
   setStatus(t('image_pasted')+files.map(f=>f.name).join(', '));
 });
 document.querySelectorAll('.suggestion').forEach(btn=>{
-  btn.onclick=()=>{$('msg').value=btn.dataset.msg;send();};
+  btn.onclick=()=>{
+    // Prefer data-msg-i18n so the message sent to the model matches the
+    // user's current locale (avoids the "user clicks Chinese card, model
+    // gets English prompt, replies in English" footgun). Fall back to the
+    // legacy data-msg attribute for any callers still on the old shape.
+    const key = btn.dataset.msgI18n;
+    $('msg').value = key ? t(key) : (btn.dataset.msg || '');
+    send();
+  };
 });
 
 function applyEmptyStateSuggestionPref(){
