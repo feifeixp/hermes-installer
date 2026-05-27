@@ -504,6 +504,67 @@ def _is_agent_installed() -> bool:
         return False
     agent_dir = Path.home() / ".hermes" / "hermes-agent"
 
+    # ── Structural pre-check: pyvenv.cfg.home must point at uv-managed Python ──
+    # The runtime health check below catches venvs that crash *in the same
+    # environment as the health probe*. It MISSES venvs that crash only
+    # under the frozen-exe spawn path (different DLL search order, different
+    # sys.path[0], etc.) — a real user (DN, Phase η.8 bug report) had a
+    # Python 3.12-based venv that passed the in-isolation health check but
+    # then died with "python313.dll conflicts" + "unknown encoding: idna"
+    # the moment _start_webui_server_windows tried to boot server.py.
+    #
+    # Wider net: refuse to trust any venv whose `home` in pyvenv.cfg isn't
+    # rooted under the uv-managed Python directory (`%APPDATA%\uv\python\`).
+    # That's a STRUCTURAL property — independent of env, sys.path, and
+    # DLL-search order — so it can't false-positive the way a runtime
+    # probe can. Any pre-v1.4.5 venv (which were built against whatever
+    # system Python uv could find) gets force-rebuilt on the next .exe run.
+    # uv-managed venvs (v1.4.5+) keep being treated as healthy.
+    try:
+        pyvenv_cfg = (Path.home() / ".hermes" / "hermes-agent" / "venv" / "pyvenv.cfg")
+        if pyvenv_cfg.exists():
+            cfg_text = pyvenv_cfg.read_text(encoding="utf-8", errors="replace")
+            # Parse `home = <path>` line (case-insensitive on Windows
+            # but we accept exact-match here — pyvenv.cfg is generated
+            # by venv/uv with lowercase `home`).
+            home_value = ""
+            for line in cfg_text.splitlines():
+                if line.lower().lstrip().startswith("home"):
+                    parts = line.split("=", 1)
+                    if len(parts) == 2:
+                        home_value = parts[1].strip()
+                        break
+            # uv-managed Pythons live under %APPDATA%\uv\python\ — that's
+            # where `uv venv --python 3.11 --python-preference only-managed`
+            # places them. Any other location (e.g. C:\Users\<x>\AppData\
+            # Local\Programs\Python\Python312\) means the venv was built
+            # by an older code path against a system Python, before v1.4.5
+            # enforced only-managed.
+            uv_root_indicators = (
+                "uv\\python\\",        # Windows: %APPDATA%\uv\python\cpython-3.11-...
+                "uv/python/",          # POSIX equivalent (defensive — main path is Windows)
+            )
+            looks_uv_managed = any(ind in home_value.replace("/", "\\") or ind in home_value
+                                   for ind in uv_root_indicators)
+            if home_value and not looks_uv_managed:
+                log.warning(
+                    "agent venv is not uv-managed (home=%s) — will rebuild "
+                    "so we get a known-good cpython-3.11. This typically "
+                    "happens to users who installed Hermes v1.4.4 or older "
+                    "and are now upgrading.", home_value,
+                )
+                return False
+            if not home_value:
+                log.warning(
+                    "agent venv pyvenv.cfg has no `home` line — treating as "
+                    "corrupt and rebuilding. cfg=%s", cfg_text[:200],
+                )
+                return False
+    except Exception as exc:
+        # File-read errors shouldn't block install detection — fall through
+        # to the runtime health check, which catches most failure modes.
+        log.debug("pyvenv.cfg structural check failed: %s", exc)
+
     # ── Health check: idna codec + run_agent import ───────────────────────
     # Both are quick. If either fails with a recognisable wheel-conflict /
     # missing-codec signature, return False so the venv gets rebuilt with
