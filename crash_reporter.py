@@ -54,16 +54,58 @@ PHASES = frozenset({
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
-def report(
-    phase: str,
-    error: str,
-    *,
-    traceback: str | None = None,
-    log_path: str | None = None,
-    extra: dict | None = None,
-) -> bool:
-    """Send a crash report. Returns True on confirmed HTTP 2xx, False otherwise."""
-    raise NotImplementedError  # filled in by later tasks
+def _collect_metadata() -> dict:
+    """Return non-PII metadata about the running process."""
+    return {
+        "pid":            os.getpid(),
+        "python_version": sys.version.split()[0],
+    }
+
+
+def _build_payload(phase: str, error: str, traceback: str | None,
+                   log_tail: str | None, extra: dict | None) -> dict:
+    """Build the wire payload. PII filtering happens in caller."""
+    try:
+        from main import _get_app_version  # local import; main.py may not be importable in webui ctx
+        version = _get_app_version()
+    except Exception:
+        version = os.environ.get("HERMES_INSTALLER_VERSION", "unknown")
+    payload = {
+        "app":      "hermes-installer",
+        "version":  str(version)[:32],
+        "platform": sys.platform[:32],
+        "phase":    phase[:64],
+        "error":    str(error)[:500],
+    }
+    if traceback:
+        payload["traceback"] = str(traceback)[:5000]
+    if log_tail:
+        payload["logTail"] = str(log_tail)[:MAX_LOG_TAIL_BYTES]
+    merged_extra = _collect_metadata()
+    if extra:
+        merged_extra.update(extra)
+    payload["extra"] = merged_extra
+    return payload
+
+
+def _post(payload: dict, headers: dict) -> bool:
+    """POST the payload. Returns True on HTTP 2xx, raises on network error."""
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(ENDPOINT, data=body, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+        return 200 <= resp.status < 300
+
+
+def report(phase, error, *, traceback=None, log_path=None, extra=None) -> bool:
+    if phase not in PHASES:
+        logger.warning("crash_reporter: unknown phase %r — sending anyway", phase)
+    payload = _build_payload(phase, error, traceback, None, extra)
+    headers = {"Content-Type": "application/json"}
+    try:
+        return _post(payload, headers)
+    except Exception as exc:
+        logger.debug("crash_reporter: _post failed (%s) — not enqueued yet", exc)
+        return False
 
 
 # ── Queue management ─────────────────────────────────────────────────────────
