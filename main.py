@@ -212,8 +212,29 @@ os.environ["HERMES_INSTALLER_BASE_DIR"] = str(BASE_DIR)
 # preserves any value the operator already chose.
 os.environ.setdefault("HERMES_NEOWOW_ONLY", "1")
 
-log.info("BASE_DIR=%s  HERMES_NEOWOW_ONLY=%s",
-         BASE_DIR, os.environ.get("HERMES_NEOWOW_ONLY"))
+# ── Unify HERMES_HOME across all subprocesses ─────────────────────────────
+# webui/api/config.py defaults to %LOCALAPPDATA%/hermes on native Windows
+# (and ~/.hermes on POSIX). The hermes-agent CLI defaults to ~/.hermes
+# everywhere. When these disagree on Windows:
+#   - WebUI reads/writes config.yaml, gateway.pid, sessions under LOCALAPPDATA
+#   - The `hermes gateway` daemon writes its pid + state under ~/.hermes
+# Result: the WebUI's /api/gateway/status sees no gateway and surfaces
+# "GATEWAY NOT CONFIGURED" even when the daemon is happily running.
+#
+# Set HERMES_HOME at the installer level so every child (server.py,
+# `hermes gateway run`, `hermes` CLI invocations from Step 3.5) inherits
+# the SAME root. We pick the WebUI's native-Windows default
+# (%LOCALAPPDATA%/hermes) so the WebUI's existing settings.json / config.yaml
+# / sessions keep their location and we just align the gateway to them.
+# `setdefault` keeps any operator override intact.
+if sys.platform == "win32":
+    _local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if _local_app_data:
+        os.environ.setdefault("HERMES_HOME", str(Path(_local_app_data) / "hermes"))
+
+log.info("BASE_DIR=%s  HERMES_NEOWOW_ONLY=%s  HERMES_HOME=%s",
+         BASE_DIR, os.environ.get("HERMES_NEOWOW_ONLY"),
+         os.environ.get("HERMES_HOME", "(unset)"))
 
 WEBUI_DIR = BASE_DIR / "webui"
 BOOTSTRAP_PY = WEBUI_DIR / "bootstrap.py"
