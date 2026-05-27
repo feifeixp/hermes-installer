@@ -777,10 +777,27 @@ def _windows_install_agent() -> None:
             # --skip-import-verify: the script's verifier uses venv/bin/python
             # which doesn't exist on Windows (venv/Scripts/python.exe). We do
             # our own import check below.
+            # Force UTF-8 decoding on the captured streams. Without
+            # `encoding=`, subprocess.run(text=True) uses locale.
+            # getpreferredencoding() which is GBK (cp936) on Chinese
+            # Windows. The patch script + our verify probe both emit
+            # UTF-8 (because we set PYTHONIOENCODING=utf-8 in the
+            # subprocess env), so the GBK decoder choked on the first
+            # multibyte sequence and the reader THREAD crashed with
+            #   UnicodeDecodeError: 'gbk' codec can't decode byte 0x93
+            #   ...
+            # The exception fired from the daemon thread (which doesn't
+            # propagate to subprocess.run), printed itself to stderr,
+            # and main.py continued — the patch had already landed at
+            # that point, so the install still finished, but the visible
+            # traceback in the install console scared users. errors=
+            # 'replace' is belt-and-suspenders in case the subprocess
+            # ever emits a byte that's malformed UTF-8 (mojibake from a
+            # downstream library); we want a "▒" character, not a crash.
             patch_proc = subprocess.run(
                 [str(venv_python_path), str(patch_script),
                  "--agent-dir", str(agent_dir), "--skip-import-verify"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, encoding='utf-8', errors='replace', timeout=30,
                 env=_clean_subprocess_env(extra={"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}),
             )
             log.info("patch_hermes_agent stdout:\n%s", patch_proc.stdout)
@@ -794,7 +811,7 @@ def _windows_install_agent() -> None:
                  "from hermes_cli.auth import PROVIDER_REGISTRY; "
                  "import sys; "
                  "sys.exit(0 if 'neowow-coding-plan' in PROVIDER_REGISTRY else 1)"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, encoding='utf-8', errors='replace', timeout=15,
                 env=_clean_subprocess_env(),
             )
             if verify.returncode != 0:
