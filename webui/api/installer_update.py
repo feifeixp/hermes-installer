@@ -110,13 +110,71 @@ def _check_oss_asset(tag: str, asset: str) -> bool:
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
+# Module-level TTL cache. Keyed by platform so multiple OS smoke tests don't
+# collide. Value: {"result": dict, "fetched_at": float}. Only successful
+# fetches are cached — failures retry on next call so transient network
+# issues don't lock out updates for 15 minutes.
+_check_cache: dict[str, dict] = {}
+
+
 def check_installer_update(current_version: str | None = None) -> dict:
-    """Return current installer-update status. TTL-cached for 15 minutes.
+    """Return current installer-update status. TTL-cached for 15 minutes."""
+    platform = sys.platform
+    cached = _check_cache.get(platform)
+    if cached and (time.time() - cached["fetched_at"]) < CACHE_TTL_SECONDS:
+        # Refresh current_version on cached payload — the caller may pass a
+        # different value than what was cached (e.g. user upgraded the
+        # installer between checks).
+        out = dict(cached["result"])
+        if current_version:
+            out["current_version"] = current_version
+            out["update_available"] = _compare_versions(
+                current_version, out.get("latest_version", "")
+            )
+        return out
 
-    Returns dict with: ok, update_available, oss_ready, is_prerelease,
-    current_version, latest_version, release_notes, release_notes_url,
-    download_url, fallback_url.
+    release = _fetch_github_latest_release()
+    if release is None:
+        return {"ok": False, "reason": "github_unreachable"}
 
-    On any network / parse failure returns {ok: False, reason: "..."}.
-    """
-    raise NotImplementedError  # filled in by Task 6
+    tag = str(release.get("tag_name", "")).strip()
+    prerelease = bool(release.get("prerelease", False))
+    body = str(release.get("body", "") or "")[:50_000]
+    html_url = str(release.get("html_url", "") or "")
+
+    asset_name = _platform_asset_for(platform)
+    if asset_name is None:
+        # Unsupported platform (e.g. linux) — no installer to offer.
+        return {
+            "ok": True,
+            "update_available": False,
+            "oss_ready": False,
+            "is_prerelease": prerelease,
+            "current_version": current_version or "",
+            "latest_version": tag,
+            "release_notes": "",
+            "release_notes_url": html_url,
+            "download_url": "",
+            "fallback_url": html_url,
+        }
+
+    oss_ready = _check_oss_asset(tag, asset_name)
+    download_url = f"{OSS_BASE}/{tag}/{asset_name}"
+
+    update_available = _compare_versions(current_version or "", tag)
+
+    result = {
+        "ok": True,
+        "update_available": update_available,
+        "oss_ready": oss_ready,
+        "is_prerelease": prerelease,
+        "current_version": current_version or "",
+        "latest_version": tag,
+        "release_notes": body,
+        "release_notes_url": html_url,
+        "download_url": download_url,
+        "fallback_url": html_url,
+    }
+
+    _check_cache[platform] = {"result": result, "fetched_at": time.time()}
+    return result

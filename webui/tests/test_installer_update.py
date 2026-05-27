@@ -173,3 +173,130 @@ def test_oss_head_uses_correct_url():
         iu._check_oss_asset("v1.5.0", "Hermes-Installer-macOS.dmg")
     assert captured["url"] == "https://neowow.oss-cn-hangzhou.aliyuncs.com/hermes/v1.5.0/Hermes-Installer-macOS.dmg"
     assert captured["method"] == "HEAD"
+
+
+@pytest.fixture(autouse=True)
+def reset_cache():
+    """Clear the module-level cache before each test."""
+    iu._check_cache.clear()
+    yield
+    iu._check_cache.clear()
+
+
+def test_check_update_available(monkeypatch):
+    """Newer release on GitHub + asset on OSS → update_available=True."""
+    monkeypatch.setattr(iu.sys, "platform", "darwin")
+    with patch.object(iu, "_fetch_github_latest_release", return_value={
+            "tag_name": "v1.5.0", "prerelease": False, "body": "notes",
+            "html_url": "https://github.com/x/y/releases/tag/v1.5.0",
+            "assets": [{"name": "Hermes-Installer-macOS.dmg"}],
+        }), \
+         patch.object(iu, "_check_oss_asset", return_value=True):
+        result = iu.check_installer_update(current_version="v1.4.2")
+    assert result["ok"] is True
+    assert result["update_available"] is True
+    assert result["oss_ready"] is True
+    assert result["is_prerelease"] is False
+    assert result["latest_version"] == "v1.5.0"
+    assert result["current_version"] == "v1.4.2"
+    assert result["release_notes"] == "notes"
+    assert "v1.5.0" in result["download_url"]
+    assert result["download_url"].endswith("Hermes-Installer-macOS.dmg")
+    assert result["fallback_url"] == "https://github.com/x/y/releases/tag/v1.5.0"
+
+
+def test_check_no_update_when_same_version(monkeypatch):
+    """current == latest → update_available=False."""
+    monkeypatch.setattr(iu.sys, "platform", "darwin")
+    with patch.object(iu, "_fetch_github_latest_release", return_value={
+            "tag_name": "v1.4.2", "prerelease": False, "body": "",
+            "html_url": "", "assets": [{"name": "Hermes-Installer-macOS.dmg"}]}), \
+         patch.object(iu, "_check_oss_asset", return_value=True):
+        result = iu.check_installer_update(current_version="v1.4.2")
+    assert result["ok"] is True
+    assert result["update_available"] is False
+
+
+def test_check_oss_not_ready(monkeypatch):
+    """GitHub has newer release but OSS HEAD returns 404 → oss_ready=False."""
+    monkeypatch.setattr(iu.sys, "platform", "darwin")
+    with patch.object(iu, "_fetch_github_latest_release", return_value={
+            "tag_name": "v1.5.0", "prerelease": False, "body": "",
+            "html_url": "", "assets": [{"name": "Hermes-Installer-macOS.dmg"}]}), \
+         patch.object(iu, "_check_oss_asset", return_value=False):
+        result = iu.check_installer_update(current_version="v1.4.2")
+    assert result["update_available"] is True  # newer is on GitHub
+    assert result["oss_ready"] is False        # but mirror not synced
+
+
+def test_check_prerelease_flagged(monkeypatch):
+    """is_prerelease flag is surfaced (client filters)."""
+    monkeypatch.setattr(iu.sys, "platform", "darwin")
+    with patch.object(iu, "_fetch_github_latest_release", return_value={
+            "tag_name": "v1.5.0-rc1", "prerelease": True, "body": "",
+            "html_url": "", "assets": [{"name": "Hermes-Installer-macOS.dmg"}]}), \
+         patch.object(iu, "_check_oss_asset", return_value=True):
+        result = iu.check_installer_update(current_version="v1.4.2")
+    assert result["is_prerelease"] is True
+
+
+def test_check_linux_returns_false(monkeypatch):
+    """sys.platform=linux → update_available=False (no installer)."""
+    monkeypatch.setattr(iu.sys, "platform", "linux")
+    with patch.object(iu, "_fetch_github_latest_release", return_value={
+            "tag_name": "v1.5.0", "prerelease": False, "body": "",
+            "html_url": "", "assets": []}), \
+         patch.object(iu, "_check_oss_asset", return_value=True):
+        result = iu.check_installer_update(current_version="v1.4.2")
+    assert result["update_available"] is False
+
+
+def test_check_dev_mode_returns_false(monkeypatch):
+    """current_version not clean semver → update_available=False."""
+    monkeypatch.setattr(iu.sys, "platform", "darwin")
+    with patch.object(iu, "_fetch_github_latest_release", return_value={
+            "tag_name": "v1.5.0", "prerelease": False, "body": "",
+            "html_url": "", "assets": [{"name": "Hermes-Installer-macOS.dmg"}]}), \
+         patch.object(iu, "_check_oss_asset", return_value=True):
+        result = iu.check_installer_update(current_version="v1.4.2-3-g6d5a4b")
+    assert result["update_available"] is False
+
+
+def test_check_github_unreachable(monkeypatch):
+    """GitHub fetch returns None → ok=False, no cached entry written."""
+    monkeypatch.setattr(iu.sys, "platform", "darwin")
+    with patch.object(iu, "_fetch_github_latest_release", return_value=None):
+        result = iu.check_installer_update(current_version="v1.4.2")
+    assert result["ok"] is False
+    assert "reason" in result
+    # cache should NOT hold failure results
+    assert "darwin" not in iu._check_cache
+
+
+def test_check_uses_ttl_cache(monkeypatch):
+    """Second call within TTL hits cache (mocked fetch called once)."""
+    monkeypatch.setattr(iu.sys, "platform", "darwin")
+    fetch_mock = MagicMock(return_value={
+        "tag_name": "v1.5.0", "prerelease": False, "body": "",
+        "html_url": "", "assets": [{"name": "Hermes-Installer-macOS.dmg"}]})
+    with patch.object(iu, "_fetch_github_latest_release", fetch_mock), \
+         patch.object(iu, "_check_oss_asset", return_value=True):
+        iu.check_installer_update(current_version="v1.4.2")
+        iu.check_installer_update(current_version="v1.4.2")
+    assert fetch_mock.call_count == 1, "second call should hit cache"
+
+
+def test_check_cache_expires_after_ttl(monkeypatch):
+    """After TTL elapses, cache misses and fetch is called again."""
+    monkeypatch.setattr(iu.sys, "platform", "darwin")
+    fetch_mock = MagicMock(return_value={
+        "tag_name": "v1.5.0", "prerelease": False, "body": "",
+        "html_url": "", "assets": [{"name": "Hermes-Installer-macOS.dmg"}]})
+    with patch.object(iu, "_fetch_github_latest_release", fetch_mock), \
+         patch.object(iu, "_check_oss_asset", return_value=True):
+        iu.check_installer_update(current_version="v1.4.2")
+        # Backdate the cache entry past TTL
+        for key in iu._check_cache:
+            iu._check_cache[key]["fetched_at"] = time.time() - iu.CACHE_TTL_SECONDS - 1
+        iu.check_installer_update(current_version="v1.4.2")
+    assert fetch_mock.call_count == 2, "expired entry should trigger refetch"
