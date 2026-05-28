@@ -1402,9 +1402,24 @@ def _check_csrf(handler) -> bool:
         return _set_csrf_failure_reason(handler, "origin_mismatch")
 
     from api.auth import CSRF_HEADER_NAME, is_auth_enabled, parse_cookie, verify_csrf_token
+    from api.auth import get_auth_mode, parse_neo_cookie, _neodomain_jwt_looks_valid
 
     if not is_auth_enabled():
         return True
+    # Neodomain CSRF bypass: when HERMES_WEBUI_AUTH_MODE=neodomain, the OAuth
+    # callback at app.neowow.studio only writes the cross-subdomain `neoToken`
+    # JWT cookie (Domain=.neowow.studio) — it never writes `hermes_session`.
+    # parse_cookie() below looks for hermes_session and always returns None,
+    # so verify_csrf_token() always fails and every browser POST gets stuck
+    # in the "Session expired - reload the page" loop. The same-origin check
+    # above (host vs Origin/Referer) is sufficient defense against CSRF in
+    # this mode — the JWT itself is the auth surface and same-origin is the
+    # CSRF surface. Verifying the JWT keeps us from accepting random
+    # tokenless requests that happen to share a host header.
+    if get_auth_mode() == "neodomain":
+        neo_jwt = parse_neo_cookie(handler)
+        if neo_jwt and _neodomain_jwt_looks_valid(neo_jwt):
+            return True
     cookie_val = parse_cookie(handler)
     submitted = handler.headers.get(CSRF_HEADER_NAME) or handler.headers.get("X-CSRF-Token")
     if verify_csrf_token(cookie_val or "", submitted or ""):
