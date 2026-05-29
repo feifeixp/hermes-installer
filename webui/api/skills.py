@@ -552,6 +552,21 @@ def sync_subscribed_skills() -> dict[str, Any]:
     return sync_all_skills()
 
 
+def sync_skills_if_token(read_state=_read_state, sync=sync_all_skills) -> dict[str, Any] | None:
+    """Run a skill sync, but only when a deploy token / JWT is saved.
+
+    Returns the sync summary, or None when skipped because no credentials
+    are present (a bare desktop install) — so the periodic loop stays quiet
+    instead of raising every few minutes. Does NOT swallow exceptions from
+    `sync`; the caller's loop decides how to handle transient failures.
+
+    `read_state` / `sync` are injectable for tests.
+    """
+    if not (read_state().get("token") or "").strip():
+        return None
+    return sync()
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _utc_now_iso() -> str:
@@ -970,6 +985,7 @@ __all__ = (
     "list_cloud_skills",
     "sync_all_skills",
     "sync_subscribed_skills",
+    "sync_skills_if_token",
     "get_local_status",
     "dismiss_skill",
     "restore_skill",
