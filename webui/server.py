@@ -104,6 +104,7 @@ import logging
 import os
 import re
 import socket
+import subprocess
 import sys
 import time
 import traceback
@@ -651,6 +652,38 @@ def main() -> None:
             logger.warning("[startup] skills sync failed (non-fatal): %s", exc)
 
     _threading.Thread(target=_startup_skill_sync, daemon=True, name="startup-skill-sync").start()
+
+    # ── Startup gateway supervisor (background, non-blocking) ──────────────
+    # Cloud single-container gateways run as a manual while-true `hermes
+    # gateway run` loop INSIDE the container — it survives crashes but not
+    # container recreation (the hourly auto-update SIGKILLs the container).
+    # On every container boot, if this instance is configured to run a
+    # gateway (gateway_state.json == running) and one isn't already alive,
+    # relaunch the supervised loop. Daemon thread; never blocks startup.
+    def _startup_gateway_supervisor():
+        try:
+            from hermes_constants import get_default_hermes_root
+            from api.gateway_autostart import (
+                gateway_running, maybe_start_gateway,
+            )
+            status = maybe_start_gateway(
+                get_default_hermes_root(),
+                running_check=gateway_running,
+                spawn=lambda argv: subprocess.Popen(
+                    argv,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                ),
+                log=logger.info,
+            )
+            logger.info("[startup] gateway supervisor: %s", status)
+        except Exception as exc:
+            logger.warning("[startup] gateway supervisor failed (non-fatal): %s", exc)
+
+    _threading.Thread(
+        target=_startup_gateway_supervisor, daemon=True, name="startup-gateway-supervisor",
+    ).start()
 
     # ── Server-side idle-keep-alive heartbeat ──────────────────────────────
     # When the user's browser is closed while Hermes executes a background
