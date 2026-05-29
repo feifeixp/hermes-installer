@@ -3665,6 +3665,16 @@ async function _skillsOpenFromMarket(skillId) {
   }
 }
 
+// Open a subscribed skill's detail straight from the authenticated
+// "我的技能" data, which now carries full `content`. Avoids re-fetching via
+// the UNAUTHENTICATED /api/skills/market/{id} → /api/public/skills/{id}
+// path, which gates content and would show "订阅后可查看" to real subscribers.
+function _skillsOpenFromMine(skillId) {
+  const skill = (_skillsState.mineData || []).find(s => s.id === skillId);
+  if (!skill) { _skillsOpenFromMarket(skillId); return; }
+  _skillsOpenDetail({ ...skill }, 'mine');
+}
+
 // ── Tab: 我的技能 ────────────────────────────────────────────────────────
 async function _skillsLoadMine() {
   const box = $('skillsMineBody');
@@ -3705,7 +3715,7 @@ function _skillsRenderMine() {
     return;
   }
   box.innerHTML = skills.map(s => `
-    <div class="skills-list-item" onclick="_skillsOpenFromMarket('${esc(s.id || '')}')">
+    <div class="skills-list-item" onclick="_skillsOpenFromMine('${esc(s.id || '')}')">
       <div class="skills-list-item-info">
         <div class="skills-list-item-name">${esc(s.name || s.displayName || '')}</div>
         <div class="skills-list-item-desc">${esc(s.description || '')}</div>
