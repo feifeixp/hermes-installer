@@ -3635,7 +3635,7 @@ function _skillsRenderMarket() {
   box.innerHTML = `<div class="skills-market-grid">${skills.map(s => `
     <div class="skills-market-card" onclick="_skillsOpenFromMarket('${esc(s.id || '')}')">
       <div class="skills-market-card-header">
-        <div class="skills-market-card-name">${esc(s.displayName || s.name || '')}</div>
+        <div class="skills-market-card-name">${esc(s.name || s.displayName || '')}</div>
         <div class="skills-market-card-badge">v${esc(String(s.version || 1))}</div>
       </div>
       <div class="skills-market-card-desc">${esc(s.description || '')}</div>
@@ -3707,7 +3707,7 @@ function _skillsRenderMine() {
   box.innerHTML = skills.map(s => `
     <div class="skills-list-item" onclick="_skillsOpenFromMarket('${esc(s.id || '')}')">
       <div class="skills-list-item-info">
-        <div class="skills-list-item-name">${esc(s.displayName || s.name || '')}</div>
+        <div class="skills-list-item-name">${esc(s.name || s.displayName || '')}</div>
         <div class="skills-list-item-desc">${esc(s.description || '')}</div>
       </div>
       <div class="skills-mine-status">
@@ -3744,7 +3744,7 @@ function _skillsRenderDetail() {
   const bodyEl    = $('skillsDetailBody');
   const sidebarEl = $('skillsDetailSidebarInfo');
 
-  if (nameEl) nameEl.textContent = skill.displayName || skill.name || skill.id || '';
+  if (nameEl) nameEl.textContent = skill.name || skill.displayName || skill.id || '';
 
   if (metaEl) {
     const parts = [];
