@@ -30,3 +30,54 @@ def test_missing_file_should_not_autostart(tmp_path):
 def test_corrupt_json_should_not_autostart(tmp_path):
     (tmp_path / "gateway_state.json").write_text("{not json", encoding="utf-8")
     assert should_autostart(tmp_path) is False
+
+
+from api.gateway_autostart import build_supervisor_argv, maybe_start_gateway
+
+
+def test_build_supervisor_argv_contains_loop_and_dir(tmp_path):
+    argv = build_supervisor_argv(tmp_path)
+    assert argv[0] == "bash"
+    joined = " ".join(argv)
+    assert "hermes gateway run" in joined
+    assert "while true" in joined
+    assert str(tmp_path / "hermes-agent") in joined  # cd into the agent dir
+
+
+def test_maybe_start_skips_when_not_configured(tmp_path):
+    spawned = []
+    status = maybe_start_gateway(
+        tmp_path,
+        running_check=lambda: False,
+        spawn=lambda argv: spawned.append(argv),
+        log=lambda *_: None,
+    )
+    assert status == "skipped:not-configured"
+    assert spawned == []
+
+
+def test_maybe_start_skips_when_already_running(tmp_path):
+    (tmp_path / "gateway_state.json").write_text('{"gateway_state":"running"}', encoding="utf-8")
+    spawned = []
+    status = maybe_start_gateway(
+        tmp_path,
+        running_check=lambda: True,   # already alive
+        spawn=lambda argv: spawned.append(argv),
+        log=lambda *_: None,
+    )
+    assert status == "skipped:already-running"
+    assert spawned == []
+
+
+def test_maybe_start_spawns_when_configured_and_not_running(tmp_path):
+    (tmp_path / "gateway_state.json").write_text('{"gateway_state":"running"}', encoding="utf-8")
+    spawned = []
+    status = maybe_start_gateway(
+        tmp_path,
+        running_check=lambda: False,
+        spawn=lambda argv: spawned.append(argv),
+        log=lambda *_: None,
+    )
+    assert status == "started"
+    assert len(spawned) == 1
+    assert "hermes gateway run" in " ".join(spawned[0])

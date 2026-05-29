@@ -38,3 +38,61 @@ def should_autostart(root_home: Path) -> bool:
     except (ValueError, TypeError):
         return False
     return isinstance(data, dict) and data.get("gateway_state") == "running"
+
+
+def build_supervisor_argv(root_home: Path) -> list[str]:
+    """Argv for the supervised gateway loop — same shape as the manual
+    while-true loop operators have used, but launched automatically.
+    `bash -lic` loads the login env (PATH etc.) the agent venv expects.
+    """
+    agent_dir = root_home / "hermes-agent"
+    inner = (
+        f"cd {shlex.quote(str(agent_dir))} && "
+        "while true; do "
+        "source venv/bin/activate && hermes gateway run 2>&1; "
+        'echo "[gateway-supervisor] gateway exited at $(date) - restarting in 5s"; '
+        "sleep 5; "
+        "done"
+    )
+    return ["bash", "-lic", inner]
+
+
+def gateway_running() -> bool:
+    """True iff a `hermes gateway run` process is alive in this container.
+
+    Uses pgrep (same PID namespace as the WebUI process). Any failure to
+    probe is treated as "not running" so we err toward (re)starting.
+    """
+    import subprocess
+    try:
+        rc = subprocess.run(
+            ["pgrep", "-f", "hermes gateway run"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode
+        return rc == 0
+    except Exception:
+        return False
+
+
+def maybe_start_gateway(
+    root_home: Path,
+    *,
+    running_check: Callable[[], bool],
+    spawn: Callable[[list[str]], None],
+    log: Callable[..., None],
+) -> str:
+    """Start the supervised gateway loop iff the instance is configured for
+    one and it isn't already running. Returns a short status string. Never
+    raises — orchestration errors are caught and returned as 'error:...'.
+    """
+    try:
+        if not should_autostart(root_home):
+            return "skipped:not-configured"
+        if running_check():
+            return "skipped:already-running"
+        spawn(build_supervisor_argv(root_home))
+        log("[gateway-autostart] supervised gateway loop started")
+        return "started"
+    except Exception as e:  # never let startup break
+        log("[gateway-autostart] error: %s", e)
+        return f"error:{e}"
