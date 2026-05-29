@@ -688,6 +688,12 @@ def get_mine_skills(handler=None) -> list[dict[str, Any]]:
             "updatedAt":      int(s.get("updatedAt") or 0),
             "isLocal":        sid in local_ids,
             "isDismissed":    sid in dismissed,
+            # Pass through the full content the dashboard already returned
+            # for this subscriber. The detail view renders it directly so
+            # it doesn't have to re-fetch via the UNAUTHENTICATED public
+            # endpoint (which gates content → "订阅后可查看" even for subs).
+            "content":        str(s.get("content") or ""),
+            "skillType":      str(s.get("skillType") or s.get("type") or ""),
         })
     return out
 
