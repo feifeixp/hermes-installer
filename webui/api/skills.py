@@ -219,6 +219,32 @@ def _read_local_meta(skill_dir: Path) -> dict[str, Any] | None:
         return None
 
 
+def _ensure_frontmatter(content: str, sid: str, name: str, description: str) -> str:
+    """Prepend a minimal YAML frontmatter block when the skill body lacks one.
+
+    The agent registers a skill from its SKILL.md frontmatter (`name:` /
+    `description:`); a body authored without it syncs to disk but never
+    becomes invocable in conversation. We synthesize from the authoritative
+    dashboard metadata, using the skill id as `name` (a guaranteed-valid slug
+    that matches the skill's directory) and the human name (+ description) for
+    matchability. Author-provided frontmatter is left untouched.
+    """
+    if content.lstrip().startswith("---"):
+        return content
+    desc = name.strip()
+    if description.strip():
+        desc = f"{desc}：{description.strip()}" if desc else description.strip()
+    if not desc:
+        desc = sid
+    block = (
+        "---\n"
+        f"name: {sid}\n"
+        f"description: {json.dumps(desc, ensure_ascii=False)}\n"
+        "---\n\n"
+    )
+    return block + content
+
+
 def _write_skill(skill: dict[str, Any]) -> None:
     """Materialize one cloud skill on disk as <id>/SKILL.md + <id>/_neowow.json."""
     sid = skill.get("id") or ""
@@ -229,11 +255,14 @@ def _write_skill(skill: dict[str, Any]) -> None:
     target.mkdir(parents=True, exist_ok=True)
 
     content = str(skill.get("content") or "").strip()
+    name = str(skill.get("name") or sid)
+    description = str(skill.get("description") or "")
     if not content:
         content = (
-            f"# {skill.get('name') or sid}\n\n"
+            f"# {name}\n\n"
             f"_(This skill has empty content on app.neowow.studio.)_\n"
         )
+    content = _ensure_frontmatter(content, sid, name, description)
     (target / _SKILL_FILE).write_text(content + "\n", encoding="utf-8")
 
     meta = {
@@ -550,6 +579,21 @@ def sync_all_skills() -> dict[str, Any]:
 # Backward-compat alias
 def sync_subscribed_skills() -> dict[str, Any]:
     return sync_all_skills()
+
+
+def sync_skills_if_token(read_state=_read_state, sync=sync_all_skills) -> dict[str, Any] | None:
+    """Run a skill sync, but only when a deploy token / JWT is saved.
+
+    Returns the sync summary, or None when skipped because no credentials
+    are present (a bare desktop install) — so the periodic loop stays quiet
+    instead of raising every few minutes. Does NOT swallow exceptions from
+    `sync`; the caller's loop decides how to handle transient failures.
+
+    `read_state` / `sync` are injectable for tests.
+    """
+    if not (read_state().get("token") or "").strip():
+        return None
+    return sync()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -970,6 +1014,7 @@ __all__ = (
     "list_cloud_skills",
     "sync_all_skills",
     "sync_subscribed_skills",
+    "sync_skills_if_token",
     "get_local_status",
     "dismiss_skill",
     "restore_skill",

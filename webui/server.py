@@ -628,11 +628,10 @@ def main() -> None:
     import threading as _threading
     def _startup_skill_sync():
         try:
-            from api.neowow import _read_state as _rs
-            if not (_rs().get("token") or "").strip():
+            from api.skills import sync_skills_if_token
+            result = sync_skills_if_token()
+            if result is None:
                 return  # no token → skip silently
-            from api.skills import sync_all_skills
-            result = sync_all_skills()
             added   = len(result.get("added", []))
             skipped = len(result.get("skipped_dismissed", []))
             logger.info(
@@ -725,6 +724,40 @@ def main() -> None:
         target=_background_heartbeat_loop,
         daemon=True,
         name="background-heartbeat",
+    ).start()
+
+    # ── Periodic skill sync ────────────────────────────────────────────────
+    # The startup sync above runs once. But a user can subscribe to a skill
+    # in the browser market (app.neowow.studio) AFTER the container booted —
+    # there's no push from the dashboard. Without a periodic pull, that
+    # subscription wouldn't reach this instance until the next container
+    # rebuild (hourly auto-update) or a manual sync from the skills panel.
+    # This daemon re-pulls every few minutes so browser subscriptions land
+    # automatically; the WebUI chat path rebuilds the agent per turn, so the
+    # next message can use the freshly-synced skill. No-op (silent) on
+    # tokenless desktop installs — the token guard is inside sync_skills_if_token.
+    def _periodic_skill_sync_loop():
+        import time as _time
+        INTERVAL = 5 * 60
+        while True:
+            _time.sleep(INTERVAL)
+            try:
+                from api.skills import sync_skills_if_token
+                result = sync_skills_if_token()
+                if result and (result.get("added") or result.get("updated") or result.get("removed")):
+                    logger.info(
+                        "[skills] periodic sync: +%d updated=%d removed=%d",
+                        len(result.get("added", [])),
+                        len(result.get("updated", [])),
+                        len(result.get("removed", [])),
+                    )
+            except Exception as exc:
+                logger.debug("[skills] periodic sync iteration error: %s", exc)
+
+    _threading.Thread(
+        target=_periodic_skill_sync_loop,
+        daemon=True,
+        name="periodic-skill-sync",
     ).start()
 
     try:
