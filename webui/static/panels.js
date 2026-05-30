@@ -243,7 +243,7 @@ async function switchPanel(name, opts = {}) {
   // showing-<name> class on <main>; no class means chat (the default).
   const mainEl = document.querySelector('main.main');
   if (mainEl) {
-    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs','backup','server'].forEach(p => {
+    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs','backup','server','messaging'].forEach(p => {
       mainEl.classList.toggle('showing-' + p, nextPanel === p);
     });
   }
@@ -259,6 +259,9 @@ async function switchPanel(name, opts = {}) {
   // an optional provider.status call upstream).
   if (nextPanel === 'server' && typeof serverAdminLoad === 'function') {
     serverAdminLoad();
+  }
+  if (nextPanel === 'messaging' && typeof messagingLoad === 'function') {
+    messagingLoad();
   }
   if (nextPanel === 'tasks') await loadCrons();
   if (nextPanel === 'kanban') await loadKanban();
