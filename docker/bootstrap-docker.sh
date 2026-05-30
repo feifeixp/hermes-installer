@@ -161,7 +161,7 @@ curl -fsSL --max-time 15 "${TEMPLATE_BASE}/apply-update.sh" -o "$DEPLOY_DIR/appl
 chmod 0755 "$DEPLOY_DIR/apply-update.sh"
 # Control channel dir, writable by the container's hermes user (uid 1500).
 mkdir -p "$DEPLOY_DIR/control"
-chown 1500:1500 "$DEPLOY_DIR/control" 2>/dev/null || chmod 0777 "$DEPLOY_DIR/control"
+chown 1500:999 "$DEPLOY_DIR/control" 2>/dev/null || chmod 0777 "$DEPLOY_DIR/control"
 
 cat > /etc/cron.d/hermes-auto-update <<'EOF'
 # Stage new Hermes WebUI images hourly (pull only — does NOT restart).
