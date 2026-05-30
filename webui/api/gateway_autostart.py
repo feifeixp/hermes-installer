@@ -20,15 +20,8 @@ from typing import Callable
 GATEWAY_RUNTIME_STATUS_FILE = "gateway_state.json"
 
 
-def should_autostart(root_home: Path) -> bool:
-    """True iff <root_home>/gateway_state.json exists and reports running.
-
-    Container recreation SIGKILLs the gateway before it can write "stopped",
-    so a persisted "running" means "was running, should be brought back".
-    A user-initiated stop persists "stopped" → we honor it. Missing file
-    (never configured) or unparseable JSON → don't start.
-    """
-    path = root_home / GATEWAY_RUNTIME_STATUS_FILE
+def _state_reports_running(path: Path) -> bool:
+    """True iff `path` is a gateway_state.json whose state is "running"."""
     try:
         raw = path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError):
@@ -38,6 +31,35 @@ def should_autostart(root_home: Path) -> bool:
     except (ValueError, TypeError):
         return False
     return isinstance(data, dict) and data.get("gateway_state") == "running"
+
+
+def _gateway_state_candidates(root_home: Path) -> list[Path]:
+    """gateway_state.json locations to consider, root home first.
+
+    Profile-scoped deployments write the runtime status under
+    <root>/profiles/<name>/gateway_state.json, NOT the root home — so we
+    also scan every profile dir. Mirrors the root→profile fallback that
+    agent_health.py already does for gateway.pid.
+    """
+    candidates = [root_home / GATEWAY_RUNTIME_STATUS_FILE]
+    try:
+        for child in sorted((root_home / "profiles").iterdir()):
+            if child.is_dir():
+                candidates.append(child / GATEWAY_RUNTIME_STATUS_FILE)
+    except (FileNotFoundError, NotADirectoryError, OSError):
+        pass
+    return candidates
+
+
+def should_autostart(root_home: Path) -> bool:
+    """True iff a gateway_state.json (root home OR any profile dir) reports running.
+
+    Container recreation SIGKILLs the gateway before it can write "stopped",
+    so a persisted "running" means "was running, should be brought back".
+    A user-initiated stop persists "stopped" → we honor it. Missing file
+    (never configured) or unparseable JSON → don't start.
+    """
+    return any(_state_reports_running(p) for p in _gateway_state_candidates(root_home))
 
 
 def build_supervisor_argv(root_home: Path) -> list[str]:
