@@ -5213,6 +5213,25 @@ def handle_get(handler, parsed) -> bool:
         )
 
     # ── Gateway Status (GET) ──
+    if parsed.path == "/api/messaging/channels":
+        from api import messaging_channels as _mc
+        try:
+            return j(handler, _mc.get_channels_status())
+        except Exception as exc:
+            logger.exception("messaging channels status failed")
+            return j(handler, {"error": str(exc)}, status=500)
+
+    if parsed.path == "/api/messaging/weixin/qr/status":
+        from api import messaging_channels as _mc
+        token = parse_qs(parsed.query).get("token", [""])[0].strip()
+        if not token:
+            return bad(handler, "token required", 400)
+        try:
+            return j(handler, _mc.weixin_qr_status(token))
+        except Exception as exc:
+            logger.exception("messaging weixin qr status failed")
+            return j(handler, {"status": "error", "reason": str(exc)}, status=500)
+
     if parsed.path == "/api/gateway/status":
         import datetime
         identity_map = _load_gateway_session_identity_map()
@@ -7450,6 +7469,69 @@ def handle_post(handler, parsed) -> bool:
     # NOTE: changing this config doesn't take effect until the next
     # Hermes Installer launch (main.py reads it once at startup). The UI
     # tells the user to restart after saving.
+    if parsed.path == "/api/messaging/weixin/qr/start":
+        from api import messaging_channels as _mc
+        try:
+            return j(handler, _mc.weixin_qr_start())
+        except Exception as exc:
+            logger.exception("messaging weixin qr start failed")
+            return bad(handler, str(exc), status=502)
+
+    if parsed.path == "/api/messaging/weixin/disconnect":
+        from api import messaging_channels as _mc
+        try:
+            _mc.disconnect_weixin()
+            return j(handler, {"ok": True})
+        except Exception as exc:
+            logger.exception("messaging weixin disconnect failed")
+            return bad(handler, str(exc), status=500)
+
+    if parsed.path == "/api/messaging/feishu/config":
+        from api import messaging_channels as _mc
+        try:
+            _mc.connect_feishu(
+                app_id=str((body or {}).get("app_id", "")),
+                app_secret=str((body or {}).get("app_secret", "")),
+            )
+            return j(handler, {"ok": True})
+        except ValueError as exc:
+            return bad(handler, str(exc), status=400)
+        except Exception as exc:
+            logger.exception("messaging feishu config failed")
+            return bad(handler, str(exc), status=500)
+
+    if parsed.path == "/api/messaging/feishu/disconnect":
+        from api import messaging_channels as _mc
+        try:
+            _mc.disconnect_feishu()
+            return j(handler, {"ok": True})
+        except Exception as exc:
+            logger.exception("messaging feishu disconnect failed")
+            return bad(handler, str(exc), status=500)
+
+    if parsed.path == "/api/messaging/wecom/config":
+        from api import messaging_channels as _mc
+        try:
+            _mc.connect_wecom(
+                bot_id=str((body or {}).get("bot_id", "")),
+                secret=str((body or {}).get("secret", "")),
+            )
+            return j(handler, {"ok": True})
+        except ValueError as exc:
+            return bad(handler, str(exc), status=400)
+        except Exception as exc:
+            logger.exception("messaging wecom config failed")
+            return bad(handler, str(exc), status=500)
+
+    if parsed.path == "/api/messaging/wecom/disconnect":
+        from api import messaging_channels as _mc
+        try:
+            _mc.disconnect_wecom()
+            return j(handler, {"ok": True})
+        except Exception as exc:
+            logger.exception("messaging wecom disconnect failed")
+            return bad(handler, str(exc), status=500)
+
     if parsed.path == "/api/gateway/config":
         from api.gateway_config import save_gateway_config, clear_gateway_config
         try:
