@@ -32,6 +32,35 @@ def test_corrupt_json_should_not_autostart(tmp_path):
     assert should_autostart(tmp_path) is False
 
 
+# ── Profile-scoped deployments ───────────────────────────────────────────────
+# Real-world repro: gateway_state.json is written under
+# <root>/profiles/<name>/, NOT the root home. The original should_autostart
+# only checked the root home → skipped a live gateway on profile-scoped
+# instances. Mirror agent_health.py's root→profile fallback.
+
+def test_profile_scoped_running_state_should_autostart(tmp_path):
+    prof = tmp_path / "profiles" / "test111"
+    prof.mkdir(parents=True)
+    _write_state(prof, {"gateway_state": "running", "updated_at": "x"})
+    # Root home has NO gateway_state.json — only the profile does.
+    assert should_autostart(tmp_path) is True
+
+
+def test_profile_scoped_stopped_state_should_not_autostart(tmp_path):
+    prof = tmp_path / "profiles" / "test111"
+    prof.mkdir(parents=True)
+    _write_state(prof, {"gateway_state": "stopped"})
+    assert should_autostart(tmp_path) is False
+
+
+def test_running_in_any_profile_should_autostart(tmp_path):
+    (tmp_path / "profiles" / "a").mkdir(parents=True)
+    (tmp_path / "profiles" / "b").mkdir(parents=True)
+    _write_state(tmp_path / "profiles" / "a", {"gateway_state": "stopped"})
+    _write_state(tmp_path / "profiles" / "b", {"gateway_state": "running"})
+    assert should_autostart(tmp_path) is True
+
+
 from api.gateway_autostart import build_supervisor_argv, maybe_start_gateway
 
 
