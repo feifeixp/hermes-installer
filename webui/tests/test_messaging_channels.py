@@ -193,3 +193,92 @@ def test_disconnect_wecom(isolated_home):
     assert "WECOM_BOT_ID" not in env
     assert "WECOM_SECRET" not in env
     assert mc.is_platform_enabled("wecom") is False
+
+
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+
+def _ilink_resp(payload: dict):
+    """Build a urlopen-style mock returning JSON bytes."""
+    import json as _json
+    resp = MagicMock()
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
+    resp.read.return_value = _json.dumps(payload).encode("utf-8")
+    return resp
+
+
+def test_weixin_qr_start_returns_token_and_img(isolated_home):
+    with patch.object(mc.urllib.request, "urlopen",
+                      MagicMock(return_value=_ilink_resp({
+                          "qrcode": "hex_token_abc",
+                          "qrcode_img_content": "https://liteapp.example/scan",
+                      }))):
+        out = mc.weixin_qr_start()
+    assert out["qrcode_token"] == "hex_token_abc"
+    assert out["qrcode_img_url"] == "https://liteapp.example/scan"
+    # token暂存
+    assert "hex_token_abc" in mc._qr_sessions
+
+
+def test_weixin_qr_status_wait(isolated_home):
+    import time as _t
+    mc._qr_sessions["tok1"] = {"created_at": _t.time()}
+    with patch.object(mc.urllib.request, "urlopen",
+                      MagicMock(return_value=_ilink_resp({"status": "wait"}))):
+        out = mc.weixin_qr_status("tok1")
+    assert out["status"] == "wait"
+
+
+def test_weixin_qr_status_unknown_token(isolated_home):
+    out = mc.weixin_qr_status("never_seen")
+    assert out["status"] == "invalid_token"
+
+
+def test_weixin_qr_status_confirmed_persists_account(isolated_home):
+    import json as _json
+    import time as _t
+    mc._qr_sessions["tok2"] = {"created_at": _t.time()}
+    with patch.object(mc.urllib.request, "urlopen",
+                      MagicMock(return_value=_ilink_resp({
+                          "status": "confirmed",
+                          "ilink_bot_id": "acc_999",
+                          "bot_token": "secret_token",
+                          "baseurl": "https://ilinkai.weixin.qq.com",
+                          "ilink_user_id": "u_1",
+                      }))), \
+         patch.object(mc, "restart_gateway", MagicMock()):
+        out = mc.weixin_qr_status("tok2")
+    assert out["status"] == "confirmed"
+    assert out["account_id"] == "acc_999"
+    # account json written
+    acc = isolated_home / "weixin" / "accounts" / "acc_999.json"
+    assert acc.exists()
+    saved = _json.loads(acc.read_text(encoding="utf-8"))
+    assert saved["token"] == "secret_token"
+    # env + platform enabled
+    assert mc._parse_env()["WEIXIN_ACCOUNT_ID"] == "acc_999"
+    assert mc.is_platform_enabled("weixin") is True
+    # token consumed
+    assert "tok2" not in mc._qr_sessions
+
+
+def test_weixin_disconnect(isolated_home):
+    # set up a connected weixin
+    mc._upsert_env_vars({"WEIXIN_ACCOUNT_ID": "acc_x"})
+    mc.set_platform_enabled("weixin", True)
+    acc_dir = isolated_home / "weixin" / "accounts"
+    acc_dir.mkdir(parents=True)
+    (acc_dir / "acc_x.json").write_text("{}", encoding="utf-8")
+    with patch.object(mc, "restart_gateway", MagicMock()):
+        mc.disconnect_weixin()
+    assert "WEIXIN_ACCOUNT_ID" not in mc._parse_env()
+    assert mc.is_platform_enabled("weixin") is False
+    assert not (acc_dir / "acc_x.json").exists()
+
+
+@pytest.fixture(autouse=True)
+def clear_qr_sessions():
+    mc._qr_sessions.clear()
+    yield
+    mc._qr_sessions.clear()

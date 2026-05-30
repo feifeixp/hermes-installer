@@ -258,11 +258,13 @@ def connect_feishu(*, app_id: str, app_secret: str) -> None:
         updates["FEISHU_APP_SECRET"] = app_secret.strip()
     _upsert_env_vars(updates)
     set_platform_enabled("feishu", True)
+    restart_gateway()
 
 
 def disconnect_feishu() -> None:
     _remove_env_vars(["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_CONNECTION_MODE"])
     set_platform_enabled("feishu", False)
+    restart_gateway()
 
 
 def connect_wecom(*, bot_id: str, secret: str) -> None:
@@ -275,8 +277,123 @@ def connect_wecom(*, bot_id: str, secret: str) -> None:
         updates["WECOM_SECRET"] = secret.strip()
     _upsert_env_vars(updates)
     set_platform_enabled("wecom", True)
+    restart_gateway()
 
 
 def disconnect_wecom() -> None:
     _remove_env_vars(["WECOM_BOT_ID", "WECOM_SECRET"])
     set_platform_enabled("wecom", False)
+    restart_gateway()
+
+
+# Module-level QR session store: qrcode_token -> {"created_at": float}.
+# In-memory only; webui restart drops pending QR sessions (user re-scans).
+_qr_sessions: dict[str, dict] = {}
+_QR_SESSION_TTL = 600  # 10 min
+
+
+def _ilink_get(endpoint: str) -> dict:
+    """GET an iLink endpoint, return parsed JSON. Raises on HTTP/parse error."""
+    url = f"{ILINK_BASE_URL}/{endpoint}"
+    req = urllib.request.Request(url, headers={
+        "iLink-App-Id": ILINK_APP_ID,
+        "iLink-App-ClientVersion": str(ILINK_APP_CLIENT_VERSION),
+    })
+    with urllib.request.urlopen(req, timeout=QR_HTTP_TIMEOUT) as resp:
+        return json.loads(resp.read())
+
+
+def weixin_qr_start() -> dict:
+    """Request a fresh iLink bot QR code. Returns
+    {qrcode_token, qrcode_img_url}. Stashes the token for status polling."""
+    data = _ilink_get(f"{EP_GET_BOT_QR}?bot_type={QR_BOT_TYPE}")
+    token = str(data.get("qrcode") or "")
+    img = str(data.get("qrcode_img_content") or "")
+    if not token:
+        raise RuntimeError("iLink QR response missing qrcode")
+    _qr_sessions[token] = {"created_at": time.time()}
+    # Opportunistic GC of stale sessions.
+    cutoff = time.time() - _QR_SESSION_TTL
+    for k in [k for k, v in _qr_sessions.items() if v["created_at"] < cutoff]:
+        _qr_sessions.pop(k, None)
+    return {"qrcode_token": token, "qrcode_img_url": img}
+
+
+def _save_weixin_account(account_id: str, token: str, base_url: str, user_id: str) -> None:
+    """Persist iLink credentials to ~/.hermes/weixin/accounts/<id>.json."""
+    acc_dir = _hermes_home() / "weixin" / "accounts"
+    acc_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "token": token,
+        "base_url": base_url,
+        "user_id": user_id,
+        "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    path = acc_dir / f"{account_id}.json"
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def weixin_qr_status(token: str) -> dict:
+    """Poll iLink QR status for `token`. On 'confirmed', persist the account,
+    write WEIXIN_ACCOUNT_ID, enable platform, restart gateway, consume token."""
+    if token not in _qr_sessions:
+        return {"status": "invalid_token"}
+    try:
+        data = _ilink_get(f"{EP_GET_QR_STATUS}?qrcode={token}")
+    except Exception as exc:
+        logger.debug("messaging: weixin QR poll error: %s", exc)
+        return {"status": "error", "reason": str(exc)}
+
+    status = str(data.get("status") or "wait")
+    if status == "confirmed":
+        account_id = str(data.get("ilink_bot_id") or "")
+        bot_token = str(data.get("bot_token") or "")
+        base_url = str(data.get("baseurl") or ILINK_BASE_URL)
+        user_id = str(data.get("ilink_user_id") or "")
+        if not account_id or not bot_token:
+            return {"status": "error", "reason": "incomplete_credentials"}
+        _save_weixin_account(account_id, bot_token, base_url, user_id)
+        _upsert_env_vars({"WEIXIN_ACCOUNT_ID": account_id})
+        set_platform_enabled("weixin", True)
+        _qr_sessions.pop(token, None)
+        restart_gateway()
+        return {"status": "confirmed", "account_id": account_id}
+    return {"status": status}
+
+
+def disconnect_weixin() -> None:
+    """Remove WeChat account + disable platform + restart gateway."""
+    env = _parse_env()
+    account_id = env.get("WEIXIN_ACCOUNT_ID", "")
+    _remove_env_vars(["WEIXIN_ACCOUNT_ID"])
+    set_platform_enabled("weixin", False)
+    if account_id:
+        acc = _hermes_home() / "weixin" / "accounts" / f"{account_id}.json"
+        try:
+            acc.unlink(missing_ok=True)
+        except OSError:
+            pass
+    restart_gateway()
+
+
+def restart_gateway() -> None:
+    """Signal the gateway supervisor to restart so it picks up new config.
+
+    The supervisor loop (gateway_autostart) auto-relaunches `hermes gateway
+    run` ~5s after it exits. We just kill the running process. Best-effort:
+    on platforms without pkill / when gateway isn't running, this is a no-op
+    and the new config applies on next gateway start."""
+    import subprocess
+    try:
+        subprocess.run(
+            ["pkill", "-f", "hermes gateway run"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+        )
+    except Exception as exc:
+        logger.debug("messaging: restart_gateway pkill failed (non-fatal): %s", exc)
