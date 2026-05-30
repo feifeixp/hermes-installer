@@ -3566,19 +3566,32 @@ function _skillsRenderList() {
     box.innerHTML = '<div class="skills-empty">暂无本地技能<br><small>在技能市场订阅技能后会出现在这里</small></div>';
     return;
   }
-  box.innerHTML = skills.map(s => `
+  // Subscribed skills (synced under _neowow/) carry source:'subscribed' +
+  // human title/author from _neowow.json; show them as their own group with
+  // the human name. `name` stays the slug — it's the toggle / open key.
+  const itemHtml = s => `
     <div class="skills-list-item" onclick="_skillsOpenFromList('${esc(s.name||'')}')">
       <div class="skills-list-item-info">
-        <div class="skills-list-item-name">${esc(s.name || '')}</div>
+        <div class="skills-list-item-name">${esc(s.title || s.name || '')}</div>
         <div class="skills-list-item-desc">${esc(s.description || '')}</div>
+        ${s.author ? `<span class="skills-mine-author">作者：${esc(s.author)}</span>` : ''}
       </div>
       <label class="skill-toggle-wrap" onclick="event.stopPropagation()" title="${s.disabled ? '已禁用' : '已启用'}">
         <input type="checkbox" class="skill-toggle" data-skill-name="${esc(s.name || '')}" ${s.disabled ? '' : 'checked'}
           onchange="skillsToggleLocal(this.dataset.skillName, this.checked)">
         <span class="skill-toggle-track"></span>
       </label>
-    </div>
-  `).join('');
+    </div>`;
+  const subscribed = skills.filter(s => s.source === 'subscribed');
+  const local      = skills.filter(s => s.source !== 'subscribed');
+  let html = '';
+  if (subscribed.length) {
+    html += '<div class="skills-group-title">我的订阅技能</div>' + subscribed.map(itemHtml).join('');
+  }
+  if (local.length) {
+    html += '<div class="skills-group-title">本地技能</div>' + local.map(itemHtml).join('');
+  }
+  box.innerHTML = html;
 }
 
 async function skillsToggleLocal(name, enabled) {
@@ -3714,19 +3727,49 @@ function _skillsRenderMine() {
       </div>`;
     return;
   }
-  box.innerHTML = skills.map(s => `
-    <div class="skills-list-item" onclick="_skillsOpenFromMine('${esc(s.id || '')}')">
+  box.innerHTML = skills.map(s => {
+    const id = esc(s.id || '');
+    const v  = Number(s.version || 1);
+    const lv = Number(s.localVersion || 0);
+    const author = (s.displayName && s.displayName !== (s.name || ''))
+      ? `<span class="skills-mine-author">作者：${esc(s.displayName)}</span>` : '';
+    let status;
+    if (!s.isLocal) {
+      status = `<span class="skills-mine-version">最新 v${v}</span>`
+             + `<button class="skills-sync-btn" onclick="event.stopPropagation();skillsSyncOne('${id}')">同步</button>`;
+    } else if (lv < v) {
+      status = `<span class="skills-mine-version">本地 v${lv} · 最新 v${v}</span>`
+             + `<button class="skills-sync-btn" onclick="event.stopPropagation();skillsSyncOne('${id}')">同步到最新</button>`;
+    } else {
+      status = `<span class="skills-synced-badge">✓ 已是最新 v${v}</span>`;
+    }
+    return `
+    <div class="skills-list-item" onclick="_skillsOpenFromMine('${id}')">
       <div class="skills-list-item-info">
         <div class="skills-list-item-name">${esc(s.name || s.displayName || '')}</div>
         <div class="skills-list-item-desc">${esc(s.description || '')}</div>
+        ${author}
       </div>
-      <div class="skills-mine-status">
-        ${s.isLocal
-          ? '<span class="skills-synced-badge">✓ 已同步</span>'
-          : '<span class="skills-unsynced-badge">未同步</span>'}
-      </div>
-    </div>
-  `).join('');
+      <div class="skills-mine-status">${status}</div>
+    </div>`;
+  }).join('');
+}
+
+// Re-pull a single subscribed skill to its latest version, then refresh the
+// 我的订阅 tab so the row flips to「✓ 已是最新」.
+async function skillsSyncOne(id) {
+  try {
+    const r = await api('/api/skills/sync-one', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    });
+    if (r && r.ok === false) { setStatus('同步失败: ' + (r.error || '')); return; }
+    setStatus('已同步到最新' + (r && r.version ? ' v' + r.version : ''));
+    _skillsState.mineLoaded = false;
+    await _skillsLoadMine();
+  } catch (e) {
+    setStatus('同步失败: ' + (e && e.message ? e.message : e));
+  }
 }
 
 // ── Detail view ─────────────────────────────────────────────────────────
