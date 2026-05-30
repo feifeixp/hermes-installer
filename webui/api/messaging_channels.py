@@ -173,3 +173,110 @@ def is_platform_enabled(platform: str) -> bool:
         return False
     section = platforms.get(platform)
     return bool(isinstance(section, dict) and section.get("enabled"))
+
+
+def _mask_secret(value: str | None) -> str:
+    """Mask a credential for display: keep a short visible prefix, hide the rest.
+
+    - Empty / None → "" (nothing to show).
+    - Short values (<= 6 chars) → "***" (no safe prefix to reveal).
+    - Otherwise → first 6 chars + "***".
+    """
+    if not value:
+        return ""
+    if len(value) <= 6:
+        return "***"
+    return value[:6] + "***"
+
+
+def get_channels_status() -> dict:
+    """Snapshot of each messaging channel for the WebUI (no plaintext secrets).
+
+    Returns a dict keyed by platform name. Each entry reports whether the
+    channel is connected and surfaces masked, non-sensitive identifiers so
+    the UI can show "linked as cli_ab***" without ever leaking the secret.
+
+    - weixin: connected when WEIXIN_ACCOUNT_ID is set, the platform is
+      enabled, and a matching account file exists under
+      ~/.hermes/weixin/accounts/<id>.json.
+    - feishu / wecom: connected when both id + secret env vars are present
+      and the platform is enabled.
+    """
+    env = _parse_env()
+
+    weixin_account_id = env.get("WEIXIN_ACCOUNT_ID", "")
+    weixin_account_file = (
+        _hermes_home() / "weixin" / "accounts" / f"{weixin_account_id}.json"
+    )
+    weixin_connected = bool(
+        weixin_account_id
+        and is_platform_enabled("weixin")
+        and weixin_account_file.exists()
+    )
+
+    feishu_app_id = env.get("FEISHU_APP_ID", "")
+    feishu_secret = env.get("FEISHU_APP_SECRET", "")
+    feishu_connected = bool(
+        feishu_app_id and feishu_secret and is_platform_enabled("feishu")
+    )
+
+    wecom_bot_id = env.get("WECOM_BOT_ID", "")
+    wecom_secret = env.get("WECOM_SECRET", "")
+    wecom_connected = bool(
+        wecom_bot_id and wecom_secret and is_platform_enabled("wecom")
+    )
+
+    return {
+        "weixin": {
+            "connected": weixin_connected,
+            "enabled": is_platform_enabled("weixin"),
+            "account_id": weixin_account_id,
+        },
+        "feishu": {
+            "connected": feishu_connected,
+            "enabled": is_platform_enabled("feishu"),
+            "app_id_masked": _mask_secret(feishu_app_id),
+            "has_secret": bool(feishu_secret),
+        },
+        "wecom": {
+            "connected": wecom_connected,
+            "enabled": is_platform_enabled("wecom"),
+            "bot_id_masked": _mask_secret(wecom_bot_id),
+            "has_secret": bool(wecom_secret),
+        },
+    }
+
+
+def connect_feishu(*, app_id: str, app_secret: str) -> None:
+    """Write Feishu credentials + enable platform. Blank app_secret means
+    'keep existing' (so users can update app_id without re-typing the secret)."""
+    app_id = (app_id or "").strip()
+    if not app_id:
+        raise ValueError("FEISHU_APP_ID is required")
+    updates = {"FEISHU_APP_ID": app_id, "FEISHU_CONNECTION_MODE": "websocket"}
+    if (app_secret or "").strip():
+        updates["FEISHU_APP_SECRET"] = app_secret.strip()
+    _upsert_env_vars(updates)
+    set_platform_enabled("feishu", True)
+
+
+def disconnect_feishu() -> None:
+    _remove_env_vars(["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_CONNECTION_MODE"])
+    set_platform_enabled("feishu", False)
+
+
+def connect_wecom(*, bot_id: str, secret: str) -> None:
+    """Write WeCom credentials + enable platform. Blank secret = keep existing."""
+    bot_id = (bot_id or "").strip()
+    if not bot_id:
+        raise ValueError("WECOM_BOT_ID is required")
+    updates = {"WECOM_BOT_ID": bot_id}
+    if (secret or "").strip():
+        updates["WECOM_SECRET"] = secret.strip()
+    _upsert_env_vars(updates)
+    set_platform_enabled("wecom", True)
+
+
+def disconnect_wecom() -> None:
+    _remove_env_vars(["WECOM_BOT_ID", "WECOM_SECRET"])
+    set_platform_enabled("wecom", False)

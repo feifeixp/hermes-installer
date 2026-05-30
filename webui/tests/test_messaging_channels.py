@@ -137,3 +137,59 @@ def test_get_channels_status_weixin_connected(isolated_home):
     status = mc.get_channels_status()
     assert status["weixin"]["connected"] is True
     assert status["weixin"]["account_id"] == "acc_123"
+
+
+def test_connect_feishu_writes_env_and_enables(isolated_home):
+    mc.connect_feishu(app_id="cli_x", app_secret="sec_y")
+    env = mc._parse_env()
+    assert env["FEISHU_APP_ID"] == "cli_x"
+    assert env["FEISHU_APP_SECRET"] == "sec_y"
+    assert env["FEISHU_CONNECTION_MODE"] == "websocket"
+    assert mc.is_platform_enabled("feishu") is True
+
+
+def test_connect_feishu_blank_secret_keeps_existing(isolated_home):
+    mc.connect_feishu(app_id="cli_x", app_secret="orig")
+    mc.connect_feishu(app_id="cli_x2", app_secret="")  # blank = keep
+    env = mc._parse_env()
+    assert env["FEISHU_APP_ID"] == "cli_x2"
+    assert env["FEISHU_APP_SECRET"] == "orig"
+
+
+def test_connect_feishu_requires_app_id(isolated_home):
+    with pytest.raises(ValueError):
+        mc.connect_feishu(app_id="", app_secret="s")
+
+
+def test_disconnect_feishu(isolated_home):
+    mc.connect_feishu(app_id="cli_x", app_secret="sec")
+    mc.disconnect_feishu()
+    env = mc._parse_env()
+    assert "FEISHU_APP_ID" not in env
+    assert "FEISHU_APP_SECRET" not in env
+    assert mc.is_platform_enabled("feishu") is False
+
+
+def test_connect_wecom_writes_env_and_enables(isolated_home):
+    mc.connect_wecom(bot_id="bot_x", secret="sec_y")
+    env = mc._parse_env()
+    assert env["WECOM_BOT_ID"] == "bot_x"
+    assert env["WECOM_SECRET"] == "sec_y"
+    assert mc.is_platform_enabled("wecom") is True
+
+
+def test_connect_wecom_blank_secret_keeps_existing(isolated_home):
+    mc.connect_wecom(bot_id="bot_x", secret="orig")
+    mc.connect_wecom(bot_id="bot_x2", secret="")
+    env = mc._parse_env()
+    assert env["WECOM_BOT_ID"] == "bot_x2"
+    assert env["WECOM_SECRET"] == "orig"
+
+
+def test_disconnect_wecom(isolated_home):
+    mc.connect_wecom(bot_id="bot_x", secret="sec")
+    mc.disconnect_wecom()
+    env = mc._parse_env()
+    assert "WECOM_BOT_ID" not in env
+    assert "WECOM_SECRET" not in env
+    assert mc.is_platform_enabled("wecom") is False
