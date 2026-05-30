@@ -5213,6 +5213,25 @@ def handle_get(handler, parsed) -> bool:
         )
 
     # ── Gateway Status (GET) ──
+    if parsed.path == "/api/messaging/channels":
+        from api import messaging_channels as _mc
+        try:
+            return j(handler, _mc.get_channels_status())
+        except Exception as exc:
+            logger.exception("messaging channels status failed")
+            return j(handler, {"error": str(exc)}, status=500)
+
+    if parsed.path == "/api/messaging/weixin/qr/status":
+        from api import messaging_channels as _mc
+        token = parse_qs(parsed.query).get("token", [""])[0].strip()
+        if not token:
+            return bad(handler, "token required", 400)
+        try:
+            return j(handler, _mc.weixin_qr_status(token))
+        except Exception as exc:
+            logger.exception("messaging weixin qr status failed")
+            return j(handler, {"status": "error", "reason": str(exc)}, status=500)
+
     if parsed.path == "/api/gateway/status":
         import datetime
         identity_map = _load_gateway_session_identity_map()
