@@ -24,6 +24,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 let _serverAdminPollTimer = null;
+let _serverAdminLiveTimer = null;
 let _serverAdminBusy      = false;
 
 function _saToast(msg, isError = false) {
@@ -52,6 +53,27 @@ function _saStateBadge(state) {
     <span style="width:6px;height:6px;border-radius:50%;background:${s.color}"></span>
     ${s.text}
   </span>`;
+}
+
+function _saFormatDuration(ms) {
+  // Returns localized strings via t() — see server_admin_duration_*
+  // keys in i18n.js. Pure: no DOM access, no time math beyond ms math.
+  if (ms < 60_000)      return t('server_admin_duration_less_than_minute');
+  if (ms < 3_600_000)   return t('server_admin_duration_minutes', { n: Math.floor(ms / 60_000) });
+  if (ms < 86_400_000) {
+    const h = Math.floor(ms / 3_600_000);
+    const m = Math.floor((ms % 3_600_000) / 60_000);
+    return m === 0
+      ? t('server_admin_duration_hours', { n: h })
+      : t('server_admin_duration_hours', { n: h }) + ' ' +
+        t('server_admin_duration_minutes', { n: m });
+  }
+  const d = Math.floor(ms / 86_400_000);
+  const h = Math.floor((ms % 86_400_000) / 3_600_000);
+  return h === 0
+    ? t('server_admin_duration_days',  { n: d })
+    : t('server_admin_duration_days',  { n: d }) + ' ' +
+      t('server_admin_duration_hours', { n: h });
 }
 
 function _saFmtTime(iso) {
@@ -150,6 +172,29 @@ function _saRenderStatus(s) {
           <tr><td>创建时间</td><td>${_saFmtTime(s.createdAt)}</td></tr>
           <tr><td>最后心跳</td><td>${_saFmtTime(s.lastHeartbeatAt)}</td></tr>
         </table>
+        ${(state === 'stopped' && s.stoppedAt) ? `
+          <div class="server-admin-stopped-extension" data-server-admin-live="1"
+               style="margin-top:14px;padding:12px;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--border);">
+            <div style="font-weight:600;margin-bottom:4px">
+              ${escapeHtml(t('server_admin_stopped_duration', { duration: _saFormatDuration(s.stoppedMs || 0) }))}
+            </div>
+            ${s.estimatedNewExpiresAt ? `
+              <div style="font-size:12px;color:var(--muted)">
+                ${escapeHtml(t('server_admin_estimated_new_expiry', {
+                  date:     _saFmtTime(s.estimatedNewExpiresAt),
+                  duration: _saFormatDuration(s.stoppedMs || 0),
+                }))}
+              </div>` : ''}
+          </div>
+        ` : ''}
+        ${(state === 'running' && (s.extendedByMs || 0) > 0) ? `
+          <div class="server-admin-cycle-extended"
+               style="margin-top:12px;font-size:12px;color:var(--muted)">
+            ${escapeHtml(t('server_admin_extended_by_this_cycle', {
+              duration: _saFormatDuration(s.extendedByMs),
+            }))}
+          </div>
+        ` : ''}
       </div>
     </div>`;
 
@@ -164,6 +209,25 @@ function _saRenderStatus(s) {
   // Poll while in transient states so the panel updates without a manual refresh.
   if (state === 'spawning' || state === 'cloud_init') {
     _serverAdminPollTimer = setTimeout(serverAdminLoad, 4000);
+  }
+
+  // Live re-render: when the stopped-duration block is on-screen, advance
+  // "已停机 X" + "启动时延长至 Y" every 30s without re-fetching status.
+  // We re-derive stoppedMs locally from stoppedAt; estimatedNewExpiresAt
+  // is recomputed from the cached plan.expiresAt baseline.
+  if (_serverAdminLiveTimer) { clearInterval(_serverAdminLiveTimer); _serverAdminLiveTimer = null; }
+  if (state === 'stopped' && s.stoppedAt) {
+    const baselineExpiry = s.estimatedNewExpiresAt && s.stoppedMs != null
+      ? Date.parse(s.estimatedNewExpiresAt) - s.stoppedMs   // recover plan.expiresAt baseline
+      : null;
+    _serverAdminLiveTimer = setInterval(() => {
+      const liveMs = Date.now() - Date.parse(s.stoppedAt);
+      if (liveMs <= 0) return;
+      const liveEstimated = baselineExpiry != null
+        ? new Date(baselineExpiry + liveMs).toISOString()
+        : null;
+      _saRenderStatus({ ...s, stoppedMs: liveMs, estimatedNewExpiresAt: liveEstimated });
+    }, 30_000);
   }
 }
 
@@ -200,8 +264,15 @@ async function serverAdminStart() {
   _serverAdminBusy = true;
   _saToast('正在启动…');
   try {
-    await _saPost('/api/neowow/instance/start');
-    _saToast('启动指令已发送');
+    const resp = await _saPost('/api/neowow/instance/start');
+    if (resp && resp.extendedBy && resp.extendedBy.ms > 0) {
+      _saToast(t('server_admin_start_success_extended', {
+        duration: _saFormatDuration(resp.extendedBy.ms),
+        date:     _saFmtTime(resp.newExpiresAt),
+      }));
+    } else {
+      _saToast(t('server_admin_start_success_no_extend'));
+    }
     await serverAdminLoad();
   } catch (e) {
     _saToast('启动失败:' + e.message, true);
@@ -313,4 +384,5 @@ function escapeHtml(s) {
 // Cancel any pending poll when the user navigates away from the panel.
 window.addEventListener('beforeunload', () => {
   if (_serverAdminPollTimer) clearTimeout(_serverAdminPollTimer);
+  if (_serverAdminLiveTimer) clearInterval(_serverAdminLiveTimer);
 });
