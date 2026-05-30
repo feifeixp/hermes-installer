@@ -4839,6 +4839,14 @@ def handle_get(handler, parsed) -> bool:
             logger.exception("neowow update-notice failed")
             return j(handler, {"available": False})
 
+    # Cloud graceful-update: has the host apply-watcher staged a newer image?
+    # Drives the「立即更新」banner. {available: bool, ...}. available:false
+    # off-cloud (no control dir) — desktop installs never show the button.
+    if parsed.path == "/api/neowow/update-available":
+        from api.self_update import read_update_available
+        info = read_update_available()
+        return j(handler, {"available": bool(info), **(info or {})})
+
     # ════════════════════════════════════════════════════════════════════
     # END: Neowow integration — GET routes
     # ════════════════════════════════════════════════════════════════════
@@ -7223,6 +7231,13 @@ def handle_post(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("neowow instance stop failed")
             return bad(handler, str(e), status=500)
+
+    # Cloud graceful-update: user clicked「立即更新」. Records the request in
+    # the control dir; the host apply-watcher recreates the container within
+    # its next tick. No body. {ok, message} or {ok:false} off-cloud.
+    if parsed.path == "/api/neowow/apply-update":
+        from api.self_update import request_apply
+        return j(handler, request_apply())
 
     if parsed.path == "/api/neowow/cloud-apply":
         # No body — pulls the active cloud config and writes it into
