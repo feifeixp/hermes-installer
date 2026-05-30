@@ -150,6 +150,9 @@ write_files:
             - /var/lib/hermes-state:/opt/hermes/.hermes
             - hermes_venv:/app/venv
             - hermes_uv_cache:/uv_cache
+            # Graceful-update control channel (host↔container). chown'd to the
+            # container's hermes uid (1500) by runcmd before this starts.
+            - /opt/hermes-docker/control:/opt/hermes/control
           expose: ["7891"]
           networks: [hermes]
           healthcheck:
@@ -211,14 +214,26 @@ write_files:
     content: |
       CLOUDFLARE_API_TOKEN=%CLOUDFLARE_API_TOKEN%
 
-  # Hourly auto-update cron — same as Phase 1 chat.neowow.studio.
+  # Hourly cron — STAGE new images only (pull). The actual recreate is done
+  # by the apply-watcher below, only when it's safe (user-confirmed or idle),
+  # so a new image never hard-restarts an active user mid-session.
   - path: /etc/cron.d/hermes-auto-update
     permissions: '0644'
     content: |
       SHELL=/bin/bash
       PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-      0 * * * * root cd /opt/hermes-docker && echo "=== $(date -Iseconds) ===" >> /var/log/hermes-update.log && /usr/bin/docker compose pull >> /var/log/hermes-update.log 2>&1 && /usr/bin/docker compose up -d >> /var/log/hermes-update.log 2>&1
+      0 * * * * root cd /opt/hermes-docker && echo "=== $(date -Iseconds) pull ===" >> /var/log/hermes-update.log && /usr/bin/docker compose pull >> /var/log/hermes-update.log 2>&1
+
+  # Apply-watcher cron — every 2 min, recreate to a staged image ONLY when
+  # safe. See /opt/hermes-docker/apply-update.sh (curl'd in runcmd).
+  - path: /etc/cron.d/hermes-apply-update
+    permissions: '0644'
+    content: |
+      SHELL=/bin/bash
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+      */2 * * * * root /opt/hermes-docker/apply-update.sh >> /var/log/hermes-update.log 2>&1
 
   # ── M2: OSS state sync configuration ─────────────────────────────────
   # Read by /opt/hermes-docker/oss-sync.sh. Cred values substituted by
@@ -361,6 +376,12 @@ runcmd:
   # — the image actually uses uid 1500 / gid 999 (not the typical 1000),
   # and may shift again on future image rebuilds. Auto-detect is safer.
   - [bash, -c, "if [ -z \"$(ls -A /var/lib/hermes-state 2>/dev/null)\" ]; then echo 'Seeding /var/lib/hermes-state from image baseline...'; docker run --rm --user root -v /var/lib/hermes-state:/dst %IMAGE% bash -c 'UID_H=$(id -u hermes); GID_H=$(id -g hermes); cp -ar /opt/hermes/.hermes/. /dst/ && chown -R ${UID_H}:${GID_H} /dst && echo \"chowned to ${UID_H}:${GID_H}\"' && echo 'Seed complete.'; else echo 'hermes-state already populated, skipping image seed.'; fi"]
+
+  # ── Graceful-update apply-watcher script + control dir. The control dir
+  # ── must exist and be writable by the container's hermes user (uid 1500 /
+  # ── gid 999) BEFORE compose up, since it's bind-mounted into the WebUI.
+  - [bash, -c, "curl -fsSL --retry 3 https://raw.githubusercontent.com/feifeixp/hermes-installer/main/docker/apply-update.sh -o /opt/hermes-docker/apply-update.sh && chmod +x /opt/hermes-docker/apply-update.sh"]
+  - [bash, -c, "mkdir -p /opt/hermes-docker/control && chown 1500:999 /opt/hermes-docker/control 2>/dev/null || chmod 0777 /opt/hermes-docker/control"]
 
   # ── Bring the stack up. compose internally waits for hermes-webui
   # ── to be healthy before starting Caddy (depends_on condition).

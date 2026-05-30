@@ -1890,11 +1890,77 @@
     } catch (_) { /* ignore */ }
   }
 
+  // ── Cloud graceful-update banner ────────────────────────────────────
+  // The host apply-watcher stages a new image and writes control/update-available;
+  // we poll it and offer「立即更新」. Idle instances auto-update host-side anyway —
+  // this just lets an active user apply it now. available:false off-cloud (no
+  // control dir) → banner never shows on desktop.
+  async function _neowowCheckGracefulUpdate() {
+    try {
+      const r = await fetch('/api/neowow/update-available', { cache: 'no-store' });
+      if (!r.ok) return;
+      const data = await r.json();
+      const b = $('neowowGracefulBanner');
+      if (!data.available) { if (b) b.style.display = 'none'; return; }
+      _showGracefulUpdateBanner();
+    } catch (_) { /* ignore — offline / not ready */ }
+  }
+
+  function _showGracefulUpdateBanner() {
+    if (sessionStorage.getItem('neowow-graceful-dismissed') === '1') return;
+    let banner = $('neowowGracefulBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'neowowGracefulBanner';
+      banner.style.cssText = [
+        'display:flex', 'align-items:center', 'gap:12px', 'padding:10px 16px',
+        'background:linear-gradient(90deg,rgba(94,96,206,0.18),rgba(94,96,206,0.10))',
+        'border-bottom:1px solid rgba(94,96,206,0.35)', 'font-size:13px',
+        'color:var(--text)', 'z-index:100',
+      ].join(';');
+      const upstream = $('updateBanner');
+      if (upstream && upstream.parentNode) upstream.parentNode.insertBefore(banner, upstream);
+      else document.body.prepend(banner);
+    }
+    banner.innerHTML = `
+      <span style="font-size:18px;flex-shrink:0">🚀</span>
+      <span style="flex:1;min-width:0;line-height:1.6">
+        <strong style="color:var(--accent,#5e60ce)">有新版本可用</strong>
+        — 空闲时会自动更新；也可立即更新（约 1–2 分钟，期间会短暂重连）。
+      </span>
+      <button onclick="neowowApplyUpdate(this)"
+        style="flex-shrink:0;padding:4px 12px;border-radius:5px;border:1px solid rgba(94,96,206,0.5);background:linear-gradient(135deg,rgba(94,96,206,0.25),rgba(94,96,206,0.12));color:var(--text);cursor:pointer;font-size:12px;font-weight:600">立即更新</button>
+      <button onclick="document.getElementById('neowowGracefulBanner').style.display='none';sessionStorage.setItem('neowow-graceful-dismissed','1');"
+        style="flex-shrink:0;padding:4px 10px;border-radius:5px;border:1px solid rgba(94,96,206,0.4);background:transparent;color:var(--text);cursor:pointer;font-size:12px">稍后</button>`;
+    banner.style.display = 'flex';
+  }
+
+  window.neowowApplyUpdate = async function(btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '更新中…'; }
+    try {
+      const r = await fetch('/api/neowow/apply-update', { method: 'POST' });
+      const data = await r.json().catch(() => ({}));
+      if (data && data.ok === false) {
+        if (btn) { btn.disabled = false; btn.textContent = '立即更新'; }
+        alert('更新触发失败：' + (data.error || ''));
+        return;
+      }
+      const banner = $('neowowGracefulBanner');
+      if (banner) banner.innerHTML = '<span style="padding:10px 16px">🚀 正在更新，约 1–2 分钟后会自动重连…</span>';
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = '立即更新'; }
+    }
+  };
+
   document.addEventListener('DOMContentLoaded', async () => {
     // Delay slightly so the main boot flow finishes first
     setTimeout(_patchedRefreshRailAvatar, 800);
     // Re-check every 30 minutes in long-running tabs
     setInterval(_neowowCheckUpdateNotice, 30 * 60 * 1000);
+    // Cloud graceful-update: poll faster (cheap local read) so the banner
+    // appears within ~1 min of a staged image.
+    setTimeout(_neowowCheckGracefulUpdate, 1500);
+    setInterval(_neowowCheckGracefulUpdate, 60 * 1000);
   });
 
   // Expose for testing / manual trigger in devtools

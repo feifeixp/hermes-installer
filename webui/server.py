@@ -386,6 +386,12 @@ class Handler(BaseHTTPRequestHandler):
             'ms': duration_ms,
         })
         print(f'[webui] {record}', flush=True)
+        # Feed the graceful-update idle detector (skips /health + the poll path).
+        try:
+            from api.self_update import note_activity
+            note_activity(getattr(self, 'path', '') or '')
+        except Exception:
+            pass
 
     def do_GET(self) -> None:
         self._req_t0 = time.time()
@@ -759,6 +765,31 @@ def main() -> None:
         daemon=True,
         name="periodic-skill-sync",
     ).start()
+
+    # ── Graceful-update activity writer ────────────────────────────────────
+    # On cloud (single-container docker), write this instance's activity to the
+    # bind-mounted control dir every 30s so the host apply-watcher can decide
+    # whether it's safe to recreate the container for an update (see
+    # api/self_update.py + docker/apply-update.sh). No-op off-cloud.
+    if os.path.exists('/.within_container'):
+        def _activity_writer_loop():
+            import time as _time
+            from api.self_update import write_activity, last_activity_ts
+            try:
+                from api.background import has_any_running_task
+            except ImportError:
+                def has_any_running_task():
+                    return False
+            while True:
+                try:
+                    write_activity(last_activity_ts(), has_any_running_task())
+                except Exception as exc:
+                    logger.debug("[self-update] activity write error: %s", exc)
+                _time.sleep(30)
+
+        _threading.Thread(
+            target=_activity_writer_loop, daemon=True, name="self-update-activity",
+        ).start()
 
     try:
         httpd.serve_forever()
