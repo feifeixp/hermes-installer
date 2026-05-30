@@ -91,6 +91,11 @@ a = Analysis(
         # "patch script not found ... skipping" and chat dispatch later
         # fails with "Unknown provider 'neowow-coding-plan'".
         + ([("docker/patch_hermes_agent.py", "docker")] if Path("docker/patch_hermes_agent.py").exists() else [])
+        # default_personalities.py: the 16-persona roster patch_hermes_agent.py
+        # imports to seed DEFAULT_CONFIG["personalities"]. Must ship alongside
+        # the patch script or desktop installs silently get no default personas
+        # (the import returns {} → graceful no-op, but no personalities seeded).
+        + ([("docker/default_personalities.py", "docker")] if Path("docker/default_personalities.py").exists() else [])
         # _meta.py: ship as a data file (not just inside the PYZ archive) so
         # webui/api/__init__.py can load it via importlib in the venv
         # subprocess, which has no access to the frozen exe's PYZ.

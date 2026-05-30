@@ -38,6 +38,7 @@ just points at a different base_url and uses a different env var name.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -75,6 +76,15 @@ _PROVIDERS_PY_INJECT = '''    "neowow-coding-plan": HermesOverlay(
 
 _LABEL_OVERRIDE_MARKER = '"neowow-coding-plan":'
 _LABEL_OVERRIDE_INJECT = '    "neowow-coding-plan": "Neowow Coding Plan",\n'
+
+# Marker grepped to detect "default personalities already injected" into
+# hermes-agent's DEFAULT_CONFIG. We replace the upstream empty
+# `"personalities": {}` with our seeded roster; the marker is the first
+# persona key so re-runs are idempotent. See docker/default_personalities.py.
+_PERSONALITIES_MARKER = '"jianglan":'
+# Upstream DEFAULT_CONFIG ships personalities empty. This is the exact
+# anchor line we replace (4-space indent, trailing comma).
+_PERSONALITIES_ANCHOR = '    "personalities": {},'
 
 
 # ─── Patch logic ────────────────────────────────────────────────────────────
@@ -214,6 +224,75 @@ def _patch_providers_py(agent_dir: Path) -> bool:
     return changed
 
 
+def _load_default_personalities() -> dict[str, str]:
+    """Read the bundled 16-persona roster from the sibling data module.
+
+    Lives in docker/default_personalities.py (same dir as this script).
+    Returns {} if it can't be imported so a missing/renamed data file
+    degrades to "no personalities injected" rather than crashing the
+    whole patch run (provider injection must still succeed)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from default_personalities import DEFAULT_PERSONALITIES  # type: ignore
+        if isinstance(DEFAULT_PERSONALITIES, dict) and DEFAULT_PERSONALITIES:
+            return {str(k): str(v) for k, v in DEFAULT_PERSONALITIES.items()}
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[patch] WARN could not load default_personalities: {exc}")
+    return {}
+
+
+def _render_personalities_block(personalities: dict[str, str]) -> str:
+    """Render the dict as a Python source block that replaces the upstream
+    `    "personalities": {},` line. Uses json.dumps for safe escaping
+    (ensure_ascii=False keeps the Chinese readable in the patched file)."""
+    lines = ['    "personalities": {']
+    for key, val in personalities.items():
+        k = json.dumps(str(key), ensure_ascii=False)
+        v = json.dumps(str(val), ensure_ascii=False)
+        lines.append(f"        {k}: {v},")
+    lines.append("    },")
+    return "\n".join(lines)
+
+
+def _patch_config_py(agent_dir: Path) -> bool:
+    """Seed DEFAULT_CONFIG["personalities"] with the bundled roster.
+
+    Replaces upstream's empty `    "personalities": {},` line in
+    hermes_cli/config.py with the 16-persona block from
+    docker/default_personalities.py. Every fresh config.yaml then ships
+    with them, and the WebUI /api/personalities picker lists them.
+
+    Idempotent: if our first persona key is already present, skip.
+    Non-fatal: a missing roster / absent anchor returns False (no crash)
+    so provider injection — the must-have patch — still gates the build.
+    Returns True if changed."""
+    f = agent_dir / "hermes_cli" / "config.py"
+    if not f.exists():
+        print(f"[patch] SKIP {f} (not found)")
+        return False
+    src = f.read_text(encoding="utf-8")
+    if _PERSONALITIES_MARKER in src:
+        print(f"[patch] OK   {f.name} already has default personalities")
+        return False
+
+    personalities = _load_default_personalities()
+    if not personalities:
+        print(f"[patch] INFO {f.name}: no default personalities to inject")
+        return False
+
+    if _PERSONALITIES_ANCHOR not in src:
+        print(f"[patch] INFO {f.name}: '{_PERSONALITIES_ANCHOR.strip()}' anchor "
+              "not found — upstream may have changed it; skipping personalities")
+        return False
+
+    block = _render_personalities_block(personalities)
+    # Replace only the FIRST occurrence (the DEFAULT_CONFIG one).
+    new_src = src.replace(_PERSONALITIES_ANCHOR, block, 1)
+    f.write_text(new_src, encoding="utf-8")
+    print(f"[patch] DONE {f.name} (seeded {len(personalities)} default personalities)")
+    return True
+
+
 # ─── Entry ──────────────────────────────────────────────────────────────────
 
 def _verify_provider_registered(agent_dir: Path) -> tuple[bool, str]:
@@ -332,6 +411,14 @@ def main(argv: list[str] | None = None) -> int:
 
     changed_auth = _patch_auth_py(agent_dir)
     changed_prov = _patch_providers_py(agent_dir)
+    # Best-effort, non-gating: seed the default personality roster.
+    # A failure here must NOT abort the build — provider injection
+    # (verified below) is the only must-have.
+    try:
+        changed_pers = _patch_config_py(agent_dir)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[patch] WARN personalities injection raised (non-fatal): {exc}")
+        changed_pers = False
 
     # ── FAIL-HARD post-patch verification ───────────────────────────────
     # Previously this script returned 0 even when individual injects
@@ -368,8 +455,8 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         print(f"[patch] ✓ POST-PATCH VERIFY OK (import): {why_imp}")
 
-    if not (changed_auth or changed_prov):
-        print("[patch] No changes needed (provider already registered).")
+    if not (changed_auth or changed_prov or changed_pers):
+        print("[patch] No changes needed (provider + personalities already present).")
         return 0
     print("[patch] ✓ Patches applied + verified. hermes_cli resolves "
           "'neowow-coding-plan' on next import.")
