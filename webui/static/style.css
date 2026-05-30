@@ -4887,7 +4887,13 @@ main.main.showing-logs > #mainLogs{display:flex;}
 .skills-gated { padding: 20px; text-align: center; color: var(--muted); font-size: 13px; font-style: italic; }
 .skills-synced-badge { font-size: 11px; color: #4caf50; font-weight: 500; }
 .skills-unsynced-badge { font-size: 11px; color: var(--muted); }
-.skills-mine-status { flex-shrink: 0; }
+.skills-mine-status { flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
+.skills-mine-version { font-size: 11px; color: var(--muted); }
+.skills-mine-author { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); }
+.skills-sync-btn { font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; white-space: nowrap; }
+.skills-sync-btn:hover { background: var(--accent); color: #fff; }
+.skills-group-title { margin: 14px 4px 6px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.skills-group-title:first-child { margin-top: 4px; }
 
 /* Login prompt (mine tab when not logged in) */
 .skills-login-prompt {

@@ -681,6 +681,19 @@ def get_market_skill_detail(skill_id: str) -> dict[str, Any]:
         raise RuntimeError(f"Cannot reach neowow.studio: {e.reason}")
 
 
+def _local_skill_version(sid: str) -> int:
+    """Version of the locally-synced copy of <sid> (from _neowow.json).
+
+    0 when the skill isn't synced yet or the meta is missing/unreadable —
+    callers compare it against the cloud version to decide "needs sync".
+    """
+    meta = _read_local_meta(_neowow_dir() / sid)
+    try:
+        return int((meta or {}).get("version") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def get_mine_skills(handler=None) -> list[dict[str, Any]]:
     """GET /api/me/skills — authenticated, returns user's subscriptions."""
     auth = _get_auth_header(handler)  # raises ValueError if no token
@@ -731,6 +744,7 @@ def get_mine_skills(handler=None) -> list[dict[str, Any]]:
             "subscriberCount": int(s.get("subscriberCount") or 0),
             "updatedAt":      int(s.get("updatedAt") or 0),
             "isLocal":        sid in local_ids,
+            "localVersion":   _local_skill_version(sid),
             "isDismissed":    sid in dismissed,
             # Pass through the full content the dashboard already returned
             # for this subscriber. The detail view renders it directly so
@@ -970,6 +984,38 @@ def unsubscribe_skill(skill_id: str, handler=None) -> dict[str, Any]:
     return {"ok": True, "id": skill_id}
 
 
+def _post_sync_refresh() -> None:
+    """Rebuild the skills prompt + agent system_prompt after a write."""
+    _refresh_skills_prompt()
+    rebuild_skills_system_prompt()
+
+
+def sync_one_skill(
+    skill_id: str,
+    *,
+    fetch=_cloud_get_all,
+    write=_write_skill,
+    refresh=_post_sync_refresh,
+) -> dict[str, Any]:
+    """Re-pull a single subscribed skill to its latest version and write it
+    locally. Used by the per-row「同步到最新」button. fetch/write/refresh are
+    injectable for tests (no network). Returns {ok, ...}."""
+    if not _is_valid_skill_id(skill_id):
+        return {"ok": False, "error": f"Invalid skill id: {skill_id!r}"}
+    skills = fetch()
+    target = next((s for s in skills if s.get("id") == skill_id), None)
+    if not target:
+        return {"ok": False, "error": f"{skill_id} not found in your subscriptions"}
+    write(target)
+    refresh()
+    return {
+        "ok":      True,
+        "id":      skill_id,
+        "name":    str(target.get("name") or skill_id),
+        "version": int(target.get("version") or 1),
+    }
+
+
 def toggle_local_skill(name: str, enabled: bool) -> dict[str, Any]:
     """Enable or disable a local skill by updating config.yaml skills.disabled list."""
     try:
@@ -1027,6 +1073,7 @@ __all__ = (
     "get_mine_skills",
     "subscribe_skill",
     "unsubscribe_skill",
+    "sync_one_skill",
     "toggle_local_skill",
 )
 

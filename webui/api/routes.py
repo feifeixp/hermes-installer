@@ -217,6 +217,28 @@ def _skill_category_from_path(skill_md: Path, skills_dirs: list[Path]) -> str | 
     return None
 
 
+def _subscribed_meta(skill_dir: Path) -> dict:
+    """For a `_neowow/<id>` skill dir, read `_neowow.json` → {title, author}.
+
+    Empty dict when the meta is absent or unreadable, so callers fall back to
+    the slug name. Lets「技能列表」show the human name + author for subscribed
+    skills (whose SKILL.md frontmatter `name` is the slug)."""
+    try:
+        data = json.loads((skill_dir / "_neowow.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict = {}
+    title = str(data.get("name") or "").strip()
+    author = str(data.get("displayName") or "").strip()
+    if title:
+        out["title"] = title
+    if author:
+        out["author"] = author
+    return out
+
+
 def _active_skill_search_dirs(skills_dir: Path) -> list[Path]:
     dirs = [skills_dir]
     try:
@@ -310,14 +332,23 @@ def _skills_list_from_dir(skills_dir: Path, category: str | None = None) -> dict
                 if len(description) > MAX_DESCRIPTION_LENGTH:
                     description = description[: MAX_DESCRIPTION_LENGTH - 3] + "..."
                 seen_names.add(name)
-                all_skills.append(
-                    {
-                        "name": name,
-                        "description": description,
-                        "category": _skill_category_from_path(skill_md, search_dirs),
-                        "disabled": name in disabled,
-                    }
-                )
+                category = _skill_category_from_path(skill_md, search_dirs)
+                entry = {
+                    "name": name,
+                    "description": description,
+                    "category": category,
+                    "disabled": name in disabled,
+                }
+                # Subscribed skills live under _neowow/<id>/. Tag the source so
+                # the UI can group them, and surface the human name + author
+                # (the frontmatter `name` is the slug). `name` stays the slug —
+                # it's the toggle / skill-view key.
+                if category == "_neowow":
+                    entry["source"] = "subscribed"
+                    entry.update(_subscribed_meta(skill_dir))
+                else:
+                    entry["source"] = "local"
+                all_skills.append(entry)
             except (UnicodeDecodeError, PermissionError) as e:
                 logger.debug("Failed to read skill file %s: %s", skill_md, e)
             except Exception as e:
@@ -7296,6 +7327,23 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e), status=502)
         except Exception as e:
             logger.exception("skills/unsubscribe failed")
+            return bad(handler, str(e), status=500)
+
+    # Re-pull a single subscribed skill to its latest version into _neowow/.
+    # Used by the per-row「同步到最新」button. Body: { "id": "skill-abc123" }
+    if parsed.path == "/api/skills/sync-one":
+        skill_id = (body or {}).get("id", "")
+        if not skill_id:
+            return bad(handler, "id is required")
+        from api.skills import sync_one_skill
+        try:
+            return j(handler, sync_one_skill(skill_id))
+        except ValueError as e:
+            return bad(handler, str(e), status=400)
+        except RuntimeError as e:
+            return bad(handler, str(e), status=502)
+        except Exception as e:
+            logger.exception("skills/sync-one failed")
             return bad(handler, str(e), status=500)
 
     # Enable/disable a local skill. Updates config.yaml skills.disabled list.
