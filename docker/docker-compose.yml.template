@@ -127,6 +127,11 @@ services:
       # Persistent state: sessions DB, configs, agent skills, OAuth state.
       # Survives container recreate / image upgrade.
       - hermes_state:/opt/hermes/.hermes
+      # Graceful-update control channel (host↔container). The WebUI writes
+      # activity.json / apply-requested here; the host apply-watcher
+      # (apply-update.sh) reads them + writes update-available. Host dir is
+      # chown'd to the container's hermes uid (1500) by bootstrap/cloud-init.
+      - /opt/hermes-docker/control:/opt/hermes/control
     expose:
       - "7891"
     networks:

@@ -109,14 +109,16 @@ def should_apply(
 
     Truth table (the shell watcher mirrors this):
       - user clicked「立即更新」            → yes
-      - no activity signal at all           → yes (treat as idle)
+      - no activity signal at all           → no (conservative: a missing
+        signal might mean the writer is broken, not that nobody's here —
+        don't risk interrupting; the user can still force via「立即更新」)
       - an agent/background task is running → no
       - else: applied iff quiet ≥ idle_secs
     """
     if apply_requested:
         return True
     if activity is None:
-        return True
+        return False
     if activity.get("busy"):
         return False
     try:

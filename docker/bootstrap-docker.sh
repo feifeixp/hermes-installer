@@ -147,22 +147,42 @@ cat > .env <<EOF
 HERMES_WEBUI_IMAGE=${HERMES_WEBUI_IMAGE}
 EOF
 
-# ── Auto-update via cron ─────────────────────────────────────────────────────
-# Drops /etc/cron.d/hermes-auto-update so the system runs `docker compose
-# pull && docker compose up -d` every hour. Old approach used Watchtower
-# but that container's bundled Docker SDK was too old (API 1.25) for
-# modern daemons (24+ require minimum 1.40) — see commit c8b265c / abandoned
-# in the next commit.
-echo "→ Installing /etc/cron.d/hermes-auto-update (hourly check)..."
+# ── Graceful auto-update via cron ────────────────────────────────────────────
+# Two crons replace the old hourly `pull && up -d` (which hard-restarted the
+# container mid-session whenever a new image appeared):
+#   • hourly   hermes-auto-update   — `docker compose pull` ONLY (stages the
+#                                      new image, never restarts).
+#   • */2 min  hermes-apply-update  — apply-update.sh recreates the container
+#                                      ONLY when safe: the user clicked
+#                                      「立即更新」, or the instance is idle.
+# See docker/apply-update.sh + webui/api/self_update.py.
+echo "→ Installing graceful-update watcher + control dir..."
+curl -fsSL --max-time 15 "${TEMPLATE_BASE}/apply-update.sh" -o "$DEPLOY_DIR/apply-update.sh"
+chmod 0755 "$DEPLOY_DIR/apply-update.sh"
+# Control channel dir, writable by the container's hermes user (uid 1500).
+mkdir -p "$DEPLOY_DIR/control"
+chown 1500:1500 "$DEPLOY_DIR/control" 2>/dev/null || chmod 0777 "$DEPLOY_DIR/control"
+
 cat > /etc/cron.d/hermes-auto-update <<'EOF'
-# Auto-update Hermes WebUI hourly. Installed by bootstrap-docker.sh.
-# Logs to /var/log/hermes-update.log.
+# Stage new Hermes WebUI images hourly (pull only — does NOT restart).
+# Installed by bootstrap-docker.sh. Logs to /var/log/hermes-update.log.
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-0 * * * * root cd /opt/hermes-docker && echo "=== $(date -Iseconds) ===" >> /var/log/hermes-update.log && /usr/bin/docker compose pull >> /var/log/hermes-update.log 2>&1 && /usr/bin/docker compose up -d >> /var/log/hermes-update.log 2>&1
+0 * * * * root cd /opt/hermes-docker && echo "=== $(date -Iseconds) pull ===" >> /var/log/hermes-update.log && /usr/bin/docker compose pull >> /var/log/hermes-update.log 2>&1
 EOF
 chmod 0644 /etc/cron.d/hermes-auto-update
+
+cat > /etc/cron.d/hermes-apply-update <<'EOF'
+# Apply staged updates when safe (user-confirmed or idle). Every 2 minutes.
+# Installed by bootstrap-docker.sh. Logs to /var/log/hermes-update.log.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+*/2 * * * * root /opt/hermes-docker/apply-update.sh >> /var/log/hermes-update.log 2>&1
+EOF
+chmod 0644 /etc/cron.d/hermes-apply-update
+
 # Trigger cron to reload its job table.
 systemctl reload cron 2>/dev/null || systemctl restart cron 2>/dev/null || true
 touch /var/log/hermes-update.log

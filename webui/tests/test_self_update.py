@@ -35,9 +35,11 @@ def test_apply_when_user_requested():
     assert should_apply(now=1000, activity={"ts": 999, "busy": True}, apply_requested=True) is True
 
 
-def test_apply_when_no_activity_signal():
+def test_no_apply_when_no_activity_signal():
     from api.self_update import should_apply
-    assert should_apply(now=1000, activity=None, apply_requested=False) is True
+    # Conservative: a missing signal must NOT trigger an auto-update (could be
+    # a broken writer, not a quiet instance). User can still force.
+    assert should_apply(now=1000, activity=None, apply_requested=False) is False
 
 
 def test_no_apply_when_busy():
