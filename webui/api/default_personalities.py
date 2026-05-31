@@ -1,7 +1,8 @@
-"""Default Chinese personalities — 星火创意 (Spark Creative) roster.
+"""WebUI default-personality roster — 星火创意 (Spark Creative).
 
-16 localized personas injected into hermes-agent's DEFAULT_CONFIG
-["personalities"] by docker/patch_hermes_agent.py so every fresh
+16 localized personas seeded into the active config.yaml's
+``agent.personalities`` at WebUI startup
+(webui/server.py:_seed_default_personalities) so every fresh AND existing
 install (desktop + cloud) ships with them. Users switch via
 /personality <key> or the WebUI personality picker.
 
