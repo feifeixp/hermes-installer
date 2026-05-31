@@ -382,18 +382,85 @@ def disconnect_weixin() -> None:
     restart_gateway()
 
 
-def restart_gateway() -> None:
-    """Signal the gateway supervisor to restart so it picks up new config.
+def _find_hermes_executable() -> "str | None":
+    """Locate the agent venv's ``hermes`` CLI, or None if not found.
 
-    The supervisor loop (gateway_autostart) auto-relaunches `hermes gateway
-    run` ~5s after it exits. We just kill the running process. Best-effort:
-    on platforms without pkill / when gateway isn't running, this is a no-op
-    and the new config applies on next gateway start."""
-    import subprocess
+    The gateway is the upstream hermes-agent CLI; we discover the agent dir
+    the same way api.config does (``_AGENT_DIR``). Returns the venv hermes
+    path (Unix or Windows layout) if it exists, else a bare ``hermes`` on
+    PATH, else None.
+    """
+    agent_dir = None
     try:
-        subprocess.run(
-            ["pkill", "-f", "hermes gateway run"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
-        )
-    except Exception as exc:
-        logger.debug("messaging: restart_gateway pkill failed (non-fatal): %s", exc)
+        from api.config import _AGENT_DIR
+        agent_dir = _AGENT_DIR
+    except Exception:
+        agent_dir = None
+    candidates: list[Path] = []
+    if agent_dir:
+        base = Path(agent_dir)
+        candidates += [
+            base / "venv" / "bin" / "hermes",
+            base / ".venv" / "bin" / "hermes",
+            base / "venv" / "Scripts" / "hermes.exe",
+            base / ".venv" / "Scripts" / "hermes.exe",
+        ]
+    for c in candidates:
+        try:
+            if c.exists():
+                return str(c)
+        except OSError:
+            continue
+    import shutil
+    return shutil.which("hermes")
+
+
+def restart_gateway() -> None:
+    """Reload the platform gateway so it picks up the new credentials/config.
+
+    Prefer the agent's ``hermes gateway restart`` (live reload): it reloads
+    config.yaml + ~/.hermes/.env in-process as a single instance, with no
+    respawn race. Falls back to killing the gateway process — matching BOTH
+    the ``hermes gateway run`` and ``python -m hermes_cli.main gateway run``
+    forms — so a supervisor / launchd / KeepAlive relaunches it.
+
+    Why the fallback patterns matter: the original implementation only ran
+    ``pkill -f "hermes gateway run"``, which does NOT match the
+    ``python -m hermes_cli.main gateway run`` form the gateway actually runs
+    as on desktop/launchd. The kill silently matched nothing, the live
+    gateway kept polling the OLD account, and binding a new channel had no
+    effect. Best-effort throughout: never raises."""
+    import subprocess
+
+    hermes = _find_hermes_executable()
+    if hermes:
+        try:
+            result = subprocess.run(
+                [hermes, "gateway", "restart"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+            )
+            if result.returncode == 0:
+                logger.info("messaging: gateway reloaded via `hermes gateway restart`")
+                return
+            logger.warning(
+                "messaging: `hermes gateway restart` exited %s; falling back to kill (%s)",
+                result.returncode,
+                (result.stderr or b"")[:200],
+            )
+        except Exception as exc:
+            logger.warning(
+                "messaging: `hermes gateway restart` failed (%s); falling back to kill", exc
+            )
+
+    # Fallback: kill the gateway by EITHER process form so a supervisor
+    # relaunches it and re-reads config.yaml + .env on the next boot.
+    for pattern in ("hermes gateway run", "hermes_cli.main gateway run"):
+        try:
+            subprocess.run(
+                ["pkill", "-f", pattern],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+            )
+        except Exception as exc:
+            logger.debug(
+                "messaging: restart_gateway pkill(%r) failed (non-fatal): %s", pattern, exc
+            )
