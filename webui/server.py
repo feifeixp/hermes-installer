@@ -505,6 +505,58 @@ def _raise_fd_soft_limit(target: int = 4096) -> dict:
     return {"status": "raised", "soft": desired, "hard": hard, "previous_soft": soft}
 
 
+def _seed_default_personalities() -> None:
+    """Idempotently merge the bundled default personality roster into the
+    active config.yaml's ``agent.personalities``. Only ADDS missing keys —
+    never overwrites a user's own definitions. Best-effort: any failure is
+    logged at debug and swallowed (must never block server boot).
+
+    Why at startup (not a DEFAULT_CONFIG template patch): the WebUI reads
+    config.yaml raw (no DEFAULT_CONFIG merge), and existing instances already
+    have a config.yaml, so a template-only seed never reaches them. Running
+    on every boot covers fresh AND existing instances; writing the missing
+    keys to disk makes the roster visible in the WebUI picker and usable by
+    the agent CLI (which reads config.yaml's agent.personalities).
+    """
+    try:
+        from api.default_personalities import DEFAULT_PERSONALITIES
+    except Exception:
+        logger.debug("default personalities roster not importable; skipping seed", exc_info=True)
+        return
+    if not isinstance(DEFAULT_PERSONALITIES, dict) or not DEFAULT_PERSONALITIES:
+        return
+    try:
+        from api.config import (
+            _get_config_path,
+            _load_yaml_config_file,
+            _save_yaml_config_file,
+            reload_config,
+        )
+        cfg_path = _get_config_path()
+        cfg = _load_yaml_config_file(cfg_path)
+        if not isinstance(cfg, dict):
+            cfg = {}
+        agent = cfg.get("agent")
+        if not isinstance(agent, dict):
+            agent = {}
+            cfg["agent"] = agent
+        personas = agent.get("personalities")
+        if not isinstance(personas, dict):
+            personas = {}
+            agent["personalities"] = personas
+        added = 0
+        for key, prompt in DEFAULT_PERSONALITIES.items():
+            if key not in personas:
+                personas[key] = prompt
+                added += 1
+        if added:
+            _save_yaml_config_file(cfg_path, cfg)
+            reload_config()
+            logger.info("seeded %d default personalities into %s", added, cfg_path)
+    except Exception:
+        logger.debug("seed default personalities failed (non-fatal)", exc_info=True)
+
+
 def main() -> None:
     global _main_started
     _main_started = True
@@ -587,6 +639,9 @@ def main() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     DEFAULT_WORKSPACE.mkdir(parents=True, exist_ok=True)
+
+    # Seed bundled default personalities into config.yaml (idempotent, additive).
+    _seed_default_personalities()
 
     # Start the gateway session watcher for real-time SSE updates
     try:
