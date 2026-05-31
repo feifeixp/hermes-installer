@@ -282,3 +282,81 @@ def clear_qr_sessions():
     mc._qr_sessions.clear()
     yield
     mc._qr_sessions.clear()
+
+
+# ── restart_gateway: prefer `hermes gateway restart`, robust fallback ──────────
+
+
+def test_restart_gateway_uses_hermes_cli_when_available(monkeypatch):
+    """When the agent's hermes CLI is found, restart_gateway calls
+    `hermes gateway restart` (live reload) and does NOT fall back to pkill."""
+    calls = []
+
+    monkeypatch.setattr(mc, "_find_hermes_executable", lambda: "/agent/venv/bin/hermes")
+
+    class _Result:
+        returncode = 0
+        stderr = b""
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return _Result()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    mc.restart_gateway()
+
+    # Exactly one subprocess call: the CLI restart. No pkill fallback.
+    assert calls == [["/agent/venv/bin/hermes", "gateway", "restart"]]
+    assert not any("pkill" in c for c in calls)
+
+
+def test_restart_gateway_falls_back_to_pkill_both_forms(monkeypatch):
+    """With no hermes CLI, restart_gateway kills BOTH gateway process forms
+    so a supervisor relaunches it. The original bug only killed the
+    `hermes gateway run` form and missed `hermes_cli.main gateway run`."""
+    calls = []
+
+    monkeypatch.setattr(mc, "_find_hermes_executable", lambda: None)
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+
+        class _R:
+            returncode = 0
+            stderr = b""
+
+        return _R()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    mc.restart_gateway()
+
+    patterns = [c[2] for c in calls if c[:2] == ["pkill", "-f"]]
+    assert "hermes gateway run" in patterns
+    assert "hermes_cli.main gateway run" in patterns
+
+
+def test_restart_gateway_falls_back_when_cli_nonzero(monkeypatch):
+    """If `hermes gateway restart` exits non-zero, restart_gateway still
+    falls back to the pkill path (best-effort, never raises)."""
+    calls = []
+
+    monkeypatch.setattr(mc, "_find_hermes_executable", lambda: "/agent/venv/bin/hermes")
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+
+        class _R:
+            returncode = 1 if argv[:2] == ["/agent/venv/bin/hermes", "gateway"] else 0
+            stderr = b"boom"
+
+        return _R()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    mc.restart_gateway()
+
+    patterns = [c[2] for c in calls if c[:2] == ["pkill", "-f"]]
+    assert "hermes gateway run" in patterns
+    assert "hermes_cli.main gateway run" in patterns
