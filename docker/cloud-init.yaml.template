@@ -62,24 +62,9 @@ write_files:
     content: |
       services:
         caddy:
-          # slothcroissant/caddy-cloudflaredns is stock Caddy + the
-          # github.com/caddy-dns/cloudflare plugin already compiled in.
-          # We need this plugin because:
-          #   • LE HTTP-01/ALPN-01 challenges fail when
-          #     *.neowow.studio's wildcard CNAME (proxied through
-          #     cf-proxy worker) intercepts validator HTTP traffic →
-          #     returns 503 from cf-proxy fall-through.
-          #   • DNS-01 sidesteps the entire HTTP path: Caddy uses the
-          #     Cloudflare API to write a _acme-challenge TXT record,
-          #     LE checks it via DNS — no port 80/443 traffic needed.
-          # Tried xcaddy local-build first but caddy 2.8.4 + latest
-          # zap/exp/zapslog have an incompat (`undefined: zapslog.HandlerOptions`).
-          # Community image bypasses that — it's pinned to a known-good combo.
           image: slothcroissant/caddy-cloudflaredns:latest
           container_name: hermes-caddy
           restart: unless-stopped
-          # Compose interpolates ${CLOUDFLARE_API_TOKEN} from the
-          # /opt/hermes-docker/.env file (written below by cloud-init).
           environment:
             CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN}"
           ports:
@@ -105,53 +90,16 @@ write_files:
             HERMES_WEBUI_PORT: 7891
             HERMES_WEBUI_FOREGROUND: "1"
             HERMES_WEBUI_STATE_DIR: /opt/hermes/.hermes/webui
-            # Per-instance owner. WebUI's auth.py enforces that the
-            # JWT's userId matches this value — otherwise other users
-            # with valid neoTokens could access THIS user's instance.
             HERMES_INSTANCE_OWNER_USERID: "%USER_ID%"
-            # Phase β: lock the onboarding wizard to the Neowow Coding
-            # Plan card only. Hides openai / anthropic / openrouter /
-            # ollama / custom from the dropdown so spawned cloud
-            # instances always bill through our /api/me/chat proxy
-            # (= credits + plan enforcement = revenue). Desktop builds
-            # may flip this off if the user explicitly wants to BYO
-            # provider, but cloud is hard-locked.
             HERMES_NEOWOW_ONLY: "1"
-            # Server-side heartbeat token — lets the Hermes background
-            # thread ping /api/me/instance/server-heartbeat while tasks
-            # run, preventing idle-sweep from stopping the instance when
-            # the user's browser is closed. Minted fresh at spawn time.
             NEOWOW_HEARTBEAT_TOKEN: "%HEARTBEAT_TOKEN%"
-            # ── Fast PyPI mirror ─────────────────────────────────────
-            # uv (used in docker_init.bash) reads UV_INDEX_URL so
-            # pip installs hit the Aliyun mirror instead of pypi.org.
-            # From HK/Shanghai ECS the Aliyun mirror is ~10× faster —
-            # cuts initial dependency install from ~4 min to ~30 s.
-            # UV_EXTRA_INDEX_URL is a fallback for any package not yet
-            # mirrored (rare). UV_CACHE_DIR points at the named volume
-            # hermes_uv_cache (mounted below) so downloaded wheels
-            # survive container recreation and subsequent installs are
-            # near-instant even on first boot after an hourly pull.
             UV_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/"
             UV_EXTRA_INDEX_URL: "https://pypi.org/simple/"
             UV_CACHE_DIR: /uv_cache
-          # M2: bind-mount (NOT named volume) so oss-sync.sh on the host
-          # can read/write the same bytes the WebUI sees. Named volumes
-          # live inside the Docker overlay storage and can't be ergonomically
-          # rsync'd. /var/lib/hermes-state is created by cloud-init's
-          # runcmd before this container starts.
-          #
-          # hermes_venv and hermes_uv_cache are named volumes that persist
-          # across container recreations (hourly `docker compose up -d`).
-          # hermes_venv keeps the .deps_installed flag alive so docker_init.bash
-          # skips the full pip install on every restart; hermes_uv_cache keeps
-          # the downloaded wheel files so even a forced reinstall is fast.
           volumes:
             - /var/lib/hermes-state:/opt/hermes/.hermes
             - hermes_venv:/app/venv
             - hermes_uv_cache:/uv_cache
-            # Graceful-update control channel (host↔container). chown'd to the
-            # container's hermes uid (1500) by runcmd before this starts.
             - /opt/hermes-docker/control:/opt/hermes/control
           expose: ["7891"]
           networks: [hermes]
@@ -180,12 +128,6 @@ write_files:
       }
 
       %DOMAIN% {
-          # DNS-01 challenge via Cloudflare. See docker-compose.yml
-          # for the why — TLDR: Cloudflare's wildcard CNAME for
-          # *.neowow.studio intercepts HTTP-01 / ALPN-01 challenges
-          # and returns 503 from cf-proxy, so we use DNS-01 instead.
-          # {env.CLOUDFLARE_API_TOKEN} pulls from the compose env,
-          # which interpolates from /opt/hermes-docker/.env.
           tls {
               dns cloudflare {env.CLOUDFLARE_API_TOKEN}
               resolvers 1.1.1.1
@@ -279,8 +221,6 @@ write_files:
       [Service]
       Type=oneshot
       RemainAfterExit=true
-      # No-op start — the work happens in ExecStop, which runs when the
-      # unit is stopped (i.e. on system shutdown).
       ExecStart=/bin/true
       ExecStop=/opt/hermes-docker/oss-sync.sh push
       TimeoutStopSec=60s
