@@ -59,6 +59,9 @@ REGION="${2:-${ALIYUN_REGION:-cn-hongkong}}"
 : "${ACR_PULL_PASSWORD:=}"
 : "${OSS_ACCESS_KEY_ID:=}"
 : "${OSS_ACCESS_KEY_SECRET:=}"
+# Heartbeat token is minted by the broker in production; manual spawns don't
+# have one, so default to empty (the server-side keep-alive just stays off).
+: "${HEARTBEAT_TOKEN:=}"
 
 # Infer ACR registry from image URL if not set explicitly
 if [ -z "$ACR_PULL_REGISTRY" ]; then
@@ -143,6 +146,8 @@ curl -fsSL "$TEMPLATE_URL" \
     -e "s|%OSS_ACCESS_KEY_SECRET%|${OSS_ACCESS_KEY_SECRET}|g" \
     -e "s|%OSS_ENDPOINT%|${OSS_ENDPOINT}|g" \
     -e "s|%OSS_BUCKET%|${OSS_STATE_BUCKET}|g" \
+    -e "s|%CLOUDFLARE_API_TOKEN%|${CLOUDFLARE_API_TOKEN}|g" \
+    -e "s|%HEARTBEAT_TOKEN%|${HEARTBEAT_TOKEN}|g" \
     > "$TMP"
 
 # Sanity check — any leftover placeholders mean a typo above
