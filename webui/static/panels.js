@@ -4085,8 +4085,19 @@ function _renderMemoryEdit(section) {
   if (!title || !body) return;
   title.textContent = t(meta.labelKey);
   const content = _memorySectionContent(section);
+  // Soul section gets a preset-persona picker above the editor: pick one of
+  // the bundled 星火创意 personas to fill the Soul text as a starting point.
+  const presetBlock = section === 'soul'
+    ? `
+      <details class="persona-presets" ontoggle="if(this.open) loadPersonaPresets();">
+        <summary class="persona-presets-summary">✨ ${esc(t('persona_presets_title'))}</summary>
+        <div class="persona-presets-hint">${esc(t('persona_presets_hint'))}</div>
+        <div id="personaPresetGrid" class="persona-preset-grid">${esc(t('loading'))}</div>
+      </details>`
+    : '';
   body.innerHTML = `
     <div class="main-view-content">
+      ${presetBlock}
       <form class="detail-form" onsubmit="event.preventDefault(); submitMemorySave();">
         <div class="detail-form-row">
           <label for="memEditContent">${esc(t('memory_notes_label'))}</label>
@@ -4101,6 +4112,51 @@ function _renderMemoryEdit(section) {
   _setMemoryHeaderButtons('edit');
   const ta = $('memEditContent');
   if (ta) ta.focus();
+}
+
+// ── Preset personas (智能体灵魂 → 从预设人格选择) ──────────────────────────
+// Bundled 星火创意 ×16 SOUL.md presets served by GET /api/personas/presets.
+// Clicking a card fills the Soul editor textarea (#memEditContent) with the
+// persona's full SOUL.md text; the user reviews and saves manually.
+let _personaPresets = null; // cached [{id,name,summary,content}] or null
+
+async function loadPersonaPresets() {
+  const grid = $('personaPresetGrid');
+  if (!grid) return;
+  if (_personaPresets) { _renderPersonaPresetGrid(); return; }
+  try {
+    const data = await api('/api/personas/presets');
+    _personaPresets = Array.isArray(data.presets) ? data.presets : [];
+  } catch (e) {
+    grid.innerHTML = `<div class="persona-presets-empty">${esc(t('persona_presets_failed'))}</div>`;
+    return;
+  }
+  _renderPersonaPresetGrid();
+}
+
+function _renderPersonaPresetGrid() {
+  const grid = $('personaPresetGrid');
+  if (!grid) return;
+  if (!_personaPresets || !_personaPresets.length) {
+    grid.innerHTML = `<div class="persona-presets-empty">${esc(t('persona_presets_none'))}</div>`;
+    return;
+  }
+  grid.innerHTML = _personaPresets.map((p, i) => `
+    <button type="button" class="persona-preset-card" onclick="applyPersonaPreset(${i})">
+      <span class="persona-preset-name">${esc(p.name || p.id || '')}</span>
+      <span class="persona-preset-summary">${esc(p.summary || '')}</span>
+    </button>`).join('');
+}
+
+function applyPersonaPreset(index) {
+  if (!_personaPresets || !_personaPresets[index]) return;
+  const preset = _personaPresets[index];
+  const ta = $('memEditContent');
+  if (!ta) return;
+  if (ta.value.trim() && !confirm(t('persona_presets_overwrite_confirm'))) return;
+  ta.value = preset.content || '';
+  ta.focus();
+  showToast(t('persona_presets_applied', preset.name || preset.id || ''));
 }
 
 async function loadNotesSources(force) {

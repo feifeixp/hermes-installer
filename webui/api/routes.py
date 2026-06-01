@@ -4942,6 +4942,18 @@ def handle_get(handler, parsed) -> bool:
                 personalities.append({"name": name, "description": desc})
         return j(handler, {"personalities": personalities})
 
+    if parsed.path == "/api/personas/presets":
+        # Bundled preset-persona SOUL.md catalogue (星火创意 ×16). The
+        # 智能体灵魂 panel lists these so a user can fill the Soul editor
+        # with a full persona as a starting point. Missing bundle → [].
+        try:
+            from api.personas_presets import list_persona_presets
+
+            presets = list_persona_presets()
+        except Exception:
+            presets = []
+        return j(handler, {"presets": presets})
+
     if parsed.path == "/api/git-info":
         qs = parse_qs(parsed.query)
         sid = qs.get("session_id", [""])[0]
