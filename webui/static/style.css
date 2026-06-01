@@ -5042,3 +5042,14 @@ main.main.showing-logs > #mainLogs{display:flex;}
   text-align:left;
   unicode-bidi:isolate;
 }
+
+/* ── Preset personas (智能体灵魂 → 从预设人格选择) ───────────────────────── */
+.persona-presets { margin: 0 0 14px; border: 1px solid var(--border, #2a2a30); border-radius: 8px; padding: 8px 10px; background: rgba(99,102,241,0.04); }
+.persona-presets-summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text, #e5e7eb); user-select: none; }
+.persona-presets-hint { font-size: 11px; color: #94a3b8; margin: 6px 0 8px; line-height: 1.5; }
+.persona-preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.persona-preset-card { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 8px 10px; border: 1px solid var(--border, #2a2a30); border-radius: 7px; background: var(--card-bg, #18181b); cursor: pointer; transition: border-color .12s, background .12s; }
+.persona-preset-card:hover { border-color: #6366f1; background: rgba(99,102,241,0.10); }
+.persona-preset-name { font-size: 13px; font-weight: 600; color: var(--text, #e5e7eb); }
+.persona-preset-summary { font-size: 11px; color: #94a3b8; line-height: 1.4; }
+.persona-presets-empty { font-size: 12px; color: #94a3b8; padding: 6px 2px; }
