@@ -385,13 +385,27 @@
 
       if (!p || !p.ok) {
         const d = p?.d || {};
-        body.innerHTML = `
-          <div style="color:#e8a030;line-height:1.6">⚠️ ${escapeHtml(d.error || ('HTTP '+(p?.status ?? '???')))}</div>
-          <div style="display:flex;gap:6px;margin-top:8px">
-            <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none;flex:1">🔑 重新登录</button>
-            <button class="btn-tiny" onclick="neowowClearJwt()" style="flex:1">退出</button>
-          </div>
-        `;
+        const emsg = d.error || ('HTTP ' + (p?.status ?? '???'));
+        // Explicit revocation is handled above (requireRelogin). Here, only
+        // treat it as an auth problem if the message actually says so —
+        // a reachability / SSL blip keeps the user logged in (no「重新登录」).
+        const isAuthError = /请重新登录|拒绝访问|已过期|revoked|token has been/i.test(emsg);
+        if (isAuthError) {
+          body.innerHTML = `
+            <div style="color:#e8a030;line-height:1.6">⚠️ ${escapeHtml(emsg)}</div>
+            <div style="display:flex;gap:6px;margin-top:8px">
+              <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none;flex:1">🔑 重新登录</button>
+              <button class="btn-tiny" onclick="neowowClearJwt()" style="flex:1">退出</button>
+            </div>
+          `;
+        } else {
+          body.innerHTML = `
+            <div style="padding:6px 2px;line-height:1.6">
+              <div style="font-weight:600;color:var(--text)">✓ 已登录 Neodomain</div>
+              <div style="color:#e8a030;font-size:12px;margin-top:4px">⚠️ 暂时无法连接 Neodomain，积分稍后刷新：${escapeHtml(emsg)}</div>
+            </div>
+          `;
+        }
         return;
       }
       renderPopoverBody(body, p.d, nickname, cp);
@@ -580,13 +594,37 @@
       if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
       points = d;
     } catch (e) {
-      el.innerHTML = `
-        <div style="color:#e8a030;line-height:1.6;margin-bottom:8px">⚠️ ${escapeHtml((e && e.message) || 'unknown')}</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none">🔑 重新登录</button>
-          <button class="btn-tiny" onclick="neowowClearJwt()">退出</button>
-        </div>
-      `;
+      const msg = (e && e.message) || 'unknown';
+      // We only get here when status.hasJwt was true — the user IS logged in.
+      // A reachability / SSL / timeout error ("Cannot reach Neodomain") is a
+      // network blip, NOT a dead session: showing「重新登录」would wrongly imply
+      // they were logged out (and re-login can't fix a network problem). Only
+      // an explicit auth rejection — which the backend phrases as「请重新登录 /
+      // 拒绝访问 / 已过期 / revoked」on 401/403 (and has already cleared the JWT) —
+      // gets the re-login card.
+      const isAuthError = /请重新登录|拒绝访问|已过期|revoked|token has been/i.test(msg);
+      if (isAuthError) {
+        el.innerHTML = `
+          <div style="color:#e8a030;line-height:1.6;margin-bottom:8px">⚠️ ${escapeHtml(msg)}</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn-tiny" onclick="neowowStartOAuth()" style="background:linear-gradient(135deg,#5e60ce,#7950f2);color:#fff;border:none">🔑 重新登录</button>
+            <button class="btn-tiny" onclick="neowowClearJwt()">退出</button>
+          </div>
+        `;
+      } else {
+        // Logged in, but couldn't reach Neodomain right now (network / SSL).
+        // Keep the user logged in; offer a retry, not a re-login.
+        el.innerHTML = `
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#5e60ce,#7950f2);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;flex-shrink:0">✓</div>
+            <div style="flex:1;min-width:160px">
+              <div style="font-weight:600;color:var(--text);font-size:14px">已登录 Neodomain</div>
+              <div style="color:#e8a030;font-size:11px;line-height:1.5;margin-top:2px">⚠️ 暂时无法连接 Neodomain，积分余额稍后刷新：${escapeHtml(msg)}</div>
+            </div>
+            <button class="btn-tiny" onclick="neowowRefreshAccount()" style="flex-shrink:0">🔄 重试</button>
+          </div>
+        `;
+      }
       return;
     }
     try {
@@ -630,6 +668,9 @@
       </div>
     `;
   }
+
+  // Exposed so the「🔄 重试」button on the reachability-error card can re-run it.
+  window.neowowRefreshAccount = refreshAccountBlock;
 
   // Hook the existing switchSettingsSection.  IMPORTANT: upstream's
   // implementation in webui/static/panels.js uses a closed allow-list:
