@@ -730,6 +730,32 @@ def _find_system_python() -> "str | None":
     return None
 
 
+def _agent_venv_python(agent_dir: "Path", *, is_windows: bool) -> "Path":
+    """Path to the hermes-agent venv's Python for the given OS layout."""
+    if is_windows:
+        return agent_dir / "venv" / "Scripts" / "python.exe"
+    return agent_dir / "venv" / "bin" / "python"
+
+
+def _uv_pip_install_args(agent_dir: str, venv_python: str) -> "list[str]":
+    """uv args to install the agent editable, CN-mirror-first.
+
+    Identical mirror policy to the Windows path (_windows_install_agent):
+    Aliyun primary (reliable wheel downloads), USTC/Huawei/PyPI fallbacks,
+    first-index strategy to avoid cross-mirror 403 on .whl downloads.
+    """
+    return [
+        "pip", "install",
+        "-e", agent_dir,
+        "--python", venv_python,
+        "--index-strategy", "first-index",
+        "--index-url", "https://mirrors.aliyun.com/pypi/simple/",
+        "--extra-index-url", "https://mirrors.ustc.edu.cn/pypi/simple/",
+        "--extra-index-url", "https://repo.huaweicloud.com/repository/pypi/simple/",
+        "--extra-index-url", "https://pypi.org/simple/",
+    ]
+
+
 def _run_uv(uv_exe: Path, args: "list[str]", error_prefix: str = "uv 命令失败") -> None:
     """Run a uv command, streaming output to console + log.
 
