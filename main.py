@@ -781,6 +781,111 @@ def _run_uv(uv_exe: Path, args: "list[str]", error_prefix: str = "uv 命令失�
         raise RuntimeError(f"{error_prefix} (exit {proc.returncode}):\n{tail}")
 
 
+def _is_agent_installed_posix() -> bool:
+    """True iff the hermes-agent venv exists and can import run_agent.
+
+    POSIX twin of _is_agent_installed() (which is Windows-pathed). Used by
+    the macOS first-run branch to decide install-vs-launch.
+    """
+    venv_python = _agent_venv_python(
+        Path.home() / ".hermes" / "hermes-agent", is_windows=False
+    )
+    if not venv_python.exists():
+        log.info("agent not installed: venv python not found at %s", venv_python)
+        return False
+    try:
+        probe = subprocess.run(
+            [str(venv_python), "-c", "import run_agent"],
+            capture_output=True, text=True, timeout=30,
+            env=_clean_subprocess_env(),
+        )
+    except Exception as exc:
+        log.info("agent health probe failed to run: %s", exc)
+        return False
+    if probe.returncode == 0:
+        log.info("agent installed and healthy at %s", venv_python)
+        return True
+    log.info("agent venv unhealthy (rc=%s): %s", probe.returncode, probe.stderr[:300])
+    return False
+
+
+def _macos_install_agent() -> None:
+    """First-run macOS/Linux setup: extract bundle -> uv venv -> uv pip install
+    -> patch. Mirrors _windows_install_agent so a clean Mac never needs git,
+    Xcode CLT, or a github clone (the things that hang the curl|bash path).
+
+    Prints progress to stdout (captured to the bootstrap log by main()).
+    Raises RuntimeError with a user-readable message on any failure.
+    """
+    agent_dir = Path.home() / ".hermes" / "hermes-agent"
+
+    bundle_zip = BASE_DIR / "hermes_agent_bundle.zip"
+    if not bundle_zip.exists():
+        raise RuntimeError(
+            f"找不到安装包：{bundle_zip}\n请重新下载最新版 Hermes Installer。"
+        )
+
+    # uv: bundled at tools/uv (no extension on POSIX); fall back to system uv.
+    uv_exe = BASE_DIR / "tools" / "uv"
+    if not uv_exe.exists():
+        uv_sys = shutil.which("uv")
+        if uv_sys:
+            uv_exe = Path(uv_sys)
+            log.info("Using system uv: %s", uv_exe)
+        else:
+            raise RuntimeError(
+                "找不到 uv 安装工具。请下载最新版 Hermes Installer（已内置 uv）。"
+            )
+    try:
+        os.chmod(uv_exe, 0o755)  # bundled binary may lose +x through zip/copy
+    except OSError:
+        pass
+
+    print("\n[1/3] 正在解压 hermes-agent 源码...", flush=True)
+    log.info("Extracting %s -> %s", bundle_zip, agent_dir)
+    if agent_dir.exists():
+        shutil.rmtree(agent_dir, ignore_errors=True)
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    import zipfile as _zipfile
+    with _zipfile.ZipFile(bundle_zip) as zf:
+        zf.extractall(agent_dir)
+    print("      ✓ 解压完成", flush=True)
+
+    print("[2/3] 正在创建 Python 虚拟环境...", flush=True)
+    venv_dir = agent_dir / "venv"
+    log.info("Creating venv at %s (uv-managed python 3.11)", venv_dir)
+    _run_uv(uv_exe, ["venv", str(venv_dir),
+                     "--python", "3.11",
+                     "--python-preference", "only-managed"],
+            error_prefix="创建虚拟环境失败")
+    print("      ✓ 虚拟环境创建完成", flush=True)
+
+    print("[3/3] 正在安装依赖（多镜像，约 1-3 分钟）...", flush=True)
+    venv_python = _agent_venv_python(agent_dir, is_windows=False)
+    _run_uv(uv_exe, _uv_pip_install_args(str(agent_dir), str(venv_python)),
+            error_prefix="依赖安装失败")
+
+    print("[3.5/3] 正在注入 neowow-coding-plan provider...", flush=True)
+    patch_script = BASE_DIR / "docker" / "patch_hermes_agent.py"
+    if patch_script.exists():
+        try:
+            subprocess.run(
+                [str(venv_python), str(patch_script), "--agent-dir", str(agent_dir)],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=60,
+                env=_clean_subprocess_env(extra={"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}),
+                check=True,
+            )
+            print("      ✓ provider 注入完成", flush=True)
+        except Exception as exc:
+            log.exception("patch_hermes_agent failed: %s", exc)
+            raise RuntimeError(f"为 hermes-agent 注入 provider 失败：\n{exc}") from exc
+    else:
+        log.warning("patch script not found at %s — skipping", patch_script)
+
+    print("\n      ✓ 安装完成！Hermes 即将启动...\n", flush=True)
+    log.info("macOS agent install complete — venv at %s", venv_dir)
+
+
 def _windows_install_agent() -> None:
     """First-run Windows setup: extract bundle → create venv → pip install.
 
