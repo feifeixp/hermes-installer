@@ -59,11 +59,18 @@ jobs:
           # agent venv + pip install OFFLINE from the bundle (no git / Xcode CLT
           # / github clone). Mirrors the Windows tools/uv.exe bundling.
           pip install uv
-          UV_BIN="$(python -c 'import shutil; print(shutil.which("uv") or "")')"
-          if [ -z "$UV_BIN" ]; then echo "ERROR: uv not found after pip install"; exit 1; fi
+          # Locate the EXACT binary pip just installed (interpreter-relative),
+          # not whatever `uv` happens to be first on PATH — a stray uv on the
+          # runner's PATH (or setup-python's script dir missing from PATH) would
+          # otherwise make us bundle the wrong/older binary silently.
+          UV_BIN="$(python -c 'import sysconfig, os; p = os.path.join(sysconfig.get_path("scripts"), "uv"); print(p if os.path.exists(p) else "")')"
+          if [ -z "$UV_BIN" ]; then echo "ERROR: pip-installed uv not found in interpreter scripts dir"; exit 1; fi
           mkdir -p tools
           cp "$UV_BIN" tools/uv
           chmod +x tools/uv
+          # Fail loudly if the bundled binary isn't arm64 (macos-latest is arm64;
+          # a wrong-arch binary would only surface as a crash on the user's Mac).
+          file tools/uv | grep -q arm64 || { echo "ERROR: bundled uv is not arm64: $(file tools/uv)"; exit 1; }
           echo "bundled uv: $(tools/uv --version)"
 
       - name: Bundle hermes-agent source (offline install)
