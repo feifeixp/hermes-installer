@@ -119,23 +119,59 @@ jobs:
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
           APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
         run: |
-          set -euo pipefail
+          set -uo pipefail   # NOT -e: we check each step explicitly for clear errors
           KEYCHAIN="$RUNNER_TEMP/hermes-signing.keychain-db"
           CERT_PATH="$RUNNER_TEMP/cert.p12"
-          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
-          security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          # 1. Decode the base64 cert; fail loudly if the secret is empty/garbled.
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH" || {
+            echo "::error::APPLE_CERT_P12_BASE64 failed to base64-decode"; exit 1; }
+          SZ=$(wc -c < "$CERT_PATH" | tr -d ' ')
+          echo "decoded .p12 size: ${SZ} bytes"
+          if [ "$SZ" -lt 500 ]; then
+            echo "::error::decoded .p12 is only ${SZ} bytes — APPLE_CERT_P12_BASE64 is empty/truncated"
+            exit 1
+          fi
+
+          # 2. Pre-validate the .p12 password + that it contains a private key,
+          #    using openssl so we get a precise verdict (security import's
+          #    error is generic). Never prints the password.
+          if openssl pkcs12 -in "$CERT_PATH" -nokeys -passin "pass:${APPLE_CERT_PASSWORD}" -info >/dev/null 2>/tmp/p12err; then
+            echo "p12 password OK (openssl MAC verified)"
+          else
+            echo "::error::p12 password REJECTED by openssl — APPLE_CERT_PASSWORD does not match this .p12"
+            sed -E 's/.*(invalid password|Mac verify error).*/\1/' /tmp/p12err | head -2
+            exit 1
+          fi
+          if openssl pkcs12 -in "$CERT_PATH" -nocerts -passin "pass:${APPLE_CERT_PASSWORD}" -nodes 2>/dev/null | grep -q "PRIVATE KEY"; then
+            echo "p12 contains a private key: OK"
+          else
+            echo "::error::p12 has NO private key — re-export from Keychain selecting the cert WITH its key"
+            exit 1
+          fi
+
+          # 3. Create + unlock a temp keychain.
+          security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$KEYCHAIN" || {
+            echo "::error::create-keychain failed (APPLE_KEYCHAIN_PASSWORD missing/empty?)"; exit 1; }
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$KEYCHAIN" || {
+            echo "::error::unlock-keychain failed"; exit 1; }
+
+          # 4. Import the cert+key, allowing codesign/productsign to use the key.
           security import "$CERT_PATH" -P "$APPLE_CERT_PASSWORD" \
-            -A -t cert -f pkcs12 -k "$KEYCHAIN"
+            -A -t cert -f pkcs12 -k "$KEYCHAIN" || {
+            echo "::error::security import failed despite openssl pre-check passing"; exit 1; }
           security set-key-partition-list -S apple-tool:,apple: \
-            -k "$APPLE_KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+            -k "$APPLE_KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null 2>&1 || true
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed s/\"//g)
           rm -f "$CERT_PATH"
+
+          # 5. Resolve the Developer ID Application identity.
           IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
             | grep 'Developer ID Application' | head -1 | sed -E 's/.*\"(.*)\"/\1/')"
           if [ -z "$IDENTITY" ]; then
-            echo "ERROR: no 'Developer ID Application' identity found in the imported cert"
+            echo "::error::no 'Developer ID Application' identity found after import"
+            echo "--- identities in keychain: ---"
             security find-identity -v -p codesigning "$KEYCHAIN" || true
             exit 1
           fi
