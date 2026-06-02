@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the signed + notarized macOS build.
+
+  PyInstaller-frozen Python apps need these exceptions or they crash under
+  hardened runtime (which notarization REQUIRES):
+
+  - allow-jit / allow-unsigned-executable-memory / disable-library-validation:
+      CPython and many C-extensions (and the bundled hermes-agent venv the
+      installer spawns) generate or load code pages that a strict hardened
+      runtime would kill. These are the standard exceptions every notarized
+      PyInstaller app ships.
+  - allow-dyld-environment-variables / inherit:
+      the installer launches child processes (webui server, hermes-agent
+      venv python, gateway) that inherit DYLD_* and the signing context.
+  No network/file entitlements are needed: this is a Developer-ID (not
+  sandboxed App Store) distribution, so the app already has full user-level
+  access without explicit entitlements.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.inherit</key>
+  <true/>
+</dict>
+</plist>
