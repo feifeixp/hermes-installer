@@ -85,6 +85,10 @@ a = Analysis(
         + ([("hermes_agent_bundle.zip", ".")] if Path("hermes_agent_bundle.zip").exists() else [])
         # uv.exe: Windows-only install tool, bundled so users don't need internet for uv itself
         + ([("tools/uv.exe", "tools")] if IS_WIN and Path("tools/uv.exe").exists() else [])
+        # tools/uv: macOS/Linux uv binary (CI's "Bundle uv binary" step copies
+        # it here). Lets first-run install create the agent venv + pip install
+        # offline from the bundle, with no git / Xcode CLT / github clone.
+        + ([("tools/uv", "tools")] if (not IS_WIN) and Path("tools/uv").exists() else [])
         # patch_hermes_agent.py: injects the neowow-coding-plan ProviderConfig
         # into hermes_cli/auth.py + providers.py after pip install. Without
         # this file in the bundle, _windows_install_agent's Step 3.5 logs

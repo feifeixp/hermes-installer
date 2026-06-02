@@ -52,6 +52,20 @@ jobs:
       - name: Install deps
         run: pip install pywebview pyinstaller
 
+      - name: Bundle uv binary (macOS)
+        run: |
+          set -euo pipefail
+          # Bundle a uv binary at tools/uv so first-run install can create the
+          # agent venv + pip install OFFLINE from the bundle (no git / Xcode CLT
+          # / github clone). Mirrors the Windows tools/uv.exe bundling.
+          pip install uv
+          UV_BIN="$(python -c 'import shutil; print(shutil.which("uv") or "")')"
+          if [ -z "$UV_BIN" ]; then echo "ERROR: uv not found after pip install"; exit 1; fi
+          mkdir -p tools
+          cp "$UV_BIN" tools/uv
+          chmod +x tools/uv
+          echo "bundled uv: $(tools/uv --version)"
+
       - name: Bundle hermes-agent source (offline install)
         run: python bundle_source.py
 
