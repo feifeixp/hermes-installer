@@ -1590,6 +1590,30 @@ def main():
 
     else:
         # ── macOS / Linux: existing bootstrap.py path (unchanged) ────────
+        # ── First-run offline install (macOS/Linux) ──────────────────────
+        # On a clean Mac there's no agent venv. Install from the bundled
+        # zip + bundled uv instead of bootstrap.py's `curl github | bash`,
+        # which hangs on git / the Xcode CLT consent dialog / github
+        # reachability. Only attempt when we actually ship a bundle (frozen
+        # app); dev runs without a bundle fall through to bootstrap.py.
+        _bundle = BASE_DIR / "hermes_agent_bundle.zip"
+        if _bundle.exists() and not _is_agent_installed_posix():
+            existing = Path.home() / ".hermes" / "hermes-agent" / "venv"
+            if existing.exists():
+                log.info("agent venv unhealthy — wiping for clean reinstall")
+            try:
+                _macos_install_agent()
+            except Exception as exc:
+                log.exception("macOS offline install failed: %s", exc)
+                if _crash_reporter is not None:
+                    try:
+                        _crash_reporter.report(phase="macos_install", error=str(exc),
+                                               log_path=str(_LOG_PATH))
+                    except Exception:
+                        pass
+                _alert("Hermes 安装失败",
+                       f"首次安装未完成：\n{exc}\n\n日志：\n{_LOG_PATH}")
+                sys.exit(1)
         python_exe = _find_bootstrap_python()
 
         if not BOOTSTRAP_PY.exists():
@@ -1607,13 +1631,16 @@ def main():
 
         log.info("Launching bootstrap.py: %s %s", python_exe, BOOTSTRAP_PY)
 
+        _bootstrap_log_path = _LOG_DIR / "bootstrap.log"
+        _bootstrap_log_fh = open(_bootstrap_log_path, "ab")  # noqa: SIM115 — lives for subprocess
+        log.info("bootstrap.py stdout/stderr -> %s", _bootstrap_log_path)
         try:
             proc = subprocess.Popen(
                 [python_exe, str(BOOTSTRAP_PY), str(port), "--host", host],
                 cwd=str(WEBUI_DIR),
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=_bootstrap_log_fh,
+                stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
         except FileNotFoundError:
