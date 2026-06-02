@@ -730,6 +730,32 @@ def _find_system_python() -> "str | None":
     return None
 
 
+def _agent_venv_python(agent_dir: "Path", *, is_windows: bool) -> "Path":
+    """Path to the hermes-agent venv's Python for the given OS layout."""
+    if is_windows:
+        return agent_dir / "venv" / "Scripts" / "python.exe"
+    return agent_dir / "venv" / "bin" / "python"
+
+
+def _uv_pip_install_args(agent_dir: str, venv_python: str) -> "list[str]":
+    """uv args to install the agent editable, CN-mirror-first.
+
+    Identical mirror policy to the Windows path (_windows_install_agent):
+    Aliyun primary (reliable wheel downloads), USTC/Huawei/PyPI fallbacks,
+    first-index strategy to avoid cross-mirror 403 on .whl downloads.
+    """
+    return [
+        "pip", "install",
+        "-e", agent_dir,
+        "--python", venv_python,
+        "--index-strategy", "first-index",
+        "--index-url", "https://mirrors.aliyun.com/pypi/simple/",
+        "--extra-index-url", "https://mirrors.ustc.edu.cn/pypi/simple/",
+        "--extra-index-url", "https://repo.huaweicloud.com/repository/pypi/simple/",
+        "--extra-index-url", "https://pypi.org/simple/",
+    ]
+
+
 def _run_uv(uv_exe: Path, args: "list[str]", error_prefix: str = "uv 命令失败") -> None:
     """Run a uv command, streaming output to console + log.
 
@@ -753,6 +779,111 @@ def _run_uv(uv_exe: Path, args: "list[str]", error_prefix: str = "uv 命令失�
     if proc.returncode != 0:
         tail = "\n".join(output_lines[-10:])
         raise RuntimeError(f"{error_prefix} (exit {proc.returncode}):\n{tail}")
+
+
+def _is_agent_installed_posix() -> bool:
+    """True iff the hermes-agent venv exists and can import run_agent.
+
+    POSIX twin of _is_agent_installed() (which is Windows-pathed). Used by
+    the macOS first-run branch to decide install-vs-launch.
+    """
+    venv_python = _agent_venv_python(
+        Path.home() / ".hermes" / "hermes-agent", is_windows=False
+    )
+    if not venv_python.exists():
+        log.info("agent not installed: venv python not found at %s", venv_python)
+        return False
+    try:
+        probe = subprocess.run(
+            [str(venv_python), "-c", "import run_agent"],
+            capture_output=True, text=True, timeout=30,
+            env=_clean_subprocess_env(),
+        )
+    except Exception as exc:
+        log.info("agent health probe failed to run: %s", exc)
+        return False
+    if probe.returncode == 0:
+        log.info("agent installed and healthy at %s", venv_python)
+        return True
+    log.info("agent venv unhealthy (rc=%s): %s", probe.returncode, probe.stderr[:300])
+    return False
+
+
+def _macos_install_agent() -> None:
+    """First-run macOS/Linux setup: extract bundle -> uv venv -> uv pip install
+    -> patch. Mirrors _windows_install_agent so a clean Mac never needs git,
+    Xcode CLT, or a github clone (the things that hang the curl|bash path).
+
+    Prints progress to stdout (captured to the bootstrap log by main()).
+    Raises RuntimeError with a user-readable message on any failure.
+    """
+    agent_dir = Path.home() / ".hermes" / "hermes-agent"
+
+    bundle_zip = BASE_DIR / "hermes_agent_bundle.zip"
+    if not bundle_zip.exists():
+        raise RuntimeError(
+            f"找不到安装包：{bundle_zip}\n请重新下载最新版 Hermes Installer。"
+        )
+
+    # uv: bundled at tools/uv (no extension on POSIX); fall back to system uv.
+    uv_exe = BASE_DIR / "tools" / "uv"
+    if not uv_exe.exists():
+        uv_sys = shutil.which("uv")
+        if uv_sys:
+            uv_exe = Path(uv_sys)
+            log.info("Using system uv: %s", uv_exe)
+        else:
+            raise RuntimeError(
+                "找不到 uv 安装工具。请下载最新版 Hermes Installer（已内置 uv）。"
+            )
+    try:
+        os.chmod(uv_exe, 0o755)  # bundled binary may lose +x through zip/copy
+    except OSError:
+        pass
+
+    print("\n[1/3] 正在解压 hermes-agent 源码...", flush=True)
+    log.info("Extracting %s -> %s", bundle_zip, agent_dir)
+    if agent_dir.exists():
+        shutil.rmtree(agent_dir, ignore_errors=True)
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    import zipfile as _zipfile
+    with _zipfile.ZipFile(bundle_zip) as zf:
+        zf.extractall(agent_dir)
+    print("      ✓ 解压完成", flush=True)
+
+    print("[2/3] 正在创建 Python 虚拟环境...", flush=True)
+    venv_dir = agent_dir / "venv"
+    log.info("Creating venv at %s (uv-managed python 3.11)", venv_dir)
+    _run_uv(uv_exe, ["venv", str(venv_dir),
+                     "--python", "3.11",
+                     "--python-preference", "only-managed"],
+            error_prefix="创建虚拟环境失败")
+    print("      ✓ 虚拟环境创建完成", flush=True)
+
+    print("[3/3] 正在安装依赖（多镜像，约 1-3 分钟）...", flush=True)
+    venv_python = _agent_venv_python(agent_dir, is_windows=False)
+    _run_uv(uv_exe, _uv_pip_install_args(str(agent_dir), str(venv_python)),
+            error_prefix="依赖安装失败")
+
+    print("[3.5/3] 正在注入 neowow-coding-plan provider...", flush=True)
+    patch_script = BASE_DIR / "docker" / "patch_hermes_agent.py"
+    if patch_script.exists():
+        try:
+            subprocess.run(
+                [str(venv_python), str(patch_script), "--agent-dir", str(agent_dir)],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=60,
+                env=_clean_subprocess_env(extra={"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}),
+                check=True,
+            )
+            print("      ✓ provider 注入完成", flush=True)
+        except Exception as exc:
+            log.exception("patch_hermes_agent failed: %s", exc)
+            raise RuntimeError(f"为 hermes-agent 注入 provider 失败：\n{exc}") from exc
+    else:
+        log.warning("patch script not found at %s — skipping", patch_script)
+
+    print("\n      ✓ 安装完成！Hermes 即将启动...\n", flush=True)
+    log.info("macOS agent install complete — venv at %s", venv_dir)
 
 
 def _windows_install_agent() -> None:
@@ -1459,6 +1590,30 @@ def main():
 
     else:
         # ── macOS / Linux: existing bootstrap.py path (unchanged) ────────
+        # ── First-run offline install (macOS/Linux) ──────────────────────
+        # On a clean Mac there's no agent venv. Install from the bundled
+        # zip + bundled uv instead of bootstrap.py's `curl github | bash`,
+        # which hangs on git / the Xcode CLT consent dialog / github
+        # reachability. Only attempt when we actually ship a bundle (frozen
+        # app); dev runs without a bundle fall through to bootstrap.py.
+        _bundle = BASE_DIR / "hermes_agent_bundle.zip"
+        if _bundle.exists() and not _is_agent_installed_posix():
+            existing = Path.home() / ".hermes" / "hermes-agent" / "venv"
+            if existing.exists():
+                log.info("agent venv unhealthy — wiping for clean reinstall")
+            try:
+                _macos_install_agent()
+            except Exception as exc:
+                log.exception("macOS offline install failed: %s", exc)
+                if _crash_reporter is not None:
+                    try:
+                        _crash_reporter.report(phase="macos_install", error=str(exc),
+                                               log_path=str(_LOG_PATH))
+                    except Exception:
+                        pass
+                _alert("Hermes 安装失败",
+                       f"首次安装未完成：\n{exc}\n\n日志：\n{_LOG_PATH}")
+                sys.exit(1)
         python_exe = _find_bootstrap_python()
 
         if not BOOTSTRAP_PY.exists():
@@ -1476,13 +1631,16 @@ def main():
 
         log.info("Launching bootstrap.py: %s %s", python_exe, BOOTSTRAP_PY)
 
+        _bootstrap_log_path = _LOG_DIR / "bootstrap.log"
+        _bootstrap_log_fh = open(_bootstrap_log_path, "ab")  # noqa: SIM115 — lives for subprocess
+        log.info("bootstrap.py stdout/stderr -> %s", _bootstrap_log_path)
         try:
             proc = subprocess.Popen(
                 [python_exe, str(BOOTSTRAP_PY), str(port), "--host", host],
                 cwd=str(WEBUI_DIR),
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=_bootstrap_log_fh,
+                stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
         except FileNotFoundError:
