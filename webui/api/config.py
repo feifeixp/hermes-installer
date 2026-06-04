@@ -1128,7 +1128,6 @@ _PROVIDER_MODELS = {
         # Google Gemini
         {"id": "gemini-3.1-pro-preview",          "label": "Gemini 3.1 Pro (Preview)"},
         {"id": "gemini-3.1-flash-lite-preview",   "label": "Gemini 3.1 Flash Lite (Preview)"},
-        {"id": "gemini-3-pro-preview",            "label": "Gemini 3 Pro (Preview)"},
         {"id": "gemini-3-flash-preview",          "label": "Gemini 3 Flash (Preview)"},
         {"id": "gemini-2.5-flash",                "label": "Gemini 2.5 Flash"},
         {"id": "gemini-2.5-flash-lite",           "label": "Gemini 2.5 Flash Lite"},
@@ -2958,6 +2957,36 @@ def _read_visible_codex_cache_model_ids() -> list[str]:
     return ordered
 
 
+def _sync_coding_plan_group_models(groups: list, live_models: list) -> None:
+    """Replace the ``neowow-coding-plan`` group's models in place with the
+    live ``/api/me/plan`` catalogue, so models added on the dashboard (e.g.
+    new Claude models) appear in the desktop picker WITHOUT a Hermes redeploy.
+
+    No-op when the group is absent or ``live_models`` is empty (keeps the
+    static neodomain-alias list as a fallback). Pretty labels are preserved
+    for ids we already know; new ids fall back to the raw id as the label.
+    """
+    if not live_models:
+        return
+    nc = next(
+        (g for g in groups if (g.get("provider_id") or "") == "neowow-coding-plan"),
+        None,
+    )
+    if nc is None:
+        return
+    label_by_id = {
+        str(m.get("id")): str(m.get("label") or m.get("id"))
+        for g in groups
+        for m in (g.get("models") or [])
+        if isinstance(m, dict) and m.get("id")
+    }
+    nc["models"] = [
+        {"id": str(m["id"]), "label": label_by_id.get(str(m["id"]), str(m["id"]))}
+        for m in live_models
+        if isinstance(m, dict) and m.get("id")
+    ]
+
+
 def get_available_models() -> dict:
     """
     Return available models grouped by provider.
@@ -4268,6 +4297,31 @@ def get_available_models() -> dict:
             if g.get("models")
             or (g.get("provider_id") or "").startswith("custom:")
         ]
+
+        # ── Sync neowow-coding-plan picker with the dashboard's live plan ──
+        # /api/me/plan is the source of truth for what the Coding Plan serves;
+        # models added there (e.g. new Claude models) should appear here without
+        # a Hermes redeploy. Cached by get_available_models()'s TTL, so this is
+        # at most one 3s round-trip per TTL; silent static fallback on any error.
+        try:
+            from api.neowow import get_jwt
+            # Only sync for logged-in users — and only when we got a GENUINE
+            # live catalogue. _fetch_neowow_plan_models() returns a non-empty
+            # offline fallback on no-JWT / network error; overlaying THAT would
+            # shrink the picker to the cheap fallback on a transient blip, so we
+            # skip it and keep the static alias when the result equals the fallback.
+            if get_jwt():
+                from api.onboarding import (
+                    _fetch_neowow_plan_models,
+                    _neowow_coding_plan_default_models,
+                )
+                _live_cp_models, _ = _fetch_neowow_plan_models()
+                _fb_ids = {str(m.get("id")) for m in _neowow_coding_plan_default_models()}
+                _live_ids = {str(m.get("id")) for m in (_live_cp_models or [])}
+                if _live_cp_models and _live_ids != _fb_ids:
+                    _sync_coding_plan_group_models(groups, _live_cp_models)
+        except Exception:
+            logger.debug("neowow-coding-plan live model sync failed; using static list", exc_info=True)
 
         # ── Phase β.11: HERMES_NEOWOW_ONLY enforcement (model picker) ──────
         # Mirrors the same filter applied to /api/providers in
