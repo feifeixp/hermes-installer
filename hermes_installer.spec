@@ -9,6 +9,7 @@ All identity / version / copyright constants come from _meta.py so this
 file never needs to be touched for a version bump or legal-text change.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -78,17 +79,24 @@ for _f in _webui_root.rglob("*"):
 a = Analysis(
     ["main.py"],                    # only main.py is the entry point now
     pathex=["."],
-    binaries=[],
+    binaries=(
+        # tools/uv: macOS/Linux uv binary (CI's "Bundle uv binary" step copies
+        # it here). Collected as a BINARY — NOT a data file — so that on macOS
+        # PyInstaller signs it inside-out and relocates it into
+        # Contents/Frameworks. A Mach-O collected via `datas` lands in
+        # Contents/Resources, where `codesign --deep` skips it (signature would
+        # go into xattrs), and Apple notarization then rejects the bundle with
+        # "code object is not signed at all". See PyInstaller building/osx.py.
+        ([("tools/uv", "tools")] if (not IS_WIN) and Path("tools/uv").exists() else [])
+    ),
     datas=(
         _webui_datas
         # Bundle zip is optional: present → offline install; absent → git clone at runtime
         + ([("hermes_agent_bundle.zip", ".")] if Path("hermes_agent_bundle.zip").exists() else [])
         # uv.exe: Windows-only install tool, bundled so users don't need internet for uv itself
         + ([("tools/uv.exe", "tools")] if IS_WIN and Path("tools/uv.exe").exists() else [])
-        # tools/uv: macOS/Linux uv binary (CI's "Bundle uv binary" step copies
-        # it here). Lets first-run install create the agent venv + pip install
-        # offline from the bundle, with no git / Xcode CLT / github clone.
-        + ([("tools/uv", "tools")] if (not IS_WIN) and Path("tools/uv").exists() else [])
+        # NOTE: macOS/Linux `tools/uv` is collected as a BINARY (see `binaries=`
+        # above), not here, so PyInstaller signs it for notarization.
         # patch_hermes_agent.py: injects the neowow-coding-plan ProviderConfig
         # into hermes_cli/auth.py + providers.py after pip install. Without
         # this file in the bundle, _windows_install_agent's Step 3.5 logs
@@ -156,8 +164,15 @@ else:
         disable_windowed_traceback=False,
         argv_emulation=IS_MAC,
         target_arch=None,
-        codesign_identity=None,
-        entitlements_file=None,
+        # Let PyInstaller code-sign during the build when CI provides a
+        # Developer ID identity. PyInstaller signs every collected Mach-O
+        # (incl. Python.framework) inside-out with hardened runtime — the
+        # ONLY reliable way to pass Apple notarization. `codesign --deep`
+        # and `find -exec codesign` both corrupt the framework (it's
+        # referenced via several symlinks) → "signature invalid". Empty
+        # env → None → unsigned build (unchanged fallback).
+        codesign_identity=(os.environ.get("HERMES_CODESIGN_IDENTITY") or None),
+        entitlements_file=(os.environ.get("HERMES_ENTITLEMENTS") or None),
         icon="icon.icns" if (IS_MAC and Path("icon.icns").exists()) else None,
     )
 
