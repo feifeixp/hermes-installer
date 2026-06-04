@@ -76,29 +76,15 @@ jobs:
       - name: Bundle hermes-agent source (offline install)
         run: python bundle_source.py
 
-      - name: PyInstaller
-        env:
-          # _meta.py reads this to embed the correct version into Info.plist.
-          # On tag builds it's vX.Y.Z; on branch/PR builds it's the branch name
-          # which _meta.py treats as non-semver and falls back to git describe.
-          INSTALLER_VERSION: ${{ github.ref_name }}
-        run: python -m PyInstaller hermes_installer.spec --noconfirm --clean
-
-      - name: Verify .app
-        run: |
-          if [ ! -d "dist/Hermes Installer.app" ]; then
-            echo "ERROR: .app not found"
-            exit 1
-          fi
-          echo "✓ .app: $(du -sh 'dist/Hermes Installer.app' | cut -f1)"
-
       # ── Code signing + notarization ─────────────────────────────────────
       # Gated on secrets: when the Apple credentials are configured the build
       # is Developer-ID-signed, hardened-runtime, and notarized so Gatekeeper
       # opens it with no warning. When the secrets are ABSENT (forks, or
-      # before they are set up) every step below no-ops via `if: ...` and the
-      # build falls back to the previous unsigned .app — CI never breaks.
-      # See docs/macos-signing.md for how to obtain + configure the 5 secrets.
+      # before they are set up) the signing steps no-op via `if: ...` and the
+      # build falls back to an unsigned .app — CI never breaks. The cert is
+      # imported BEFORE PyInstaller so PyInstaller can sign the .app (incl.
+      # Python.framework) inside-out during the build — see hermes_installer.spec.
+      # See docs/macos-signing.md for how to obtain + configure the 6 secrets.
       - name: Detect signing availability
         id: signcfg
         env:
@@ -179,24 +165,68 @@ jobs:
           echo "SIGN_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
           echo "imported identity: $IDENTITY"
 
-      - name: Codesign .app (hardened runtime)
+      - name: PyInstaller
+        env:
+          # _meta.py reads this to embed the correct version into Info.plist.
+          # On tag builds it's vX.Y.Z; on branch/PR builds it's the branch name
+          # which _meta.py treats as non-semver and falls back to git describe.
+          INSTALLER_VERSION: ${{ github.ref_name }}
+          # When signing is configured (Import signing certificate ran first),
+          # hand the identity + entitlements to PyInstaller so it signs the
+          # whole .app — every nested Mach-O incl. Python.framework — inside-out
+          # with hardened runtime, the only reliable way to pass notarization.
+          # Empty when unsigned → spec falls back to codesign_identity=None.
+          HERMES_CODESIGN_IDENTITY: ${{ env.SIGN_IDENTITY }}
+          HERMES_ENTITLEMENTS: ${{ github.workspace }}/.github/macos/entitlements.plist
+          # Fail the build loudly if PyInstaller can't sign the bundle, instead
+          # of warning + emitting a broken bundle that only fails 10 min later
+          # at notarization. And have PyInstaller verify its own signature
+          # (incl. the xattr check that catches a Mach-O wrongly shipped as a
+          # data file). Both only when signing is configured — the unsigned
+          # fallback build does ad-hoc signing and must not be made strict.
+          PYINSTALLER_STRICT_BUNDLE_CODESIGN_ERROR: ${{ steps.signcfg.outputs.enabled == 'true' && '1' || '0' }}
+          PYINSTALLER_VERIFY_BUNDLE_SIGNATURE: ${{ steps.signcfg.outputs.enabled == 'true' && '1' || '0' }}
+        run: python -m PyInstaller hermes_installer.spec --noconfirm --clean
+
+      - name: Verify .app
+        run: |
+          if [ ! -d "dist/Hermes Installer.app" ]; then
+            echo "ERROR: .app not found"
+            exit 1
+          fi
+          echo "✓ .app: $(du -sh 'dist/Hermes Installer.app' | cut -f1)"
+
+      - name: Verify .app signature
         if: steps.signcfg.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           APP="dist/Hermes Installer.app"
-          codesign --force --deep --options runtime --timestamp \
-            --entitlements .github/macos/entitlements.plist \
-            --keychain "$SIGN_KEYCHAIN" \
-            --sign "$SIGN_IDENTITY" \
-            "$APP"
-          echo "--- verify signature ---"
+          # PyInstaller signed the whole bundle during the build (codesign_identity
+          # + entitlements from env). Verify it's a valid hardened-runtime
+          # Developer ID signature before we notarize.
           codesign --verify --deep --strict --verbose=2 "$APP"
-          echo ".app signed"
+          codesign -dv --verbose=4 "$APP" 2>&1 | grep -iE "Authority|TeamIdentifier|flags|Identifier" || true
+          echo ".app signature verified"
 
       - name: Create .dmg
         run: |
+          set -euo pipefail
           TMP=$(mktemp -d)
-          cp -r "dist/Hermes Installer.app" "$TMP/"
+          # MUST use `ditto`, NOT `cp -r`, to stage the signed .app: `cp -r`
+          # DEREFERENCES the Python.framework symlinks (Contents/Frameworks/Python,
+          # Contents/Resources/Python, Python.framework/Python) into duplicate real
+          # files, which breaks the bundle's code seal — codesign then reports
+          # "bundle format is ambiguous" and Apple notarization rejects it with
+          # "The signature of the binary is invalid" on exactly those paths.
+          # `ditto` preserves symlinks + xattrs + the signature. (Verified by
+          # local repro: cp-staged copy FAILS `codesign --verify`, ditto PASSES.)
+          ditto "dist/Hermes Installer.app" "$TMP/Hermes Installer.app"
+          # Belt-and-suspenders: confirm the STAGED copy (the one that goes into
+          # the dmg) still has a valid signature, so a staging regression fails
+          # here at build time instead of 10 min later at notarization.
+          if [ "${{ steps.signcfg.outputs.enabled }}" = "true" ]; then
+            codesign --verify --deep --strict --verbose=2 "$TMP/Hermes Installer.app"
+          fi
           ln -s /Applications "$TMP/Applications"
           hdiutil create \
             -volname "Hermes Installer" \
@@ -223,11 +253,28 @@ jobs:
           KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
           echo "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$KEY_PATH"
           echo "--- submitting to Apple notary service (waits for result) ---"
+          SUB_JSON="$RUNNER_TEMP/notar.json"
+          set +e
           xcrun notarytool submit "$DMG" \
             --key "$KEY_PATH" \
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER_ID" \
-            --wait
+            --output-format json --wait > "$SUB_JSON"
+          NOTAR_RC=$?
+          set -e
+          cat "$SUB_JSON" || true
+          SUB_ID="$(python3 -c "import json,sys;print(json.load(open('$SUB_JSON')).get('id',''))" 2>/dev/null || true)"
+          SUB_STATUS="$(python3 -c "import json,sys;print(json.load(open('$SUB_JSON')).get('status',''))" 2>/dev/null || true)"
+          echo "notarization status: ${SUB_STATUS:-unknown} (rc=$NOTAR_RC)"
+          if [ "$SUB_STATUS" != "Accepted" ]; then
+            echo "::error::notarization not Accepted (status=$SUB_STATUS) — fetching Apple's detailed log:"
+            if [ -n "$SUB_ID" ]; then
+              xcrun notarytool log "$SUB_ID" \
+                --key "$KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" || true
+            fi
+            rm -f "$KEY_PATH"
+            exit 1
+          fi
           rm -f "$KEY_PATH"
           xcrun stapler staple "$DMG"
           echo "--- final Gatekeeper assessment ---"
