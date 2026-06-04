@@ -184,11 +184,31 @@ jobs:
         run: |
           set -euo pipefail
           APP="dist/Hermes Installer.app"
-          codesign --force --deep --options runtime --timestamp \
-            --entitlements .github/macos/entitlements.plist \
-            --keychain "$SIGN_KEYCHAIN" \
-            --sign "$SIGN_IDENTITY" \
-            "$APP"
+          ENT=".github/macos/entitlements.plist"
+          # `codesign --deep` is unreliable for notarization: it misses or
+          # mis-signs some of the hundreds of nested Mach-O files PyInstaller
+          # bundles (.so/.dylib + tools/uv), and Apple's notary service then
+          # returns Invalid. Sign every Mach-O INNER-OUT first, then the .app
+          # last. This is the Apple-recommended approach for deep bundles.
+          sign_one() {
+            codesign --force --options runtime --timestamp \
+              --entitlements "$ENT" \
+              --keychain "$SIGN_KEYCHAIN" \
+              --sign "$SIGN_IDENTITY" \
+              "$1"
+          }
+          echo "--- signing nested Mach-O binaries inner-out ---"
+          # Find every Mach-O (dylib/so/bundle + any executable file) and sign
+          # the deepest paths first (sort by depth desc) so containers are
+          # signed after their contents.
+          while IFS= read -r f; do
+            if file "$f" | grep -q "Mach-O"; then
+              sign_one "$f"
+            fi
+          done < <(find "$APP/Contents" -type f \( -name '*.dylib' -o -name '*.so' -o -perm -111 \) \
+                   | awk '{print gsub(/\//,"/"), $0}' | sort -rn | cut -d" " -f2-)
+          echo "--- signing the .app bundle itself ---"
+          sign_one "$APP"
           echo "--- verify signature ---"
           codesign --verify --deep --strict --verbose=2 "$APP"
           echo ".app signed"
@@ -223,11 +243,28 @@ jobs:
           KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
           echo "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$KEY_PATH"
           echo "--- submitting to Apple notary service (waits for result) ---"
+          SUB_JSON="$RUNNER_TEMP/notar.json"
+          set +e
           xcrun notarytool submit "$DMG" \
             --key "$KEY_PATH" \
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER_ID" \
-            --wait
+            --output-format json --wait > "$SUB_JSON"
+          NOTAR_RC=$?
+          set -e
+          cat "$SUB_JSON" || true
+          SUB_ID="$(python3 -c "import json,sys;print(json.load(open('$SUB_JSON')).get('id',''))" 2>/dev/null || true)"
+          SUB_STATUS="$(python3 -c "import json,sys;print(json.load(open('$SUB_JSON')).get('status',''))" 2>/dev/null || true)"
+          echo "notarization status: ${SUB_STATUS:-unknown} (rc=$NOTAR_RC)"
+          if [ "$SUB_STATUS" != "Accepted" ]; then
+            echo "::error::notarization not Accepted (status=$SUB_STATUS) — fetching Apple's detailed log:"
+            if [ -n "$SUB_ID" ]; then
+              xcrun notarytool log "$SUB_ID" \
+                --key "$KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" || true
+            fi
+            rm -f "$KEY_PATH"
+            exit 1
+          fi
           rm -f "$KEY_PATH"
           xcrun stapler staple "$DMG"
           echo "--- final Gatekeeper assessment ---"
