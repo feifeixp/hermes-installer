@@ -109,6 +109,16 @@ a = Analysis(
         # Otherwise webui falls back to the literals block and reports
         # VERSION="" in the UI.
         + ([("_meta.py", ".")] if Path("_meta.py").exists() else [])
+        # Preset persona SOUL.md files (16 bundled identities). The 智能体灵魂
+        # panel's「从预设人格选择」picker reads these at runtime from
+        # docker/assets/personas/SOUL/ (webui/api/personas_presets.py). They
+        # MUST be shipped or the picker shows「没有可用的预设人格」in the
+        # packaged app — previously only worked in a dev checkout. glob() on a
+        # missing dir yields [], so this is self-guarding.
+        + [
+            (str(_p), "docker/assets/personas/SOUL")
+            for _p in sorted(Path("docker/assets/personas/SOUL").glob("*.SOUL.md"))
+        ]
     ),
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
