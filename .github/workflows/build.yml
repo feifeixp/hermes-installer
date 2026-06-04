@@ -210,8 +210,23 @@ jobs:
 
       - name: Create .dmg
         run: |
+          set -euo pipefail
           TMP=$(mktemp -d)
-          cp -r "dist/Hermes Installer.app" "$TMP/"
+          # MUST use `ditto`, NOT `cp -r`, to stage the signed .app: `cp -r`
+          # DEREFERENCES the Python.framework symlinks (Contents/Frameworks/Python,
+          # Contents/Resources/Python, Python.framework/Python) into duplicate real
+          # files, which breaks the bundle's code seal — codesign then reports
+          # "bundle format is ambiguous" and Apple notarization rejects it with
+          # "The signature of the binary is invalid" on exactly those paths.
+          # `ditto` preserves symlinks + xattrs + the signature. (Verified by
+          # local repro: cp-staged copy FAILS `codesign --verify`, ditto PASSES.)
+          ditto "dist/Hermes Installer.app" "$TMP/Hermes Installer.app"
+          # Belt-and-suspenders: confirm the STAGED copy (the one that goes into
+          # the dmg) still has a valid signature, so a staging regression fails
+          # here at build time instead of 10 min later at notarization.
+          if [ "${{ steps.signcfg.outputs.enabled }}" = "true" ]; then
+            codesign --verify --deep --strict --verbose=2 "$TMP/Hermes Installer.app"
+          fi
           ln -s /Applications "$TMP/Applications"
           hdiutil create \
             -volname "Hermes Installer" \
