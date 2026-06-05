@@ -1,5 +1,5 @@
 """
-Hermes Installer — cross-platform entry point.
+NeoMuse — cross-platform entry point.
 - macOS  : pywebview cocoa (WKWebView native window)
 - Windows: pywebview edgechromium (Edge WebView2 native window)
 - Always launches the Hermes WebUI (bootstrap.py handles first-time setup)
@@ -71,7 +71,7 @@ logging.basicConfig(
     encoding="utf-8",
 )
 log = logging.getLogger("hermes")
-log.info("=== Hermes Installer starting === pid=%s py=%s platform=%s frozen=%s",
+log.info("=== NeoMuse starting === pid=%s py=%s platform=%s frozen=%s",
          os.getpid(), sys.version.split()[0], sys.platform,
          getattr(sys, "frozen", False))
 
@@ -822,7 +822,7 @@ def _macos_install_agent() -> None:
     bundle_zip = BASE_DIR / "hermes_agent_bundle.zip"
     if not bundle_zip.exists():
         raise RuntimeError(
-            f"找不到安装包：{bundle_zip}\n请重新下载最新版 Hermes Installer。"
+            f"找不到安装包：{bundle_zip}\n请重新下载最新版 NeoMuse。"
         )
 
     # uv: bundled at tools/uv (no extension on POSIX); fall back to system uv.
@@ -834,7 +834,7 @@ def _macos_install_agent() -> None:
             log.info("Using system uv: %s", uv_exe)
         else:
             raise RuntimeError(
-                "找不到 uv 安装工具。请下载最新版 Hermes Installer（已内置 uv）。"
+                "找不到 uv 安装工具。请下载最新版 NeoMuse（已内置 uv）。"
             )
     try:
         os.chmod(uv_exe, 0o755)  # bundled binary may lose +x through zip/copy
@@ -882,7 +882,7 @@ def _macos_install_agent() -> None:
     else:
         log.warning("patch script not found at %s — skipping", patch_script)
 
-    print("\n      ✓ 安装完成！Hermes 即将启动...\n", flush=True)
+    print("\n      ✓ 安装完成！NeoMuse 即将启动...\n", flush=True)
     log.info("macOS agent install complete — venv at %s", venv_dir)
 
 
@@ -901,7 +901,7 @@ def _windows_install_agent() -> None:
     if not bundle_zip.exists():
         raise RuntimeError(
             f"找不到安装包：{bundle_zip}\n"
-            "请重新下载最新版 Hermes Installer。"
+            "请重新下载最新版 NeoMuse。"
         )
 
     # ── Locate uv.exe ─────────────────────────────────────────────────────
@@ -914,7 +914,7 @@ def _windows_install_agent() -> None:
         else:
             raise RuntimeError(
                 "找不到 uv 安装工具。\n"
-                "请下载最新版 Hermes Installer（已内置 uv）。\n"
+                "请下载最新版 NeoMuse（已内置 uv）。\n"
                 "或访问 https://github.com/astral-sh/uv/releases 手动安装 uv。"
             )
 
@@ -1049,7 +1049,7 @@ def _windows_install_agent() -> None:
     else:
         log.warning("patch script not found at %s — skipping", patch_script)
 
-    print("\n      ✓ 安装完成！Hermes 即将启动...\n", flush=True)
+    print("\n      ✓ 安装完成！NeoMuse 即将启动...\n", flush=True)
     log.info("Windows agent install complete — venv at %s", venv_dir)
 
 
@@ -1068,12 +1068,12 @@ def _start_webui_server_windows(port: int, host: str) -> subprocess.Popen:
     if not venv_python.exists():
         raise RuntimeError(
             f"venv Python 未找到：{venv_python}\n"
-            "请删除 ~/.hermes/hermes-agent/ 后重启 Hermes 重新安装。"
+            "请删除 ~/.hermes/hermes-agent/ 后重启 NeoMuse 重新安装。"
         )
     if not server_py.exists():
         raise RuntimeError(
             f"server.py 未找到：{server_py}\n"
-            "请重新下载 Hermes Installer。"
+            "请重新下载 NeoMuse。"
         )
 
     env = _clean_subprocess_env(extra={
@@ -1204,10 +1204,10 @@ def _open_native_window(title: str, url: str, on_close=None, current_mode: str =
         _send_crash_report("startup_webview2_missing", wv2_err)
         _alert(
             "缺少必要组件：Edge WebView2 Runtime",
-            "Hermes 需要 Microsoft Edge WebView2 Runtime 才能显示界面。\n\n"
+            "NeoMuse 需要 Microsoft Edge WebView2 Runtime 才能显示界面。\n\n"
             "请访问以下地址免费下载安装（约 2MB）：\n"
             "https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n"
-            "安装完成后重新启动 Hermes 即可。\n\n"
+            "安装完成后重新启动 NeoMuse 即可。\n\n"
             f"错误日志保存在：\n{_LOG_PATH}",
         )
         sys.exit(1)
@@ -1219,7 +1219,7 @@ def _open_native_window(title: str, url: str, on_close=None, current_mode: str =
         _send_crash_report("startup_pywebview_missing", "pywebview ImportError")
         import webbrowser
         webbrowser.open(url)
-        _alert("Hermes Installer",
+        _alert("NeoMuse",
                "pywebview 未安装，已在浏览器中打开。\n"
                "如需独立窗口，请运行: pip install pywebview")
         return
@@ -1271,7 +1271,7 @@ def _open_native_window(title: str, url: str, on_close=None, current_mode: str =
             except Exception:
                 pass
         _alert(
-            "Hermes 窗口启动失败",
+            "NeoMuse 窗口启动失败",
             f"原生窗口启动失败：\n{exc}\n\n"
             f"错误日志保存在：\n{_LOG_PATH}",
         )
@@ -1379,13 +1379,13 @@ def _run_remote_mode(url: str, label: str = ""):
     No port-conflict check, no install, no spawn, no cleanup. The window
     closing == process exit. Pure thin client.
     """
-    title = f"Hermes · {label}" if label else "Hermes (远程)"
+    title = f"NeoMuse · {label}" if label else "NeoMuse (远程)"
     log.info("Remote mode: opening %s as %s", url, title)
     try:
         _open_native_window(title, url, on_close=None, current_mode="remote")
     except Exception as exc:
         log.exception("remote-mode pywebview failed: %s", exc)
-        _alert("Hermes Installer",
+        _alert("NeoMuse",
                f"无法打开远程 WebUI: {exc}\n\n"
                f"配置的 URL: {url}\n\n"
                f"如果 URL 有误，请运行：\n"
@@ -1403,7 +1403,7 @@ def main():
 
     # ── Remote mode short-circuit ────────────────────────────────────────
     # If the user has configured a remote WebUI URL, bypass bootstrap +
-    # install + local server entirely. The Hermes Installer becomes a
+    # install + local server entirely. The NeoMuse becomes a
     # thin pywebview shell pointing at the cloud WebUI.
     cfg = _read_gateway_config()
     if cfg.get("mode") == "remote":
@@ -1425,15 +1425,15 @@ def main():
     if _port_in_use(port):
         log.info("Port %d already in use — prompting user", port)
         if not _confirm(
-            "Hermes Installer",
-            f"端口 {port} 已被另一个 Hermes 实例占用（窗口可能被遮挡）。\n"
-            f"关闭旧实例并打开新的 Hermes 窗口？",
+            "NeoMuse",
+            f"端口 {port} 已被另一个 NeoMuse 实例占用（窗口可能被遮挡）。\n"
+            f"关闭旧实例并打开新的 NeoMuse 窗口？",
         ):
             log.info("User declined — leaving existing instance running")
             sys.exit(0)
         log.info("User confirmed — terminating previous WebUI")
         if not _free_port(port):
-            _alert("Hermes Installer",
+            _alert("NeoMuse",
                    f"端口 {port} 无法释放。\n请手动停止占用进程后重试。")
             sys.exit(1)
 
@@ -1470,7 +1470,7 @@ def main():
             # Show the console so the user can watch install progress.
             _show_console()
             print("\n" + "=" * 56, flush=True)
-            print("   Hermes 首次启动 — 正在安装必要组件", flush=True)
+            print("   NeoMuse 首次启动 — 正在安装必要组件", flush=True)
             print("   日志保存在：" + str(_LOG_PATH), flush=True)
             print("=" * 56 + "\n", flush=True)
             try:
@@ -1481,7 +1481,7 @@ def main():
                 log.exception("Windows install failed: %s", exc)
                 _send_crash_report("windows_install_failed", str(exc), {"traceback": tb[:2000]})
                 _alert(
-                    "Hermes 安装失败",
+                    "NeoMuse 安装失败",
                     f"首次安装 hermes-agent 时出错：\n\n{exc}\n\n"
                     f"请检查网络连接后重试。\n"
                     f"详细日志：{_LOG_PATH}",
@@ -1496,7 +1496,7 @@ def main():
         except Exception as exc:
             log.exception("Failed to start server.py on Windows: %s", exc)
             _alert(
-                "Hermes 启动失败",
+                "NeoMuse 启动失败",
                 f"无法启动 WebUI 服务：\n\n{exc}\n\n"
                 f"日志：{_LOG_PATH}",
             )
@@ -1544,7 +1544,7 @@ def main():
                 log.error("server.py died early (rc=%s) — log tail follows:\n%s",
                           returncode, tail)
                 _alert(
-                    "Hermes 启动失败",
+                    "NeoMuse 启动失败",
                     f"WebUI 服务在启动过程中崩溃（退出码 {returncode}）。\n\n"
                     f"日志末尾：\n{tail_short or '(日志为空)'}\n\n"
                     f"完整日志：{server_log_path}",
@@ -1554,7 +1554,7 @@ def main():
                 log.error("server.py alive but port %d not bound after %ds — log tail:\n%s",
                           port, WEBUI_STARTUP_TIMEOUT, tail)
                 _alert(
-                    "Hermes 启动超时",
+                    "NeoMuse 启动超时",
                     f"WebUI 服务在 {WEBUI_STARTUP_TIMEOUT} 秒内未绑定端口 {port}。\n"
                     f"进程仍在运行 (PID {_win_server_proc.pid})。\n\n"
                     f"日志末尾：\n{tail_short or '(日志为空)'}\n\n"
@@ -1611,13 +1611,13 @@ def main():
                                                log_path=str(_LOG_PATH))
                     except Exception:
                         pass
-                _alert("Hermes 安装失败",
+                _alert("NeoMuse 安装失败",
                        f"首次安装未完成：\n{exc}\n\n日志：\n{_LOG_PATH}")
                 sys.exit(1)
         python_exe = _find_bootstrap_python()
 
         if not BOOTSTRAP_PY.exists():
-            _alert("Hermes Installer",
+            _alert("NeoMuse",
                    f"找不到 WebUI 启动脚本。\n路径：{BOOTSTRAP_PY}\n"
                    f"请确认 webui/ 目录与 main.py 在同一文件夹下。")
             sys.exit(1)
@@ -1644,12 +1644,12 @@ def main():
                 start_new_session=True,
             )
         except FileNotFoundError:
-            _alert("Hermes Installer",
+            _alert("NeoMuse",
                    f"找不到 Python 解释器。\n尝试的路径：{python_exe}\n"
                    f"请安装 Python 3.10+ 后重试。")
             sys.exit(1)
         except Exception as exc:
-            _alert("Hermes Installer", f"无法启动 WebUI：{exc}")
+            _alert("NeoMuse", f"无法启动 WebUI：{exc}")
             sys.exit(1)
 
         log.info("bootstrap.py PID=%s — waiting for WebUI on port %d (timeout=%ds)",
@@ -1708,7 +1708,7 @@ def main():
             log.debug("signal %s install failed: %s", _sig, exc)
 
     url = f"http://{host}:{port}/"
-    title = "Hermes"
+    title = "NeoMuse"
 
     log.info("Opening WebUI: %s (server ready=%s)", url, ready)
 
@@ -1763,7 +1763,7 @@ if __name__ == "__main__":
         except Exception:
             pass
         _alert(
-            "Hermes 遇到意外错误",
+            "NeoMuse 遇到意外错误",
             f"应用启动时遇到未处理的错误：\n\n{exc}\n\n"
             f"错误日志保存在：\n{_LOG_PATH}\n\n"
             "请截图此对话框后联系支持团队。",

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# desktop_menu.py — native menu bar for the Hermes Installer desktop app.
+# desktop_menu.py — native menu bar for the NeoMuse desktop app.
 #
 # WHY THIS EXISTS
 #   Until now the desktop app opened straight into the WebUI with zero
@@ -297,7 +297,7 @@ def _on_about(window) -> None:
     _alert(
         window,
         "关于 Hermes Agent",
-        f"Hermes Installer v{version}\n\n"
+        f"NeoMuse v{version}\n\n"
         f"你的专属 AI 同事 — 跨会话记忆、定时任务、技能复用、跨设备同步。\n\n"
         f"项目主页: https://app.neowow.studio/agent",
     )

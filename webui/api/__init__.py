@@ -57,8 +57,8 @@ try:
     VERSION      = _meta.VERSION
 except Exception:
     # Fallback literals — keep in sync with _meta.py
-    APP_NAME     = "Hermes"
-    APP_FULL_NAME = "Hermes Installer"
+    APP_NAME     = "NeoMuse"
+    APP_FULL_NAME = "NeoMuse"
     BUNDLE_ID    = "cn.neodomain.hermes"
     COMPANY      = "Neodomain Inc."
     COPYRIGHT    = "Copyright © 2024-2026 Neodomain Inc."

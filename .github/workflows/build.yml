@@ -190,17 +190,17 @@ jobs:
 
       - name: Verify .app
         run: |
-          if [ ! -d "dist/Hermes Installer.app" ]; then
+          if [ ! -d "dist/NeoMuse.app" ]; then
             echo "ERROR: .app not found"
             exit 1
           fi
-          echo "✓ .app: $(du -sh 'dist/Hermes Installer.app' | cut -f1)"
+          echo "✓ .app: $(du -sh 'dist/NeoMuse.app' | cut -f1)"
 
       - name: Verify .app signature
         if: steps.signcfg.outputs.enabled == 'true'
         run: |
           set -euo pipefail
-          APP="dist/Hermes Installer.app"
+          APP="dist/NeoMuse.app"
           # PyInstaller signed the whole bundle during the build (codesign_identity
           # + entitlements from env). Verify it's a valid hardened-runtime
           # Developer ID signature before we notarize.
@@ -220,16 +220,16 @@ jobs:
           # "The signature of the binary is invalid" on exactly those paths.
           # `ditto` preserves symlinks + xattrs + the signature. (Verified by
           # local repro: cp-staged copy FAILS `codesign --verify`, ditto PASSES.)
-          ditto "dist/Hermes Installer.app" "$TMP/Hermes Installer.app"
+          ditto "dist/NeoMuse.app" "$TMP/NeoMuse.app"
           # Belt-and-suspenders: confirm the STAGED copy (the one that goes into
           # the dmg) still has a valid signature, so a staging regression fails
           # here at build time instead of 10 min later at notarization.
           if [ "${{ steps.signcfg.outputs.enabled }}" = "true" ]; then
-            codesign --verify --deep --strict --verbose=2 "$TMP/Hermes Installer.app"
+            codesign --verify --deep --strict --verbose=2 "$TMP/NeoMuse.app"
           fi
           ln -s /Applications "$TMP/Applications"
           hdiutil create \
-            -volname "Hermes Installer" \
+            -volname "NeoMuse" \
             -srcfolder "$TMP" \
             -ov -format UDZO \
             -imagekey zlib-level=9 \
