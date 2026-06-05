@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for Hermes Installer.
+PyInstaller spec for NeoMuse.
 Produces:
-  macOS   → dist/Hermes Installer.app  (+ .dmg via build.sh)
+  macOS   → dist/NeoMuse.app  (+ .dmg via build.sh)
   Windows → dist/Hermes Installer.exe  (single file, via build.bat)
 
 All identity / version / copyright constants come from _meta.py so this

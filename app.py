@@ -289,7 +289,7 @@ def check_hermes_installed() -> tuple[bool, str]:
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Hermes Installer")
+app = FastAPI(title="NeoMuse")
 
 BASE_DIR = Path(os.environ.get("HERMES_INSTALLER_BASE_DIR", Path(__file__).parent))
 INDEX_HTML = BASE_DIR / "index.html"

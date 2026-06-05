@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────
-# build.sh — Build Hermes Installer as macOS .app + .dmg
+# build.sh — Build NeoMuse as macOS .app + .dmg
 # Usage: bash build.sh
 # Requires: Python 3.10+, pip
 # ──────────────────────────────────────────────────────────────────────────
@@ -11,12 +11,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 DIST_DIR="dist"
-APP_NAME="Hermes Installer"
+APP_NAME="NeoMuse"
 DMG_NAME="Hermes-Installer-macOS.dmg"
-VOLUME_NAME="Hermes Installer"
+VOLUME_NAME="NeoMuse"
 
 echo ""
-echo "⚡ Hermes Installer — macOS 打包脚本"
+echo "⚡ NeoMuse — macOS 打包脚本"
 echo "────────────────────────────────────────────"
 
 # ── 1. Find Python 3.10+ ──────────────────────────────────────────────────
@@ -108,6 +108,6 @@ echo "   .dmg  →  $DIST_DIR/$DMG_NAME  ($DMG_SIZE)"
 echo ""
 echo "分发说明："
 echo "  1. 将 $DMG_NAME 发给用户"
-echo "  2. 双击 .dmg，把 Hermes Installer 拖入 Applications"
+echo "  2. 双击 .dmg，把 NeoMuse 拖入 Applications"
 echo "  3. 首次运行: 右键 → 打开 (绕过 Gatekeeper 未签名警告)"
 echo "────────────────────────────────────────────"

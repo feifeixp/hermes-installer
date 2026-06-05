@@ -7479,7 +7479,7 @@ def handle_post(handler, parsed) -> bool:
     # "go back to local" (POST {mode:"local"} or {clear:true}).
     #
     # NOTE: changing this config doesn't take effect until the next
-    # Hermes Installer launch (main.py reads it once at startup). The UI
+    # NeoMuse launch (main.py reads it once at startup). The UI
     # tells the user to restart after saving.
     if parsed.path == "/api/messaging/weixin/qr/start":
         from api import messaging_channels as _mc

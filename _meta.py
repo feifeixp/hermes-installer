@@ -1,5 +1,5 @@
 """
-Hermes Installer — single source of truth for application metadata.
+NeoMuse — single source of truth for application metadata.
 
 All other files (spec, webui, main.py) import from here so a version
 bump or legal-text change only needs one edit.
@@ -17,9 +17,14 @@ from pathlib import Path
 
 
 # ── Identity ────────────────────────────────────────────────────────────────
-APP_NAME         = "Hermes"
-APP_FULL_NAME    = "Hermes Installer"
+APP_NAME         = "NeoMuse"
+APP_FULL_NAME    = "NeoMuse"
+# Kept as the legacy reverse-DNS bundle ID so existing installs are treated as
+# the SAME app by macOS/Windows (seamless upgrade; user data lives in ~/.hermes).
 BUNDLE_ID        = "cn.neodomain.hermes"          # reverse-DNS macOS bundle ID
+# Kept as the legacy output basename so the download filenames stay
+# "Hermes Installer.exe" / the macOS internal executable name is unchanged.
+# Only the user-visible app name (APP_NAME / APP_FULL_NAME, .app bundle) rebrands.
 EXE_NAME         = "Hermes Installer"             # output filename (no extension)
 
 # ── Ownership ───────────────────────────────────────────────────────────────
@@ -87,11 +92,11 @@ MACOS_INFO_PLIST: dict = {
     "NSHighResolutionCapable":      True,
     "LSMinimumSystemVersion":       "11.0",
     # Privacy usage descriptions
-    "NSAppleEventsUsageDescription":      "Hermes automates setup steps.",
-    "NSDesktopFolderUsageDescription":    "Hermes reads config files from the Desktop.",
-    "NSDocumentsFolderUsageDescription":  "Hermes may access documents during setup.",
-    "NSDownloadsFolderUsageDescription":  "Hermes saves downloaded files here.",
-    "NSNetworkVolumesUsageDescription":   "Hermes connects to AI APIs over the network.",
+    "NSAppleEventsUsageDescription":      "NeoMuse automates setup steps.",
+    "NSDesktopFolderUsageDescription":    "NeoMuse reads config files from the Desktop.",
+    "NSDocumentsFolderUsageDescription":  "NeoMuse may access documents during setup.",
+    "NSDownloadsFolderUsageDescription":  "NeoMuse saves downloaded files here.",
+    "NSNetworkVolumesUsageDescription":   "NeoMuse connects to AI APIs over the network.",
     # Hardened Runtime (required for PyObjC WKWebView)
     "com.apple.security.cs.allow-unsigned-executable-memory": True,
     "com.apple.security.cs.disable-library-validation":       True,

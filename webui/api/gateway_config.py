@@ -1,7 +1,7 @@
 """
 Gateway / connection-mode configuration.
 
-Decides whether the Hermes Installer runs everything locally (the
+Decides whether the NeoMuse runs everything locally (the
 default — install Hermes Agent, spawn a local WebUI server, open a
 pywebview pointing at localhost) or just opens a remote WebUI URL
 served by another machine.

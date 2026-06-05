@@ -1,4 +1,4 @@
-"""Hermes Installer — client-side crash reporter.
+"""NeoMuse — client-side crash reporter.
 
 Imported by both main.py (PyInstaller frozen) and webui/server.py (venv
 subprocess). The webui side finds this module via the HERMES_INSTALLER_BASE_DIR
