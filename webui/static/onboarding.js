@@ -299,6 +299,23 @@ function _renderOnboardingBody(){
       <p class="onboarding-foot">${t('onboarding_login_required')}</p>`;
     return;
   }
+
+  if(key==='plan'){
+    const ns=ONBOARDING.status.neowow||{};
+    const plans=(ONBOARDING.status.setup&&ONBOARDING.status.setup.plans)||[];
+    _setOnboardingNotice('', 'info');
+    const acct=ns.hasJwt?`<div class="onboarding-acct">${ns.points!=null?('积分 '+ns.points):'已登录'}</div>`:'';
+    const buyCards=plans.map(p=>`<div class="onboarding-plan"><div class="op-name">${p.name||''}</div><div class="op-price">${p.price||''}</div><button class="onboarding-plan-btn" onclick="window.open('${(p.buy_url||'').replace(/'/g,'')}','_blank')">${t('onboarding_plan_buy')}</button></div>`).join('');
+    body.innerHTML=`${acct}
+      <h3 class="onboarding-h">${t('onboarding_plan_heading')}</h3>
+      <p class="onboarding-sub">${t('onboarding_plan_sub')}</p>
+      <div class="onboarding-plans">
+        <div class="onboarding-plan is-hot"><div class="op-badge">${t('onboarding_plan_trial')}</div><div class="op-price">¥0</div><button class="onboarding-plan-btn solid" onclick="nextOnboardingStep()">${t('onboarding_plan_trial_btn')}</button></div>
+        ${buyCards||''}
+      </div>
+      ${plans.length?'':('<p class="onboarding-foot">'+t('onboarding_plan_unreachable')+'</p>')}`;
+    return;
+  }
 }
 
 function _getOnboardingPasswordSummaryKey(settings){
