@@ -389,12 +389,16 @@ async function loadOnboardingWizard(){
     const status=await api('/api/onboarding/status');
     ONBOARDING.status=status;
     const current=((status.setup||{}).current)||{};
-    ONBOARDING.form.provider=current.provider||'openrouter';
+    ONBOARDING.form.provider=current.provider||'neowow-coding-plan';
     ONBOARDING.form.workspace=(status.workspaces&&status.workspaces.last)||status.settings.default_workspace||'';
     ONBOARDING.form.model=status.settings.default_model||current.model||'';
     ONBOARDING.form.password='';
     ONBOARDING.form.apiKey='';
     ONBOARDING.form.baseUrl=current.base_url||'';
+    ONBOARDING.form.loginMethod=((status.neowow||{}).hasJwt)?'neowow':'';
+    ONBOARDING.form.persona='';
+    ONBOARDING.form.personaContent='';
+    ONBOARDING.presets=null;
     ONBOARDING.active=!status.completed;
     if(!ONBOARDING.active) return false;
     $('onboardingOverlay').style.display='flex';
