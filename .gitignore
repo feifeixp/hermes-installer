@@ -51,3 +51,6 @@ tools/
 
 # Visual-companion brainstorm scratch
 .superpowers/
+
+# preview/smoke runtime state
+.smoke-hermes-home/
