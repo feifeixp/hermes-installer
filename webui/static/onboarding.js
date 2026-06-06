@@ -1,4 +1,4 @@
-const ONBOARDING={status:null,step:0,steps:['system','setup','workspace','password','finish'],form:{provider:'openrouter',workspace:'',model:'',password:'',apiKey:'',baseUrl:''},active:false,probe:{status:'idle',error:null,detail:'',models:null,probedKey:''}};
+const ONBOARDING={status:null,step:0,steps:['login','plan','persona'],form:{provider:'neowow-coding-plan',workspace:'',model:'',password:'',apiKey:'',baseUrl:'',loginMethod:'',persona:'',personaContent:''},active:false,probe:{status:'idle',error:null,detail:'',models:null,probedKey:''},presets:null};
 
 // ── Onboarding base-URL probe (#1499) ───────────────────────────────────────
 // Probes <base_url>/models so the wizard can validate the configured endpoint
@@ -119,11 +119,9 @@ function _getOnboardingCurrentSetup(){
 
 function _onboardingStepMeta(key){
   return ({
-    system:{title:t('onboarding_step_system_title'),desc:t('onboarding_step_system_desc')},
-    setup:{title:t('onboarding_step_setup_title'),desc:t('onboarding_step_setup_desc')},
-    workspace:{title:t('onboarding_step_workspace_title'),desc:t('onboarding_step_workspace_desc')},
-    password:{title:t('onboarding_step_password_title'),desc:t('onboarding_step_password_desc')},
-    finish:{title:t('onboarding_step_finish_title'),desc:t('onboarding_step_finish_desc')}
+    login:{title:t('onboarding_step_login_title'),desc:t('onboarding_step_login_desc')},
+    plan:{title:t('onboarding_step_plan_title'),desc:t('onboarding_step_plan_desc')},
+    persona:{title:t('onboarding_step_persona_title'),desc:t('onboarding_step_persona_desc')}
   })[key];
 }
 
