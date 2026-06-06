@@ -437,29 +437,32 @@ async function _saveOnboardingProviderSetup(){
 }
 
 async function _saveOnboardingDefaults(){
-  const workspace=(ONBOARDING.form.workspace||'').trim();
-  const model=(ONBOARDING.form.model||'').trim();
-  const password=(ONBOARDING.form.password||'').trim();
-  if(!workspace) throw new Error(t('onboarding_error_choose_workspace'));
-  if(!model) throw new Error(t('onboarding_error_choose_model'));
-  const known=_getOnboardingWorkspaceChoices().some(ws=>ws.path===workspace);
-  if(!known){
-    await api('/api/workspaces/add',{method:'POST',body:JSON.stringify({path:workspace})});
+  // Workspace: keep an existing default if present; else use the first known
+  // workspace; else let the backend default stand. Never block first run on it.
+  const st=ONBOARDING.status||{};
+  let workspace=(st.settings&&st.settings.default_workspace)||'';
+  if(!workspace){
+    const choices=_getOnboardingWorkspaceChoices();
+    workspace=(choices[0]&&choices[0].path)||'';
   }
-  // Model persisted by /api/onboarding/setup — no /api/default-model call needed here
-  const body={default_workspace:workspace};
-  if(password) body._set_password=password;
-  const saved=await api('/api/settings',{method:'POST',body:JSON.stringify(body)});
-  if(ONBOARDING.status){
-    ONBOARDING.status.settings={...(ONBOARDING.status.settings||{}),password_enabled:!!saved.auth_enabled};
+  const body={};
+  if(workspace) body.default_workspace=workspace;
+  if(Object.keys(body).length){
+    try{ await api('/api/settings',{method:'POST',body:JSON.stringify(body)}); }catch(e){}
   }
-  try{localStorage.setItem('hermes-webui-model',model)}catch{}
-  if($('modelSelect')) _applyModelToDropdown(model,$('modelSelect'));
 }
 
 async function _finishOnboarding(){
-  await _saveOnboardingProviderSetup();
+  // API-key path: persist the provider config the user entered on step 1.
+  if(ONBOARDING.form.loginMethod==='apikey'){
+    await _saveOnboardingProviderSetup();
+  }
   await _saveOnboardingDefaults();
+  // Apply the chosen preset persona to ~/.hermes/SOUL.md (skip when none/blank).
+  const pc=(ONBOARDING.form.personaContent||'').trim();
+  if(ONBOARDING.form.persona && ONBOARDING.form.persona!=='__custom__' && pc){
+    try{ await api('/api/memory/write',{method:'POST',body:JSON.stringify({section:'soul',content:pc})}); }catch(e){}
+  }
   const done=await api('/api/onboarding/complete',{method:'POST',body:'{}'});
   ONBOARDING.status=done;
   ONBOARDING.active=false;
