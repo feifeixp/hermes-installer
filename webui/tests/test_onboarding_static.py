@@ -29,11 +29,17 @@ def test_onboarding_css_rules_exist():
 
 def test_onboarding_js_exposes_bootstrap_hooks():
     js = read("static/onboarding.js")
+    assert "steps:['login','plan','persona']" in js.replace(" ", "")
+    # loadOnboardingWizard lives in onboarding.js (the plan's reference to
+    # boot.js is a mislabel — boot.js only *calls* it).
     assert "async function loadOnboardingWizard()" in js
     assert "async function nextOnboardingStep()" in js
-    assert "api('/api/onboarding/status')" in js
-    assert "api('/api/onboarding/setup'" in js
-    assert "api('/api/onboarding/complete'" in js
+    assert "function startOnboardingLogin()" in js
+    assert "function selectOnboardingPersona(" in js
+    assert "/api/neowow/oauth/launch" in js
+    assert "/api/personas/presets" in js
+    assert "/api/memory/write" in js
+    assert "/api/onboarding/complete" in js
 
 
 def test_onboarding_uses_i18n_helpers():
@@ -42,11 +48,11 @@ def test_onboarding_uses_i18n_helpers():
     i18n = read("static/i18n.js")
     assert 'data-i18n="onboarding_title"' in html
     assert 'data-i18n="onboarding_continue"' in html
-    assert "t('onboarding_step_system_title')" in js
-    assert "t('onboarding_step_setup_title')" in js
+    assert "t('onboarding_step_login_title')" in js
+    assert "t('onboarding_step_persona_title')" in js
     assert "t('onboarding_complete')" in js
-    assert "onboarding_title: 'Welcome to Hermes Web UI'" in i18n
-    assert "onboarding_title: 'Bienvenido a Hermes Web UI'" in i18n
+    assert "onboarding_title: 'Welcome to NeoMuse'" in i18n
+    assert "onboarding_title: 'Bienvenido a NeoMuse'" in i18n
 
 
 def test_bootstrap_script_contains_official_installer_and_windows_guard():
