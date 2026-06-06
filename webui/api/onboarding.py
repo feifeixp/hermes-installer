@@ -162,6 +162,30 @@ def _neowow_coding_plan_default_models() -> list[dict]:
     ]
 
 
+# Preferred default model for the Neowow Coding Plan. deepseek-v4-flash is the
+# cheap, universal model every tier (incl. trial) can access — we want it as the
+# default rather than "whatever the dashboard happens to list first" (which
+# surfaced claude-sonnet-4.5 as the default for some plans).
+_NEOWOW_PREFERRED_DEFAULT_MODEL = "deepseek-v4-flash"
+
+
+def _pick_neowow_default(model_ids: list[str]) -> "str | None":
+    """Choose the coding-plan default from the live plan's model list.
+
+    Prefer ``deepseek-v4-flash`` when present (exact id, or a provider-prefixed
+    form like ``deepseek/deepseek-v4-flash``). Fall back to the first listed
+    model only when the plan doesn't include it. Returns None for an empty list.
+    """
+    if not model_ids:
+        return None
+    for mid in model_ids:
+        if mid == _NEOWOW_PREFERRED_DEFAULT_MODEL or mid.endswith(
+            "/" + _NEOWOW_PREFERRED_DEFAULT_MODEL
+        ):
+            return mid
+    return model_ids[0]
+
+
 _SUPPORTED_PROVIDER_SETUPS = {
     # ── Neowow Coding Plan (the Phase β default for managed deployments) ──
     # Catalogued FIRST so it shows up first in the wizard when not gated.
@@ -1007,7 +1031,11 @@ def _fetch_neowow_plan_models() -> tuple[list[dict], str | None]:
                 if not mid:
                     continue
                 shaped.append({"id": mid, "label": mid})
-            default_model = str(data.get("models", ["deepseek-v4-flash"])[0]) if models else None
+            # Default = deepseek-v4-flash when the plan includes it, else the
+            # first listed model (see _pick_neowow_default). Previously this took
+            # models[0] blindly, which made claude-sonnet-4.5 the default for
+            # plans that listed it first.
+            default_model = _pick_neowow_default([s["id"] for s in shaped])
             return shaped or _neowow_coding_plan_default_models(), default_model
     except (urllib.error.URLError, socket.timeout, json.JSONDecodeError, KeyError, ValueError):
         logger.debug("Falling back to static neowow-coding-plan model list", exc_info=True)
