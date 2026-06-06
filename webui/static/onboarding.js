@@ -269,6 +269,24 @@ async function _pollOnboardingLogin(){
   _onbLoginTimer=setTimeout(_pollOnboardingLogin,3000);
 }
 
+async function _loadOnboardingPresets(){
+  try{
+    const r=await api('/api/personas/presets');
+    ONBOARDING.presets=Array.isArray(r)?r:(r&&r.presets)||[];
+  }catch(e){ ONBOARDING.presets=[]; }
+  if(ONBOARDING.steps[ONBOARDING.step]==='persona') _renderOnboardingBody();
+}
+function selectOnboardingPersona(id){
+  ONBOARDING.form.persona=id;
+  if(id&&id!=='__custom__'){
+    const p=(ONBOARDING.presets||[]).find(x=>x.id===id);
+    ONBOARDING.form.personaContent=p?p.content:'';
+  }else{
+    ONBOARDING.form.personaContent='';
+  }
+  _renderOnboardingBody();
+}
+
 function _renderOnboardingBody(){
   const body=$('onboardingBody');
   if(!body||!ONBOARDING.status)return;
@@ -314,6 +332,25 @@ function _renderOnboardingBody(){
         ${buyCards||''}
       </div>
       ${plans.length?'':('<p class="onboarding-foot">'+t('onboarding_plan_unreachable')+'</p>')}`;
+    return;
+  }
+
+  if(key==='persona'){
+    _setOnboardingNotice('', 'info');
+    if(ONBOARDING.presets===null){ _loadOnboardingPresets(); }
+    const presets=ONBOARDING.presets||[];
+    const shown=presets.slice(0,5);
+    const cards=shown.map(p=>`<div class="onboarding-persona ${ONBOARDING.form.persona===p.id?'sel':''}" onclick="selectOnboardingPersona('${p.id.replace(/'/g,'')}')"><div class="op-pname">${p.name}</div><div class="op-prole">${(p.summary||'').slice(0,12)}</div></div>`).join('');
+    body.innerHTML=`
+      <h3 class="onboarding-h">${t('onboarding_persona_heading')}</h3>
+      <p class="onboarding-sub">${t('onboarding_persona_sub')}</p>
+      <div class="onboarding-personas">
+        ${cards}
+        <div class="onboarding-persona custom ${ONBOARDING.form.persona==='__custom__'?'sel':''}" onclick="selectOnboardingPersona('__custom__')">${t('onboarding_persona_custom')}</div>
+      </div>
+      <div class="onboarding-foot">${presets.length>5?('+ '+(presets.length-5)+' · '+t('onboarding_persona_all')):''}</div>
+      <button class="onboarding-cta" onclick="nextOnboardingStep()">${t('onboarding_launch_btn')}</button>
+      <button class="onboarding-alt" onclick="selectOnboardingPersona('');nextOnboardingStep()">${t('onboarding_persona_skip')}</button>`;
     return;
   }
 }
