@@ -48,3 +48,6 @@ tools/
 
 # Static assets (unused placeholder)
 /static/
+
+# Visual-companion brainstorm scratch
+.superpowers/

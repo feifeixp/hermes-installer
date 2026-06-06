@@ -74,6 +74,16 @@ def _neowow_dashboard_base() -> str:
     return os.getenv("HERMES_NEOWOW_DASHBOARD", "https://app.neowow.studio").rstrip("/")
 
 
+def _safe_neowow_status() -> dict:
+    """Best-effort neowow login status for the wizard. Never raises."""
+    try:
+        from api.neowow import get_status
+        s = get_status() or {}
+        return {"hasJwt": bool(s.get("hasJwt")), "points": s.get("points")}
+    except Exception:
+        return {"hasJwt": False, "points": None}
+
+
 _NEOWOW_CODING_PLAN_PROVIDER_ID = "neowow-coding-plan"
 
 # The provider id we ACTUALLY write to config.yaml's model.provider
@@ -1336,6 +1346,7 @@ def get_onboarding_status() -> dict:
             **runtime,
         },
         "setup": _build_setup_catalog(cfg),
+        "neowow": _safe_neowow_status(),
         "workspaces": {
             "items": workspaces,
             "last": last_workspace,

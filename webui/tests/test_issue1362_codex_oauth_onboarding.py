@@ -592,6 +592,14 @@ def test_frontend_has_anthropic_oauth_support():
     assert "/api/onboarding/oauth/start" in js
     assert "/api/onboarding/oauth/poll" in js
     assert "/api/onboarding/oauth/cancel" in js
-    assert "window.open(" not in js[js.find("startAnthropicOAuth"):]
-    assert "accessToken" not in js[js.find("startAnthropicOAuth"):]
-    assert "refreshToken" not in js[js.find("startAnthropicOAuth"):]
+    # Scope the negative assertions to the startAnthropicOAuth *function body*
+    # (the def is the last function in the file). The 3-step redesign added a
+    # neowow-login window.open() and plan-card buy buttons elsewhere in the
+    # file — both legitimate — so anchoring on the first textual occurrence of
+    # "startAnthropicOAuth" (a button onclick near the top) would wrongly sweep
+    # those in. The flow that must stay window.open/token-free is the Anthropic
+    # OAuth function itself, which polls server-side.
+    anthropic_fn = js[js.find("async function startAnthropicOAuth"):]
+    assert "window.open(" not in anthropic_fn
+    assert "accessToken" not in anthropic_fn
+    assert "refreshToken" not in anthropic_fn
