@@ -230,6 +230,45 @@ function _providerStatusLabel(system){
   return t('onboarding_check_provider_pending');
 }
 
+function _renderOnboardingApiKeyForm(){
+  const providers=_getOnboardingSetupProviders();
+  const sel=ONBOARDING.form.provider;
+  const opts=providers.map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${p.label||p.id}</option>`).join('');
+  return `<div class="onboarding-field"><label>Provider</label>
+      <select id="onboardingProviderSelect">${opts}</select></div>
+    <div class="onboarding-field"><label>API Key</label>
+      <input id="onboardingApiKeyInput" type="password" autocomplete="off" placeholder="sk-..."></div>
+    <div class="onboarding-field"><label>Base URL (optional)</label>
+      <input id="onboardingBaseUrlInput" type="text" placeholder="https://..."></div>`;
+}
+function toggleOnboardingApiKey(){
+  ONBOARDING.form.loginMethod = ONBOARDING.form.loginMethod==='apikey' ? '' : 'apikey';
+  _renderOnboardingBody();
+}
+async function startOnboardingLogin(){
+  try{
+    const returnUrl=location.origin+'/api/neowow/oauth-callback';
+    const r=await api('/api/neowow/oauth/launch',{method:'POST',body:JSON.stringify({return_url:returnUrl})});
+    if(r&&r.url&&!r.ok){ window.open(r.url,'_blank'); }
+    _setOnboardingNotice(t('onboarding_login_waiting'),'info');
+    _pollOnboardingLogin();
+  }catch(e){ _setOnboardingNotice(e.message||String(e),'warn'); }
+}
+let _onbLoginTimer=null;
+async function _pollOnboardingLogin(){
+  try{
+    const s=await api('/api/neowow/status');
+    if(s&&s.hasJwt){
+      ONBOARDING.form.loginMethod='neowow';
+      ONBOARDING.status.neowow=s;
+      if(_onbLoginTimer){clearTimeout(_onbLoginTimer);_onbLoginTimer=null;}
+      _renderOnboardingBody();
+      return;
+    }
+  }catch(e){}
+  _onbLoginTimer=setTimeout(_pollOnboardingLogin,3000);
+}
+
 function _renderOnboardingBody(){
   const body=$('onboardingBody');
   if(!body||!ONBOARDING.status)return;
@@ -240,147 +279,26 @@ function _renderOnboardingBody(){
   const nextBtn=$('onboardingNextBtn');
   const backBtn=$('onboardingBackBtn');
   if(backBtn) backBtn.style.display=ONBOARDING.step>0?'':'none';
-  if(nextBtn) nextBtn.textContent=key==='finish'?t('onboarding_open'):t('onboarding_continue');
+  if(nextBtn) nextBtn.textContent=key==='persona'?t('onboarding_open'):t('onboarding_continue');
 
-  if(key==='system'){
-    const hermesOk=system.hermes_found&&system.imports_ok;
-    const setupOk=!!system.chat_ready;
-    _setOnboardingNotice(system.provider_note|| (setupOk?t('onboarding_notice_system_ready'):t('onboarding_notice_system_unavailable')),setupOk?'success':(hermesOk?'info':'warn'));
+  if(key==='login'){
+    const ns=ONBOARDING.status.neowow||{};
+    const signedIn=!!ns.hasJwt;
+    const m=ONBOARDING.form.loginMethod;
+    _setOnboardingNotice(signedIn?t('onboarding_login_done'):t('onboarding_login_required'), signedIn?'success':'info');
     body.innerHTML=`
-      <div class="onboarding-panel-grid">
-        <div class="onboarding-check ${hermesOk?'ok':'warn'}"><strong>${t('onboarding_check_agent')}</strong><span>${hermesOk?t('onboarding_check_agent_ready'):t('onboarding_check_agent_missing')}</span></div>
-        <div class="onboarding-check ${(setupOk?'ok':system.provider_configured?'warn':'muted')}"><strong>${t('onboarding_check_provider')}</strong><span>${_providerStatusLabel(system)}</span></div>
-        <div class="onboarding-check ${(settings.password_enabled?'ok':'muted')}"><strong>${t('onboarding_check_password')}</strong><span>${settings.password_enabled?t('onboarding_check_password_enabled'):t('onboarding_check_password_disabled')}</span></div>
-      </div>
-      <div class="onboarding-copy">
-        <p><strong>${t('onboarding_config_file')}</strong> ${esc(system.config_path||t('onboarding_unknown'))}</p>
-        <p><strong>${t('onboarding_env_file')}</strong> ${esc(system.env_path||t('onboarding_unknown'))}</p>
-        <p>${esc(system.provider_note||'')}</p>
-        ${system.current_provider?`<p><strong>${t('onboarding_current_provider')}</strong> ${esc(system.current_provider)}${system.current_model?` — ${esc(system.current_model)}`:''}</p>`:''}
-        ${system.current_base_url?`<p><strong>${t('onboarding_base_url_label')}</strong> ${esc(system.current_base_url)}</p>`:''}
-        ${system.missing_modules&&system.missing_modules.length?`<p><strong>${t('onboarding_missing_imports')}</strong> ${esc(system.missing_modules.join(', '))}</p>`:''}
-      </div>`;
+      <div class="onboarding-welcome">${t('onboarding_title')}</div>
+      <h3 class="onboarding-h">${t('onboarding_login_heading')}</h3>
+      <p class="onboarding-sub">${t('onboarding_login_sub')}</p>
+      <div class="onboarding-feat"><span class="of-ic">🧩</span><span>${t('onboarding_login_feat_coding')}</span></div>
+      <div class="onboarding-feat"><span class="of-ic">🎨</span><span>${t('onboarding_login_feat_media')}</span></div>
+      <div class="onboarding-feat"><span class="of-ic">🛒</span><span>${t('onboarding_login_feat_market')}</span></div>
+      <button class="onboarding-cta ${signedIn?'is-done':''}" id="onboardingLoginBtn" onclick="startOnboardingLogin()" ${signedIn?'disabled':''}>${signedIn?'✓ '+t('onboarding_login_done'):t('onboarding_login_btn')}</button>
+      <button class="onboarding-alt" id="onboardingApiKeyToggle" onclick="toggleOnboardingApiKey()">${t('onboarding_login_apikey')}</button>
+      <div id="onboardingApiKeyForm" style="display:${m==='apikey'?'block':'none'}">${_renderOnboardingApiKeyForm()}</div>
+      <p class="onboarding-foot">${t('onboarding_login_required')}</p>`;
     return;
   }
-
-  if(key==='setup'){
-    const selectedId=ONBOARDING.form.provider;
-    const groupedOptions=_renderProviderSelectOptions(selectedId);
-    const provider=_getOnboardingSetupProvider(selectedId)||_getOnboardingSetupProviders()[0]||null;
-    const showBaseUrl=provider&&provider.requires_base_url;
-    const keyHelp=provider
-      ? (provider.id==='anthropic'
-        ? 'Anthropic API key path: paste an Anthropic Console API key here. This is separate from a Claude Code subscription; use the Claude Code OAuth card if you want subscription credentials instead.'
-        : `${t('onboarding_api_key_help_prefix')} ${esc(provider.env_var)}.`)
-      : '';
-
-    // OAuth provider path: configured via CLI, no API key input needed.
-    const currentIsOauth=!!(ONBOARDING.status.setup||{}).current_is_oauth;
-    const currentProviderName=((ONBOARDING.status.setup||{}).current||{}).provider||'';
-    if(currentIsOauth){
-      const isReady=!!(ONBOARDING.status.system||{}).chat_ready;
-      const providerLabel=esc(currentProviderName);
-      const codexOauthPendingBody=currentProviderName==='openai-codex'
-        ? 'This instance is configured to use <strong>openai-codex</strong>, which uses OAuth rather than an API key. Use the button below to authenticate with ChatGPT, then continue once provider status refreshes.'
-        : t('onboarding_oauth_provider_not_ready_body').replace('{provider}',providerLabel);
-      if(isReady){
-        _setOnboardingNotice(t('onboarding_notice_setup_already_ready'),'success');
-        body.innerHTML=`
-          <div class="onboarding-oauth-card onboarding-oauth-ready">
-            <div class="onboarding-oauth-icon">✓</div>
-            <div>
-              <strong>${t('onboarding_oauth_provider_ready_title')}</strong>
-              <p>${t('onboarding_oauth_provider_ready_body').replace('{provider}',providerLabel)}</p>
-            </div>
-          </div>
-          <p class="onboarding-copy" style="margin-top:20px">${t('onboarding_oauth_switch_hint')}</p>
-          <label class="onboarding-field">
-            <span>${t('onboarding_provider_label')}</span>
-            <select id="onboardingProviderSelect" onchange="syncOnboardingProvider(this.value)">${groupedOptions}</select>
-          </label>
-          ${_renderOnboardingApiKeyField()}
-          ${_renderOnboardingBaseUrlField(showBaseUrl)}
-          <p class="onboarding-copy">${keyHelp}</p>`;
-      } else {
-        _setOnboardingNotice(t('onboarding_notice_setup_required'),'warn');
-        body.innerHTML=`
-          <div class="onboarding-oauth-card onboarding-oauth-pending">
-            <div class="onboarding-oauth-icon">⚠</div>
-            <div style="flex:1">
-              <strong>${t('onboarding_oauth_provider_not_ready_title')}</strong>
-              <p>${codexOauthPendingBody}</p>
-              ${currentProviderName==='openai-codex'?`<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="sm-btn" id="codexOAuthBtn" onclick="startCodexOAuth()" type="button">${t('oauth_login_codex')}</button></div><div id="codexOAuthFlow" style="display:none;margin-top:12px"></div>`:''}
-            </div>
-          </div>
-          <p class="onboarding-copy" style="margin-top:20px">${t('onboarding_oauth_switch_hint')}</p>
-          <label class="onboarding-field">
-            <span>${t('onboarding_provider_label')}</span>
-            <select id="onboardingProviderSelect" onchange="syncOnboardingProvider(this.value)">${groupedOptions}</select>
-          </label>
-          ${_renderOnboardingApiKeyField()}
-          ${_renderOnboardingBaseUrlField(showBaseUrl)}
-          <p class="onboarding-copy">${keyHelp}</p>`;
-      }
-      return;
-    }
-
-    _setOnboardingNotice(system.chat_ready?t('onboarding_notice_setup_already_ready'):t('onboarding_notice_setup_required'),system.chat_ready?'success':'info');
-    body.innerHTML=`
-      <label class="onboarding-field">
-        <span>${t('onboarding_provider_label')}</span>
-        <select id="onboardingProviderSelect" onchange="syncOnboardingProvider(this.value)">${groupedOptions}</select>
-      </label>
-      ${_renderOnboardingApiKeyField()}
-      ${_renderOnboardingProviderOAuthField(provider)}
-      ${_renderOnboardingBaseUrlField(showBaseUrl)}
-      <p class="onboarding-copy">${keyHelp}</p>
-      ${showBaseUrl?`<p class="onboarding-copy">${t('onboarding_base_url_help')}</p>`:''}
-      <p class="onboarding-copy">${esc(setup.unsupported_note||'')||''}</p>`;
-    return;
-  }
-
-  if(key==='workspace'){
-    const workspaceOptions=_getOnboardingWorkspaceChoices().map(ws=>`<option value="${esc(ws.path)}">${esc(ws.name||ws.path)} — ${esc(ws.path)}</option>`).join('');
-    _setOnboardingNotice(t('onboarding_notice_workspace'), 'info');
-    body.innerHTML=`
-      <label class="onboarding-field">
-        <span>${t('onboarding_workspace_label')}</span>
-        <select id="onboardingWorkspaceSelect" onchange="syncOnboardingWorkspaceSelect(this.value)">${workspaceOptions}</select>
-      </label>
-      <label class="onboarding-field">
-        <span>${t('onboarding_workspace_or_path')}</span>
-        <input id="onboardingWorkspaceInput" value="${esc(ONBOARDING.form.workspace||'')}" placeholder="${t('onboarding_workspace_placeholder')}" oninput="ONBOARDING.form.workspace=this.value">
-      </label>
-      ${_renderOnboardingModelField()}`;
-    const wsSel=$('onboardingWorkspaceSelect');
-    if(wsSel && ONBOARDING.form.workspace) wsSel.value=ONBOARDING.form.workspace;
-    const modelSel=$('onboardingModelSelect');
-    if(modelSel && ONBOARDING.form.model) modelSel.value=ONBOARDING.form.model;
-    return;
-  }
-
-  if(key==='password'){
-    _setOnboardingNotice(settings.password_enabled?t('onboarding_notice_password_enabled'):t('onboarding_notice_password_recommended'), settings.password_enabled?'success':'info');
-    body.innerHTML=`
-      <label class="onboarding-field">
-        <span>${t('onboarding_password_label')}</span>
-        <input id="onboardingPasswordInput" type="password" value="${esc(ONBOARDING.form.password||'')}" placeholder="${t('onboarding_password_placeholder')}" oninput="ONBOARDING.form.password=this.value">
-      </label>
-      <p class="onboarding-copy">${t('onboarding_password_help')}</p>`;
-    return;
-  }
-
-  const provider=_getOnboardingSetupProvider(ONBOARDING.form.provider);
-  _setOnboardingNotice(t('onboarding_notice_finish'), 'success');
-  body.innerHTML=`
-    <div class="onboarding-summary">
-      <div><strong>${t('onboarding_provider_label')}</strong><span>${esc((provider&&provider.label)||ONBOARDING.form.provider||t('onboarding_not_set'))}</span></div>
-      <div><strong>${t('onboarding_model_label')}</strong><span>${esc(_getOnboardingSelectedModel()||t('onboarding_not_set'))}</span></div>
-      <div><strong>${t('onboarding_workspace_label')}</strong><span>${esc(ONBOARDING.form.workspace||t('onboarding_not_set'))}</span></div>
-      <div><strong>${t('onboarding_check_password')}</strong><span>${t(_getOnboardingPasswordSummaryKey(settings))}</span></div>
-    </div>
-    ${ONBOARDING.form.baseUrl?`<p class="onboarding-copy"><strong>${t('onboarding_base_url_label')}</strong> ${esc(ONBOARDING.form.baseUrl)}</p>`:''}
-    <p class="onboarding-copy">${t('onboarding_finish_help')}</p>`;
 }
 
 function _getOnboardingPasswordSummaryKey(settings){
@@ -515,38 +433,19 @@ async function skipOnboarding(){
 
 async function nextOnboardingStep(){
   try{
-    if(ONBOARDING.steps[ONBOARDING.step]==='setup'){
-      ONBOARDING.form.provider=(($('onboardingProviderSelect')||{}).value||ONBOARDING.form.provider||'').trim();
-      ONBOARDING.form.apiKey=(($('onboardingApiKeyInput')||{}).value||'').trim();
-      ONBOARDING.form.baseUrl=(($('onboardingBaseUrlInput')||{}).value||ONBOARDING.form.baseUrl||'').trim();
-      if(!ONBOARDING.form.provider) throw new Error(t('onboarding_error_provider_required'));
-      if(ONBOARDING.form.provider==='custom' && !ONBOARDING.form.baseUrl) throw new Error(t('onboarding_error_base_url_required'));
-      // For self-hosted providers (requires_base_url=True), gate Continue on a
-      // successful probe of <base_url>/models — otherwise the wizard would
-      // happily persist an unreachable URL and finish in 200ms with no
-      // outbound HTTP, exactly the bug in #1499.  Run the probe synchronously
-      // here, then check status; the probe is idempotent & cached on
-      // (provider, baseUrl, apiKey) so this rarely triggers a second network
-      // call when the user already saw a green banner.
-      const cat=_getOnboardingSetupProvider(ONBOARDING.form.provider);
-      if(cat&&cat.requires_base_url){
-        if(!ONBOARDING.form.baseUrl) throw new Error(t('onboarding_error_base_url_required'));
-        await _runOnboardingProbe();
-        if(ONBOARDING.probe.status!=='ok'){
-          // Surface the same localized error string the inline banner shows.
-          const msg=_onboardingProbeMessage(ONBOARDING.probe)||t('onboarding_error_probe_failed')||'Could not reach the configured base URL.';
-          throw new Error(msg);
-        }
+    const curKey=ONBOARDING.steps[ONBOARDING.step];
+    if(curKey==='login'){
+      const signedIn=!!((ONBOARDING.status.neowow||{}).hasJwt);
+      if(ONBOARDING.form.loginMethod==='apikey'){
+        ONBOARDING.form.provider=(($('onboardingProviderSelect')||{}).value||ONBOARDING.form.provider||'').trim();
+        ONBOARDING.form.apiKey=(($('onboardingApiKeyInput')||{}).value||'').trim();
+        ONBOARDING.form.baseUrl=(($('onboardingBaseUrlInput')||{}).value||'').trim();
+        if(!ONBOARDING.form.apiKey) throw new Error(t('onboarding_login_required'));
+        // api-key path skips the plan step
+        ONBOARDING.step=ONBOARDING.steps.indexOf('persona');
+        _renderOnboardingSteps(); _renderOnboardingBody(); return;
       }
-    }
-    if(ONBOARDING.steps[ONBOARDING.step]==='workspace'){
-      ONBOARDING.form.workspace=(($('onboardingWorkspaceInput')||{}).value||ONBOARDING.form.workspace||'').trim();
-      ONBOARDING.form.model=(($('onboardingModelInput')||{}).value||($('onboardingModelSelect')||{}).value||ONBOARDING.form.model||'').trim();
-      if(!ONBOARDING.form.workspace) throw new Error(t('onboarding_error_workspace_required'));
-      if(!ONBOARDING.form.model) throw new Error(t('onboarding_error_model_required'));
-    }
-    if(ONBOARDING.steps[ONBOARDING.step]==='password'){
-      ONBOARDING.form.password=(($('onboardingPasswordInput')||{}).value||'').trim();
+      if(!signedIn) throw new Error(t('onboarding_login_required'));
     }
     if(ONBOARDING.step===ONBOARDING.steps.length-1){
       await _finishOnboarding();
