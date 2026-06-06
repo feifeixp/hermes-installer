@@ -4,6 +4,10 @@ NeoMuse — cross-platform entry point.
 - Windows: pywebview edgechromium (Edge WebView2 native window)
 - Always launches the Hermes WebUI (bootstrap.py handles first-time setup)
 """
+# PEP 563 lazy annotations so `X | None` type hints parse at import time on
+# Python 3.9 (the preview / older interpreters). The app ships on 3.13, but
+# this keeps import-time compatibility broad and costs nothing at runtime.
+from __future__ import annotations
 # ── CHILD PROCESS GUARD ────────────────────────────────────────────────────
 # Prevents subprocesses on Windows from re-launching the frozen exe.
 # macOS subprocesses use fork() and are not affected.
