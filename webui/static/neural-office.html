@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEURAL OFFICE · AI 智能体工作台</title>
+<style>
+  :root{
+    --bg:#070b16; --bg2:#0a1020; --panel:#111c38; --panel2:#0c1428;
+    --line:#21305a; --line2:#34487c; --txt:#eaf0ff; --dim:#8b9dcb;
+    --dim2:#5a6c95;
+    --cyan:#22d3ee; --purple:#a855f7; --pink:#f472b6;
+    --green:#4ade80; --amber:#fbbf24; --blue:#60a5fa;
+    --glow:0 0 18px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;}
+  body{
+    font-family:"Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    background:
+      radial-gradient(950px 620px at 82% -12%, rgba(34,211,238,.12), transparent 60%),
+      radial-gradient(820px 620px at -5% 112%, rgba(168,85,247,.13), transparent 60%),
+      var(--bg);
+    color:var(--txt);min-height:100%;
+    display:flex;align-items:center;justify-content:center;padding:24px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{width:100%;max-width:1200px;
+    box-shadow:0 40px 90px -30px rgba(0,0,0,.85),0 0 0 1px rgba(52,72,124,.3);
+    border-radius:18px;}
+
+  /* ===== Header ===== */
+  header{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:16px 24px;
+    background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line);border-bottom:none;
+    border-radius:18px 18px 0 0;position:relative;overflow:hidden;
+  }
+  header::before{content:"";position:absolute;inset:0;
+    background:linear-gradient(90deg,transparent,rgba(34,211,238,.07),transparent);
+    animation:sweep 7s linear infinite;}
+  @keyframes sweep{from{transform:translateX(-100%);}to{transform:translateX(100%);}}
+  .brand{display:flex;align-items:center;gap:14px;z-index:1;}
+  .logo{width:44px;height:44px;border-radius:13px;
+    background:radial-gradient(circle at 35% 28%,#34dcf0,#7c3aed);
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:var(--glow) rgba(34,211,238,.6);position:relative;}
+  .logo::after{content:"";position:absolute;inset:6px;border-radius:8px;
+    border:1.6px solid rgba(255,255,255,.6);}
+  .logo b{font-size:20px;font-weight:900;color:#06121f;z-index:1;}
+  .ttl h1{font-size:19px;letter-spacing:3.5px;font-weight:800;}
+  .ttl p{font-size:11px;color:var(--dim);letter-spacing:2.5px;margin-top:3px;}
+  .hud{display:flex;align-items:center;gap:18px;z-index:1;}
+  .hud .clock{font-size:25px;font-weight:700;letter-spacing:2px;color:var(--cyan);
+    text-shadow:var(--glow) rgba(34,211,238,.45);font-variant-numeric:tabular-nums;}
+  .hud .date{font-size:10px;color:var(--dim);letter-spacing:1.5px;text-align:right;}
+  .live{display:flex;align-items:center;gap:7px;padding:7px 13px;
+    border:1px solid var(--line2);border-radius:20px;background:rgba(74,222,128,.08);}
+  .live i{width:8px;height:8px;border-radius:50%;background:var(--green);
+    box-shadow:var(--glow) var(--green);animation:blink 1.4s infinite;}
+  @keyframes blink{50%{opacity:.25;}}
+  .live span{font-size:11px;color:var(--green);letter-spacing:1.5px;font-weight:600;}
+
+  /* ===== Body grid ===== */
+  .grid{display:grid;grid-template-columns:1fr 396px;
+    border:1px solid var(--line);border-top:none;
+    border-radius:0 0 18px 18px;overflow:hidden;}
+
+  /* ===== Floor ===== */
+  .floor-wrap{
+    background:
+      radial-gradient(620px 460px at 50% 38%, rgba(40,58,104,.4), transparent 78%),
+      var(--bg2);
+    padding:22px 24px 26px;position:relative;}
+  .floor-head{display:flex;align-items:center;justify-content:space-between;
+    margin-bottom:10px;}
+  .floor-head h2{font-size:13px;letter-spacing:3px;color:var(--dim);font-weight:700;}
+  .legend{display:flex;gap:13px;}
+  .lg{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--dim);}
+  .lg i{width:9px;height:9px;border-radius:3px;display:inline-block;}
+
+  .floor{position:relative;width:660px;height:480px;margin:0 auto;}
+  .floor svg{position:absolute;left:0;top:0;width:660px;height:480px;
+    overflow:visible;pointer-events:none;}
+  #scene{z-index:1;}
+
+  .pad{animation:padpulse 2.6s ease-in-out infinite;transform-origin:center;}
+  @keyframes padpulse{0%,100%{opacity:.45;}50%{opacity:1;}}
+  .scrc{opacity:0;}
+  .desk.active .scrc{opacity:1;animation:flick 1.5s steps(4) infinite;}
+  @keyframes flick{0%,100%{opacity:.55;}50%{opacity:1;}}
+  .desk .scr{fill:#0e1a30;transition:fill .4s;}
+  .desk.active .scr{fill:#1d6f87;}
+  .desk.active.deskthink .scr{fill:#4a3a93;}
+  .desk .dgl{opacity:0;transition:opacity .45s;}
+  .desk.active .dgl{opacity:.5;}
+  .desk.active.deskthink .dgl{opacity:.32;}
+
+  /* ===== Agent ===== */
+  .agent{position:absolute;width:66px;height:84px;
+    transform:translate(-50%,-93%);cursor:pointer;
+    transition:left 1.7s cubic-bezier(.45,.05,.3,1),
+               top 1.7s cubic-bezier(.45,.05,.3,1);}
+  .agent .halo{position:absolute;left:50%;bottom:-3px;transform:translateX(-50%);
+    width:52px;height:20px;border-radius:50%;filter:blur(4px);
+    opacity:.85;z-index:-1;}
+  .agent .char{width:100%;height:100%;transition:transform .25s;}
+  .agent .char svg{width:100%;height:100%;display:block;
+    filter:drop-shadow(0 5px 5px rgba(0,0,0,.6));}
+  .agent.moving .char{animation:bob .52s ease-in-out infinite;}
+  @keyframes bob{
+    0%,100%{transform:translateY(0) rotate(0);}
+    25%{transform:translateY(-3.5px) rotate(-3.5deg);}
+    75%{transform:translateY(-3.5px) rotate(3.5deg);}}
+  .agent .pip{position:absolute;right:11px;top:8px;width:13px;height:13px;
+    border-radius:50%;border:2.5px solid var(--bg2);}
+  .agent .name{position:absolute;top:81px;left:50%;transform:translateX(-50%);
+    font-size:9px;font-weight:800;letter-spacing:1.2px;white-space:nowrap;
+    background:rgba(7,11,22,.92);padding:2.5px 8px;border-radius:6px;
+    border:1px solid var(--line);color:var(--dim);}
+  .agent.sel .name{color:var(--txt);border-color:currentColor;
+    box-shadow:0 0 12px -3px currentColor;}
+  .agent.sel .char svg{filter:drop-shadow(0 5px 5px rgba(0,0,0,.6))
+    drop-shadow(0 0 8px currentColor);}
+  .agent.sel::before{content:"";position:absolute;left:50%;bottom:-6px;
+    transform:translateX(-50%);width:58px;height:24px;border-radius:50%;
+    border:2px solid currentColor;animation:selr 1.7s ease-out infinite;}
+  @keyframes selr{0%{transform:translateX(-50%) scale(.55);opacity:.85;}
+    100%{transform:translateX(-50%) scale(1.3);opacity:0;}}
+  .fx{position:absolute;left:50%;top:-4px;transform:translateX(-50%);
+    font-size:11px;font-weight:800;letter-spacing:.5px;white-space:nowrap;
+    opacity:0;color:currentColor;text-shadow:0 1px 3px #000;}
+  .fx.show{animation:fxup 1.9s ease-out;}
+  @keyframes fxup{0%{opacity:0;transform:translate(-50%,6px);}
+    18%{opacity:1;}80%{opacity:1;}
+    100%{opacity:0;transform:translate(-50%,-20px);}}
+  .think{position:absolute;left:50%;top:6px;transform:translateX(-50%);
+    display:flex;gap:3px;background:rgba(7,11,22,.88);padding:3px 6px;
+    border-radius:9px;border:1px solid var(--line2);}
+  .think i{width:4px;height:4px;border-radius:50%;background:var(--purple);
+    animation:thk 1.2s infinite;}
+  .think i:nth-child(2){animation-delay:.2s;}
+  .think i:nth-child(3){animation-delay:.4s;}
+  @keyframes thk{0%,100%{opacity:.2;transform:translateY(0);}
+    50%{opacity:1;transform:translateY(-3px);}}
+
+  /* ===== Dashboard ===== */
+  .dash{background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border-left:1px solid var(--line);display:flex;flex-direction:column;
+    max-height:558px;}
+  .dash-head{padding:11px 14px 9px;border-bottom:1px solid var(--line);}
+  .dash-head h2{font-size:10.5px;letter-spacing:2.5px;color:var(--dim);font-weight:700;}
+  .kpis{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;}
+  .kpi{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    padding:5px 9px;position:relative;overflow:hidden;}
+  .kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
+    background:var(--cyan);}
+  .kpi.k2::before{background:var(--green);}
+  .kpi.k3::before{background:var(--amber);}
+  .kpi.k4::before{background:var(--purple);}
+  .kpi .lab{font-size:8px;color:var(--dim);letter-spacing:.5px;}
+  .kpi .val{font-size:17px;font-weight:800;margin-top:0;
+    font-variant-numeric:tabular-nums;}
+  .kpi .val small{font-size:9.5px;color:var(--dim);font-weight:600;}
+
+  .roster{flex:1;overflow-y:auto;padding:9px 11px;}
+  .roster::-webkit-scrollbar{width:5px;}
+  .roster::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px;}
+  .sect-t{font-size:9px;letter-spacing:2px;color:var(--dim2);font-weight:700;
+    margin:2px 0 7px;}
+
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    padding:7px 9px;margin-bottom:6px;cursor:pointer;transition:.2s;position:relative;}
+  .card:hover{border-color:var(--line2);transform:translateX(-2px);}
+  .card.sel{border-color:currentColor;box-shadow:0 0 14px -6px currentColor;}
+  .card .top{display:flex;align-items:center;gap:8px;}
+  .ava{width:32px;height:32px;flex-shrink:0;border-radius:8px;
+    background:radial-gradient(circle at 38% 30%,#1d2a4d,#0b1222);
+    border:1.5px solid currentColor;overflow:hidden;
+    box-shadow:0 0 9px -3px currentColor;}
+  .ava svg{width:100%;height:115%;display:block;margin-top:1px;}
+  .card .who{flex:1;min-width:0;}
+  .card .who .nm{font-size:12px;font-weight:800;letter-spacing:.5px;}
+  .card .who .rl{font-size:9px;color:var(--dim);}
+  .card .done{font-size:9px;color:var(--dim2);white-space:nowrap;}
+  .card .done b{color:var(--txt);font-weight:700;font-size:11px;}
+  .badge{font-size:8.5px;font-weight:700;padding:2.5px 7px;border-radius:20px;
+    border:1px solid currentColor;white-space:nowrap;background:rgba(255,255,255,.04);}
+  .bars{margin-top:6px;display:flex;gap:10px;}
+  .bar{display:flex;align-items:center;gap:5px;flex:1;min-width:0;}
+  .bar .bl{font-size:8px;color:var(--dim2);letter-spacing:.5px;flex-shrink:0;}
+  .track{flex:1;height:5px;border-radius:3px;background:#0a1326;overflow:hidden;
+    border:1px solid var(--line);}
+  .fill{height:100%;border-radius:3px;transition:width .7s ease;}
+  .fill.prog{background:linear-gradient(90deg,#0891b2,var(--cyan));}
+  .fill.enr{background:linear-gradient(90deg,#15803d,var(--green));}
+  .bar .bv{font-size:8.5px;color:var(--dim);text-align:right;
+    font-variant-numeric:tabular-nums;flex-shrink:0;min-width:24px;}
+
+  .logbox{border-top:1px solid var(--line);padding:9px 12px 11px;
+    max-height:124px;display:flex;flex-direction:column;}
+  .logbox .sect-t{margin-bottom:6px;display:flex;justify-content:space-between;}
+  .logbox .sect-t em{color:var(--cyan);font-style:normal;}
+  .feed{overflow-y:auto;flex:1;}
+  .feed::-webkit-scrollbar{width:5px;}
+  .feed::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px;}
+  .ev{display:flex;gap:8px;font-size:10px;padding:4px 0;
+    border-bottom:1px solid rgba(33,48,90,.5);align-items:baseline;}
+  .ev .tm{color:var(--dim2);font-variant-numeric:tabular-nums;flex-shrink:0;}
+  .ev .ic{flex-shrink:0;}
+  .ev .tx{color:var(--dim);flex:1;}
+  .ev .tx b{font-weight:700;}
+  .ev.fresh{animation:evin .5s ease;}
+  @keyframes evin{from{opacity:0;transform:translateX(-8px);}to{opacity:1;}}
+
+  .foot{text-align:center;font-size:9px;color:var(--dim2);letter-spacing:1.5px;
+    padding:11px;}
+  @media(max-width:900px){
+    .grid{grid-template-columns:1fr;}
+    .floor{transform:scale(.8);transform-origin:top center;height:384px;}
+    .dash{border-left:none;border-top:1px solid var(--line);max-height:none;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <div class="logo"><b>N</b></div>
+      <div class="ttl">
+        <h1>NEURAL OFFICE</h1>
+        <p>AI 智能体 · 实时工作台</p>
+      </div>
+    </div>
+    <div class="hud">
+      <div class="live"><i></i><span>LIVE 实时模拟</span></div>
+      <div>
+        <div class="clock" id="clock">00:00:00</div>
+        <div class="date" id="date">运行时长 00:00</div>
+      </div>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="floor-wrap">
+      <div class="floor-head">
+        <h2>办公室 · ISOMETRIC FLOOR 02</h2>
+        <div class="legend">
+          <div class="lg"><i style="background:var(--cyan)"></i>工作中</div>
+          <div class="lg"><i style="background:var(--purple)"></i>思考中</div>
+          <div class="lg"><i style="background:var(--amber)"></i>充电中</div>
+          <div class="lg"><i style="background:var(--green)"></i>休息中</div>
+        </div>
+      </div>
+      <div class="floor" id="floor"></div>
+    </div>
+
+    <div class="dash">
+      <div class="dash-head">
+        <h2>智能体 DASHBOARD</h2>
+        <div class="kpis">
+          <div class="kpi k1"><div class="lab">工作中</div>
+            <div class="val"><span id="kWork">0</span><small>/6 在岗</small></div></div>
+          <div class="kpi k2"><div class="lab">今日完成任务</div>
+            <div class="val" id="kTasks">0</div></div>
+          <div class="kpi k3"><div class="lab">平均能量</div>
+            <div class="val"><span id="kEnergy">0</span><small>%</small></div></div>
+          <div class="kpi k4"><div class="lab">累计算力·TFLOP</div>
+            <div class="val" id="kFlop">0</div></div>
+        </div>
+      </div>
+      <div class="roster" id="roster">
+        <div class="sect-t">智能体团队 · 6 名</div>
+      </div>
+      <div class="logbox">
+        <div class="sect-t">实时活动日志 <em id="evCount">0 条</em></div>
+        <div class="feed" id="feed"></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot" id="footNote">NEURAL OFFICE v4.0 · 等距 3D 场景 · 数据为模拟演示 · 点击小家伙或卡片可选中</div>
+</div>
+
+<script>
+/* ============ 矢量卡通角色 ============ */
+function hairTuft(v,c){
+  const sets=[
+    [[47,21,5],[52,15,6],[57,21,5]],
+    [[46,22,4.5],[52,12,7],[58,22,4.5]],
+    [[48,22,5],[54,17,5.5],[59,20,4.5],[63,24,3.6]],
+    [[45,20,6.6],[58,20,6.6]],
+    [[43,23,3.9],[49,21,4.1],[55,21,4.1],[61,23,3.9]],
+    [[52,17,8.6]]
+  ];
+  return sets[v%6].map(p=>'<circle cx="'+p[0]+'" cy="'+p[1]+'" r="'+p[2]+'" fill="'+c+'"/>').join('');
+}
+function charSVG(color,init,v){
+  let tufts='';
+  const cx=52,cy=49,R=30;
+  for(let i=0;i<17;i++){
+    const a=(i/17)*Math.PI*2;
+    const r=6.4+(i%2?2.2:0);
+    tufts+='<circle cx="'+(cx+Math.cos(a)*R).toFixed(1)+'" cy="'+
+      (cy+Math.sin(a)*R).toFixed(1)+'" r="'+r.toFixed(1)+'" fill="#fbfcff"/>';
+  }
+  return ''+
+  '<svg viewBox="0 0 104 132" xmlns="http://www.w3.org/2000/svg">'+
+    '<defs>'+
+      '<radialGradient id="hd'+v+'" cx="42%" cy="32%" r="72%">'+
+        '<stop offset="0%" stop-color="#ffffff"/>'+
+        '<stop offset="100%" stop-color="#e4e7f4"/></radialGradient>'+
+      '<linearGradient id="bd'+v+'" x1="0" y1="0" x2="0" y2="1">'+
+        '<stop offset="0%" stop-color="#2c3250"/>'+
+        '<stop offset="100%" stop-color="#171b2e"/></linearGradient>'+
+    '</defs>'+
+    '<ellipse cx="52" cy="122" rx="27" ry="6" fill="#000" opacity="0.42"/>'+
+    '<g>'+
+      '<rect x="35" y="100" width="16" height="21" rx="6" fill="#15151f"/>'+
+      '<rect x="32" y="113" width="22" height="10" rx="5" fill="#0a0a12"/>'+
+      '<rect x="53" y="100" width="16" height="21" rx="6" fill="#15151f"/>'+
+      '<rect x="50" y="113" width="22" height="10" rx="5" fill="#0a0a12"/>'+
+    '</g>'+
+    '<rect x="36" y="84" width="32" height="24" rx="8" fill="#222740"/>'+
+    '<ellipse cx="27" cy="74" rx="9.5" ry="13" fill="#fbfcff"/>'+
+    '<ellipse cx="77" cy="74" rx="9.5" ry="13" fill="#fbfcff"/>'+
+    '<rect x="31" y="60" width="42" height="36" rx="14" fill="url(#bd'+v+')"/>'+
+    '<rect x="31" y="83" width="42" height="8" rx="2.5" fill="#6e4327"/>'+
+    '<rect x="47.5" y="82" width="9" height="10" rx="2.5" fill="'+color+'"/>'+
+    '<rect x="39" y="48" width="7" height="22" rx="3" fill="'+color+'" transform="rotate(-9 42.5 59)"/>'+
+    '<rect x="58" y="48" width="7" height="22" rx="3" fill="'+color+'" transform="rotate(9 61.5 59)"/>'+
+    '<rect x="43.5" y="68" width="17" height="14" rx="3.5" fill="#141726" stroke="'+color+'" stroke-width="1.6"/>'+
+    '<text x="52" y="78.6" font-size="10" font-weight="800" fill="'+color+'" '+
+      'text-anchor="middle" font-family="Segoe UI,sans-serif">'+init+'</text>'+
+    '<path d="M44,26 L34,3 L40.5,25 Z" fill="#eef0f7"/>'+
+    '<path d="M60,26 L70,3 L63.5,25 Z" fill="#eef0f7"/>'+
+    '<circle cx="34.4" cy="4.2" r="3.1" fill="'+color+'"/>'+
+    '<circle cx="69.6" cy="4.2" r="3.1" fill="'+color+'"/>'+
+    tufts+
+    '<circle cx="52" cy="49" r="28.5" fill="url(#hd'+v+')"/>'+
+    hairTuft(v,color)+
+    '<ellipse cx="43.5" cy="49" rx="4.4" ry="5.8" fill="#12131d"/>'+
+    '<ellipse cx="60.5" cy="49" rx="4.4" ry="5.8" fill="#12131d"/>'+
+    '<circle cx="45.2" cy="46.4" r="1.7" fill="#fff"/>'+
+    '<circle cx="62.2" cy="46.4" r="1.7" fill="#fff"/>'+
+    '<ellipse cx="35.5" cy="57" rx="4.2" ry="2.9" fill="#ffb3c8" opacity="0.78"/>'+
+    '<ellipse cx="68.5" cy="57" rx="4.2" ry="2.9" fill="#ffb3c8" opacity="0.78"/>'+
+    '<circle cx="52" cy="55" r="1.8" fill="#ec9bb0"/>'+
+    '<path d="M46.5,58 Q52,64.5 57.5,58" stroke="#3a2e3a" stroke-width="2.5" '+
+      'fill="none" stroke-linecap="round"/>'+
+  '</svg>';
+}
+
+/* ============ 等距投影工具 ============ */
+const HW=25, HH=14, OX=330, OY=96, GW=12, GD=10, WH=80;
+function P(gx,gy){return [OX+(gx-gy)*HW, OY+(gx+gy)*HH];}
+function fmt(p){return p[0].toFixed(1)+','+p[1].toFixed(1);}
+function poly(pts,fill,cls){
+  return '<polygon points="'+pts.map(fmt).join(' ')+'" fill="'+fill+'"'+
+    (cls?' class="'+cls+'"':'')+'/>';
+}
+/* 立体盒子: footprint(gx,gy,gw,gd) 底面高度 z, 盒高 h */
+function box(gx,gy,gw,gd,h,z,cT,cR,cL){
+  const A=P(gx,gy),B=P(gx+gw,gy),C=P(gx+gw,gy+gd),D=P(gx,gy+gd);
+  const bA=[A[0],A[1]-z],bB=[B[0],B[1]-z],bC=[C[0],C[1]-z],bD=[D[0],D[1]-z];
+  const tA=[A[0],A[1]-z-h],tB=[B[0],B[1]-z-h],tC=[C[0],C[1]-z-h],tD=[D[0],D[1]-z-h];
+  return poly([bD,bC,tC,tD],cL)+poly([bB,bC,tC,tB],cR)+poly([tA,tB,tC,tD],cT);
+}
+function tile(gx,gy,gw,gd,fill,cls){
+  return poly([P(gx,gy),P(gx+gw,gy),P(gx+gw,gy+gd),P(gx,gy+gd)],fill,cls);
+}
+function depthZ(gx,gy){return 200+Math.round((gx+gy)*10);}
+
+/* ============ 配置 ============ */
+const ROOMS={work:{x:0,y:0,w:7,h:10},gym:{x:7,y:0,w:5,h:5},rest:{x:7,y:5,w:5,h:5}};
+/* 工位: 后角(gx,gy), 桌宽2.2 桌深1.5 */
+const DESK_GW=2.2, DESK_GD=1.5;
+const DESK_POS=[
+  [0.9,0.9],[3.9,0.9],
+  [0.9,4.1],[3.9,4.1],
+  [0.9,7.3],[3.9,7.3]
+];
+function deskCenter(i){return [DESK_POS[i][0]+DESK_GW/2, DESK_POS[i][1]+DESK_GD/2];}
+function agentDeskPos(i){return [DESK_POS[i][0]+DESK_GW/2, DESK_POS[i][1]+2.05];}
+
+const AGENTS=[
+  {id:0,name:"NOVA", role:"代码工程师", color:"#22d3ee", init:"N",
+   tasks:["重构支付模块","修复登录缺陷","编写单元测试","优化数据库查询","部署 CI 流水线"]},
+  {id:1,name:"ATLAS",role:"数据分析师", color:"#a855f7", init:"A",
+   tasks:["生成周度报表","清洗用户数据","构建预测模型","分析转化漏斗","搭建数据看板"]},
+  {id:2,name:"IRIS", role:"文案创作", color:"#f472b6", init:"I",
+   tasks:["撰写产品文案","编辑发布说明","润色营销邮件","创作社媒内容","校对帮助文档"]},
+  {id:3,name:"ECHO", role:"客服支持", color:"#4ade80", init:"E",
+   tasks:["回复工单 #4821","处理退款请求","更新知识库","总结用户反馈","升级疑难问题"]},
+  {id:4,name:"ORION",role:"研究员", color:"#fbbf24", init:"O",
+   tasks:["调研竞品动态","阅读技术论文","整理行业趋势","设计实验方案","撰写研究简报"]},
+  {id:5,name:"VEGA", role:"项目协调", color:"#60a5fa", init:"V",
+   tasks:["同步项目进度","安排冲刺会议","梳理需求清单","跟进交付里程碑","更新产品路线图"]}
+];
+const STATUS={
+  working:{label:"工作中",hex:"#22d3ee"},
+  thinking:{label:"思考中",hex:"#a855f7"},
+  charging:{label:"充电中",hex:"#fbbf24"},
+  resting:{label:"休息中",hex:"#4ade80"}
+};
+
+/* ============ 构建静态场景 ============ */
+const floor=document.getElementById('floor');
+function el(t,c,h){const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;}
+
+function buildScene(){
+  let s='';
+  /* —— 地面底板 —— */
+  s+=tile(0,0,GW,GD,'#141d38');
+  /* 房间地面色 — 清晰可见的分区色 */
+  s+=tile(0,0,7,10,'#1f2e52');
+  s+=tile(7,0,5,5,'#2c2c4c');
+  s+=tile(7,5,5,5,'#1f3838');
+  /* 房间高光中心 */
+  s+=tile(1.4,1.4,4.2,7.2,'rgba(120,170,255,0.05)');
+  s+=tile(8.4,0.9,2.4,3.4,'rgba(251,191,36,0.07)');
+  s+=tile(8.2,5.9,3.0,3.0,'rgba(74,222,128,0.07)');
+  /* 地砖网格 */
+  for(let gx=0;gx<=GW;gx++){
+    const a=P(gx,0),b=P(gx,GD);
+    s+='<line x1="'+a[0]+'" y1="'+a[1]+'" x2="'+b[0]+'" y2="'+b[1]+
+       '" stroke="rgba(170,200,255,0.13)" stroke-width="1"/>';
+  }
+  for(let gy=0;gy<=GD;gy++){
+    const a=P(0,gy),b=P(GW,gy);
+    s+='<line x1="'+a[0]+'" y1="'+a[1]+'" x2="'+b[0]+'" y2="'+b[1]+
+       '" stroke="rgba(170,200,255,0.13)" stroke-width="1"/>';
+  }
+  /* 地面发光装饰(工作区灯带) */
+  [[3.5,2.4],[3.5,8.0],[1.7,5.4],[5.3,5.4]].forEach(p=>{
+    s+=tile(p[0]-0.62,p[1]-0.62,1.24,1.24,'rgba(34,211,238,0.13)');
+    s+=tile(p[0]-0.34,p[1]-0.34,0.68,0.68,'rgba(34,211,238,0.16)');
+  });
+  /* —— 外墙 —— */
+  s+=box(-0.32,0,0.32,GD,WH,0,'#33406a','#212c4c','#19223c');
+  s+=box(0,-0.32,GW,0.32,WH,0,'#33406a','#28355c','#222d4d');
+  /* 墙面科技竖纹 */
+  for(let gy=0.7;gy<GD;gy+=1.35){
+    const a=P(0,gy),b=[a[0],a[1]-WH+8];
+    s+='<line x1="'+a[0]+'" y1="'+(a[1]-6)+'" x2="'+b[0]+'" y2="'+b[1]+
+       '" stroke="rgba(34,211,238,0.10)" stroke-width="2"/>';
+  }
+  for(let gx=0.7;gx<GW;gx+=1.35){
+    const a=P(gx,0),b=[a[0],a[1]-WH+8];
+    s+='<line x1="'+a[0]+'" y1="'+(a[1]-6)+'" x2="'+b[0]+'" y2="'+b[1]+
+       '" stroke="rgba(168,85,247,0.09)" stroke-width="2"/>';
+  }
+  /* 墙顶霓虹边线 */
+  const wl0=P(0,0),wl1=P(0,GD),wr1=P(GW,0);
+  s+='<line x1="'+wl0[0]+'" y1="'+(wl0[1]-WH)+'" x2="'+wl1[0]+'" y2="'+(wl1[1]-WH)+
+     '" stroke="rgba(34,211,238,0.55)" stroke-width="2"/>';
+  s+='<line x1="'+wl0[0]+'" y1="'+(wl0[1]-WH)+'" x2="'+wr1[0]+'" y2="'+(wr1[1]-WH)+
+     '" stroke="rgba(34,211,238,0.55)" stroke-width="2"/>';
+  /* —— 隔断矮墙(带门洞) —— */
+  const dT='#2c3760',dR='#1d2742',dL='#232e50';
+  s+=box(7,0,0.22,4.0,30,0,dT,dR,dL);
+  s+=box(7,5.7,0.22,4.3,30,0,dT,dR,dL);
+  s+=box(7,5,2.0,0.22,30,0,dT,dR,dL);
+  s+=box(10.2,5,1.8,0.22,30,0,dT,dR,dL);
+  /* —— 健身房充电台 —— */
+  [[8.6,1.3],[10.3,1.3],[9.45,3.0]].forEach(p=>{
+    const c=[p[0],p[1]];
+    s+='<g class="pad">'+
+       tile(c[0]-0.62,c[1]-0.62,1.24,1.24,'rgba(251,191,36,0.16)')+
+       tile(c[0]-0.4,c[1]-0.4,0.8,0.8,'rgba(251,191,36,0.42)')+
+       tile(c[0]-0.2,c[1]-0.2,0.4,0.4,'rgba(255,224,150,0.7)')+
+       '</g>';
+  });
+  /* 健身房器械 */
+  s+=box(8.1,3.5,0.55,1.3,16,0,'#3a4368','#222a44','#2b3454');
+  s+=box(10.5,2.5,1.0,0.5,30,0,'#3a4368','#222a44','#2b3454');
+  s+=box(10.78,2.55,0.42,0.4,3,30,'#fbbf24','#b07d10','#d39a1a');
+  /* —— 休息室地毯 —— */
+  s+=tile(8.0,6.0,3.2,3.0,'rgba(74,222,128,0.10)');
+  s+=tile(8.5,6.5,2.2,2.0,'rgba(74,222,128,0.16)');
+  /* 盆栽 */
+  s+=box(8.15,9.0,0.5,0.5,9,0,'#2a3352','#1a2138','#222a44');
+  [[0,-13,7],[ -4,-9,6],[4,-9,6],[0,-6,5]].forEach(o=>{
+    const c=P(8.4,9.25);
+    s+='<circle cx="'+(c[0]+o[0])+'" cy="'+(c[1]+o[1])+'" r="'+o[2]+
+       '" fill="#3fae63"/>';
+  });
+  /* 落地灯 */
+  const lp=P(11.3,5.95);
+  s+='<circle cx="'+lp[0]+'" cy="'+(lp[1]-58)+'" r="22" fill="rgba(251,220,150,0.22)"/>';
+  s+=box(11.22,5.9,0.16,0.16,52,0,'#3a4368','#222a44','#2b3454');
+  s+='<ellipse cx="'+lp[0]+'" cy="'+(lp[1]-56)+'" rx="9" ry="6" fill="#ffe9b0"/>';
+  /* 房间标签 */
+  function tag(gx,gy,txt,col){
+    const p=P(gx,gy);
+    return '<g><rect x="'+(p[0]-38)+'" y="'+(p[1]-9)+'" width="76" height="18" '+
+      'rx="9" fill="#0a1020" stroke="'+col+'" stroke-width="1"/>'+
+      '<text x="'+p[0]+'" y="'+(p[1]+4)+'" text-anchor="middle" font-size="10" '+
+      'font-weight="700" letter-spacing="1.5" fill="'+col+'" '+
+      'font-family="Segoe UI,sans-serif">'+txt+'</text></g>';
+  }
+  s+=tag(5.7,9.6,'工作区 WORK','#22d3ee');
+  s+=tag(9.5,4.6,'健身房 GYM','#fbbf24');
+  s+=tag(9.5,9.6,'休息室 LOUNGE','#4ade80');
+  return s;
+}
+
+/* ============ 工位(立体,可深度排序) ============ */
+function deskSVG(i){
+  const bg=DESK_POS[i][0], by=DESK_POS[i][1];
+  const cx=bg+DESK_GW/2;
+  const col=AGENTS[i].color;
+  let s='';
+  /* 地面投影 */
+  s+=tile(bg-0.1,by-0.1,DESK_GW+0.5,DESK_GD+0.5,'rgba(0,0,0,0.34)');
+  /* 状态光晕 */
+  s+=tile(bg-0.2,by-0.2,DESK_GW+0.4,DESK_GD+0.4,col,'dgl');
+  /* 桌柜主体 */
+  s+=box(bg,by,DESK_GW,DESK_GD,27,0,'#333d63','#1e2742','#28325a');
+  /* 桌面台板 */
+  s+=box(bg-0.1,by-0.1,DESK_GW+0.2,DESK_GD+0.2,4,27,'#3c4770','#252e4f','#2f3a64');
+  /* 显示器(桌后) */
+  const mg=cx-0.5, my=by+0.12, mw=1.0, md=0.26, mz=31, mh=21;
+  const A=P(mg,my),B=P(mg+mw,my),C=P(mg+mw,my+md),D=P(mg,my+md);
+  const lift=(p,d)=>[p[0],p[1]-d];
+  const bD=lift(D,mz),bC=lift(C,mz),bB=lift(B,mz);
+  const tA=lift(A,mz+mh),tB=lift(B,mz+mh),tC=lift(C,mz+mh),tD=lift(D,mz+mh);
+  s+=poly([lift(B,mz),bC,tC,tB],'#161d34');           /* 右侧 */
+  s+=poly([bD,bC,tC,tD],'#0e1a30','scr');             /* 屏幕面 */
+  s+=poly([tA,tB,tC,tD],'#1c2540');                   /* 顶 */
+  /* 屏幕内容(发光条) */
+  const sx=bD[0], syT=tD[1], sw=bC[0]-bD[0], sh=bD[1]-tD[1];
+  s+='<g class="scrc">';
+  for(let k=0;k<3;k++){
+    s+='<rect x="'+(sx+5)+'" y="'+(syT+5+k*5)+'" width="'+(sw*0.46+k*4)+
+       '" height="2.4" fill="#bff3ff"/>';
+  }
+  s+='</g>';
+  /* 座椅 */
+  s+=box(cx-0.42,by+1.5,0.84,0.7,9,0,'#2d3766','#1c2440','#26305a');
+  s+=box(cx-0.42,by+1.5,0.84,0.16,20,9,'#2d3766','#1c2440','#26305a');
+  return s;
+}
+/* ============ 休息室沙发 ============ */
+function couchSVG(gx,gy,gw,gd){
+  let s=tile(gx-0.1,gy-0.1,gw+0.4,gd+0.4,'rgba(0,0,0,0.3)');
+  s+=box(gx,gy,gw,gd,11,0,'#2f4a3a','#172a20','#214035');      /* 座 */
+  s+=box(gx,gy,gw,0.3,20,11,'#365440','#1a2f24','#264a3a');    /* 靠背 */
+  return s;
+}
+
+/* ============ 组装地面(单次字符串注入,稳健) ============ */
+function svgLayer(z,inner,cls,id){
+  return '<svg viewBox="0 0 660 480"'+(cls?' class="'+cls+'"':'')+
+    (id?' id="'+id+'"':'')+' style="z-index:'+z+'">'+inner+'</svg>';
+}
+let floorHTML=svgLayer(1,buildScene(),'scene','scene');
+DESK_POS.forEach((d,i)=>{
+  const c=deskCenter(i);
+  floorHTML+=svgLayer(depthZ(c[0],c[1]),deskSVG(i),'desk','desk'+i);
+});
+[[8.1,6.1,2.7,0.9],[8.0,7.5,0.9,1.9]].forEach(c=>{
+  floorHTML+=svgLayer(depthZ(c[0]+c[2]/2,c[1]+c[3]/2),couchSVG(c[0],c[1],c[2],c[3]));
+});
+floor.innerHTML=floorHTML;
+
+/* ============ 智能体状态 ============ */
+const sim=AGENTS.map((a,i)=>({
+  ...a,status:'working',
+  energy:62+Math.random()*30,
+  progress:Math.random()*40,
+  task:a.tasks[0],done:0,flop:0,
+  pos:agentDeskPos(i),moving:false,
+  cooldown:0,restTimer:0,gymRoam:0
+}));
+let selected=0,totalDone=0,totalFlop=0;
+let kanbanConnected=false;
+const start=Date.now();
+function rnd(a,b){return a+Math.random()*(b-a);}
+function gymSpot(){return [rnd(8.1,11.0),rnd(0.8,4.0)];}
+function restSpot(){return [rnd(8.3,10.9),rnd(6.0,9.0)];}
+
+/* 角色 DOM */
+sim.forEach(s=>{
+  const a=el('div','agent');
+  a.id='ag'+s.id;a.style.color=s.color;
+  const p=P(s.pos[0],s.pos[1]);
+  a.style.left=p[0]+'px';a.style.top=p[1]+'px';
+  a.style.zIndex=depthZ(s.pos[0],s.pos[1]);
+  a.innerHTML='<div class="halo"></div>'+
+    '<div class="char">'+charSVG(s.color,s.init,s.id)+'</div>'+
+    '<div class="pip"></div><div class="fx"></div>'+
+    '<div class="name">'+s.name+'</div>';
+  a.onclick=()=>selectAgent(s.id);
+  floor.appendChild(a);
+  s.dom=a;
+  s.charDom=a.querySelector('.char');
+  s.haloDom=a.querySelector('.halo');
+  s.pipDom=a.querySelector('.pip');
+  s.fxDom=a.querySelector('.fx');
+});
+
+/* 卡片 */
+const roster=document.getElementById('roster');
+const feed=document.getElementById('feed');
+sim.forEach(s=>{
+  const c=el('div','card');
+  c.id='card'+s.id;c.style.color=s.color;
+  c.onclick=()=>selectAgent(s.id);
+  c.innerHTML=
+    '<div class="top">'+
+      '<div class="ava">'+charSVG(s.color,s.init,s.id)+'</div>'+
+      '<div class="who"><div class="nm">'+s.name+'</div>'+
+      '<div class="rl" data-r="rl">'+s.role+'</div></div>'+
+      '<div class="done">完成 <b data-r="done">0</b></div>'+
+      '<div class="badge" data-r="badge">工作中</div>'+
+    '</div>'+
+    '<div class="bars">'+
+      '<div class="bar"><span class="bl">任务</span>'+
+        '<div class="track"><div class="fill prog" data-r="pf"></div></div>'+
+        '<span class="bv" data-r="pv"></span></div>'+
+      '<div class="bar"><span class="bl">能量</span>'+
+        '<div class="track"><div class="fill enr" data-r="ef"></div></div>'+
+        '<span class="bv" data-r="ev"></span></div>'+
+    '</div>';
+  roster.appendChild(c);
+  s.card=c;s.ref={};
+  c.querySelectorAll('[data-r]').forEach(n=>s.ref[n.dataset.r]=n);
+});
+
+/* ============ 交互 ============ */
+function selectAgent(id){
+  selected=id;
+  sim.forEach(s=>{
+    s.dom.classList.toggle('sel',s.id===id);
+    s.card.classList.toggle('sel',s.id===id);
+  });
+  sim[id].card.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+/* ============ 日志 ============ */
+let evCount=0;
+function nowStr(){
+  const d=new Date();
+  return [d.getHours(),d.getMinutes(),d.getSeconds()]
+    .map(n=>String(n).padStart(2,'0')).join(':');
+}
+function log(agent,text,hex){
+  evCount++;
+  document.getElementById('evCount').textContent=evCount+' 条';
+  const ev=el('div','ev fresh');
+  ev.innerHTML='<span class="tm">'+nowStr()+'</span>'+
+    '<span class="ic" style="color:'+hex+'">●</span>'+
+    '<span class="tx"><b style="color:'+hex+'">'+agent+'</b> '+text+'</span>';
+  feed.prepend(ev);
+  while(feed.children.length>40)feed.removeChild(feed.lastChild);
+}
+function fx(s,txt){
+  s.fxDom.textContent=txt;
+  s.fxDom.classList.remove('show');
+  void s.fxDom.offsetWidth;
+  s.fxDom.classList.add('show');
+}
+function moveTo(s,target){
+  s.pos=target.slice();
+  const p=P(target[0],target[1]);
+  s.dom.style.left=p[0]+'px';
+  s.dom.style.top=p[1]+'px';
+  s.dom.style.zIndex=depthZ(target[0],target[1]);
+  s.moving=true;
+  s.dom.classList.add('moving');
+  clearTimeout(s.moveTimer);
+  s.moveTimer=setTimeout(()=>{
+    s.moving=false;s.dom.classList.remove('moving');
+  },1750);
+}
+
+/* ============ 决策 ============ */
+function decide(s){
+  if(s.moving)return;
+  if(s.cooldown>0){s.cooldown--;return;}
+  if(s.status==='charging'){
+    if(s.energy>=97){
+      s.status='working';
+      s.task=s.tasks[Math.floor(Math.random()*s.tasks.length)];
+      moveTo(s,agentDeskPos(s.id));
+      log(s.name,'能量已充满，返回工位 WS-0'+(s.id+1),s.color);
+      fx(s,'⚡ 满电');s.cooldown=2;
+    }else{
+      s.gymRoam--;
+      if(s.gymRoam<=0){moveTo(s,gymSpot());s.gymRoam=3;}
+    }
+    return;
+  }
+  if(s.status==='resting'){
+    s.restTimer--;
+    if(s.restTimer<=0||s.energy>88){
+      s.status='working';
+      s.task=s.tasks[Math.floor(Math.random()*s.tasks.length)];
+      moveTo(s,agentDeskPos(s.id));
+      log(s.name,'休息结束，回到工位继续工作',s.color);
+      s.cooldown=2;
+    }
+    return;
+  }
+  if(s.energy<22){
+    s.status='charging';
+    moveTo(s,gymSpot());s.gymRoam=3;
+    log(s.name,'能量偏低，前往健身房充电舱',STATUS.charging.hex);
+    fx(s,'⚡ 充电');s.cooldown=2;
+    return;
+  }
+  const r=Math.random();
+  if(r<0.04){
+    s.status='resting';
+    s.restTimer=Math.floor(rnd(4,8));
+    moveTo(s,restSpot());
+    log(s.name,'前往休息室小憩一会儿',STATUS.resting.hex);
+    s.cooldown=1;
+  }else if(r<0.20){
+    s.status=s.status==='working'?'thinking':'working';
+  }
+}
+
+/* ============ 主循环 ============ */
+function tick(){
+  sim.forEach(s=>{
+    if(s.status==='working'){
+      s.progress+=rnd(7,15);s.energy-=rnd(1.6,3.2);s.flop+=rnd(2.5,5);
+    }else if(s.status==='thinking'){
+      s.progress+=rnd(1,4);s.energy-=rnd(.6,1.4);s.flop+=rnd(.6,1.4);
+    }else if(s.status==='charging'){
+      s.energy+=rnd(8,14);
+    }else if(s.status==='resting'){
+      s.energy+=rnd(2.5,5);
+    }
+    s.energy=Math.max(0,Math.min(100,s.energy));
+    if(s.progress>=100&&(s.status==='working'||s.status==='thinking')){
+      s.progress=0;
+      if(!kanbanConnected){
+        s.done++;totalDone++;
+        const fin=s.task;
+        s.task=s.tasks[Math.floor(Math.random()*s.tasks.length)];
+        log(s.name,'完成任务「'+fin+'」 ✓',s.color);
+      }else{
+        log(s.name,'子任务处理完成 ✓',s.color);
+      }
+      fx(s,'✓ 完成');
+    }
+    decide(s);
+  });
+  totalFlop=sim.reduce((a,s)=>a+s.flop,0);
+  render();
+}
+
+/* ============ 渲染 ============ */
+function render(){
+  sim.forEach(s=>{
+    /* 状态: Kanban 实时数据优先，回退到模拟 */
+    const effStatus=kanbanConnected?(s.kanbanStatus||s.status):s.status;
+    const st=STATUS[effStatus];
+    const desk=document.getElementById('desk'+s.id);
+    /* 动画仍用模拟状态 (位置/移动不受干扰) */
+    const atDesk=(s.status==='working'||s.status==='thinking')&&!s.moving;
+    desk.classList.toggle('active',atDesk);
+    desk.classList.toggle('deskthink',atDesk&&s.status==='thinking');
+    s.haloDom.style.background='radial-gradient(circle,'+st.hex+'cc,transparent 72%)';
+    s.pipDom.style.background=st.hex;
+    s.pipDom.style.boxShadow='0 0 9px '+st.hex;
+    let tb=s.dom.querySelector('.think');
+    if(effStatus==='thinking'&&!s.moving){
+      if(!tb){tb=el('div','think','<i></i><i></i><i></i>');s.dom.appendChild(tb);}
+    }else if(tb){tb.remove();}
+    const r=s.ref;
+    /* badge 显示实际状态 */
+    r.badge.textContent=st.label;r.badge.style.color=st.hex;
+    /* 进度 & 能量: 模拟数据 */
+    r.pf.style.width=s.progress.toFixed(0)+'%';
+    r.pv.textContent=s.progress.toFixed(0)+'%';
+    r.ef.style.width=s.energy.toFixed(0)+'%';
+    r.ev.textContent=s.energy.toFixed(0)+'%';
+    /* 完成数: Kanban 实时 / 模拟 */
+    r.done.textContent=kanbanConnected?(s.realDone||0):s.done;
+    /* 角色行: 有 Kanban 真实任务时显示任务标题，否则显示角色 */
+    if(r.rl) r.rl.textContent=
+      (s.kanbanStatus&&s.task)?s.task:s.role;
+    s.card.classList.toggle('sel',s.id===selected);
+  });
+  /* KPI */
+  const effSt=s=>kanbanConnected?(s.kanbanStatus||s.status):s.status;
+  const working=sim.filter(s=>effSt(s)==='working'||effSt(s)==='thinking').length;
+  document.getElementById('kWork').textContent=working;
+  document.getElementById('kTasks').textContent=
+    kanbanConnected?sim.reduce((a,s)=>a+(s.realDone||0),0):totalDone;
+  document.getElementById('kEnergy').textContent=
+    Math.round(sim.reduce((a,s)=>a+s.energy,0)/sim.length);
+  document.getElementById('kFlop').textContent=Math.round(totalFlop);
+}
+
+/* ============ 时钟 ============ */
+function clockTick(){
+  document.getElementById('clock').textContent=nowStr();
+  const e=Math.floor((Date.now()-start)/1000);
+  const mm=String(Math.floor(e/60)).padStart(2,'0');
+  const ss=String(e%60).padStart(2,'0');
+  const d=new Date();
+  document.getElementById('date').textContent=
+    (d.getMonth()+1)+'月'+d.getDate()+'日 · 运行 '+mm+':'+ss;
+}
+
+/* ============ 启动 ============ */
+selectAgent(0);
+render();
+log('SYSTEM','神经办公室已上线，6 名智能体开始工作 ▸','#22d3ee');
+clockTick();
+setInterval(clockTick,1000);
+setInterval(tick,750);
+
+/* ============ Kanban 实时数据同步 ============
+ * 数据对接说明:
+ *   assignee  → agent 名字 (最多取 6 个独立 assignee)
+ *   task.status=running  → 工作中 (working)
+ *   task.status=ready    → 思考中 (thinking)
+ *   task.status=blocked  → 充电中 (charging)
+ *   task.status=todo|triage → 休息中 (resting)
+ *   task.status=done 计数 → 完成任务 (realDone)
+ *   task.title (最高优先级任务) → 角色行显示
+ *   能量 / 累计算力 → 纯模拟，无实际对应
+ * ================================================= */
+const KB_STATUS={
+  running:'working', ready:'thinking',
+  blocked:'charging', todo:'resting',
+  triage:'resting', done:'resting', archived:'resting'
+};
+const lastKbSt={};
+
+async function syncRealData(){
+  try{
+    const resp=await fetch('/api/kanban/board',{
+      headers:{'Accept':'application/json'},
+      signal:AbortSignal.timeout(5000)
+    });
+    if(!resp.ok) return;
+    const data=await resp.json();
+    if(!data||!data.columns) return;
+
+    /* 收集每个 assignee 的任务列表 */
+    const byAssignee=new Map();
+    for(const col of data.columns){
+      if((col.name||'').toLowerCase()==='archived') continue;
+      for(const task of (col.tasks||[])){
+        const who=(task.assignee||'').trim();
+        if(!who) continue;
+        if(!byAssignee.has(who)) byAssignee.set(who,[]);
+        byAssignee.get(who).push(task);
+      }
+    }
+    if(!byAssignee.size) return;
+
+    /* 首次连接: 更新 UI 指示器 */
+    if(!kanbanConnected){
+      kanbanConnected=true;
+      document.querySelector('.live span').textContent='Kanban 数据 · LIVE';
+      const fn=document.getElementById('footNote');
+      if(fn) fn.textContent='NEURAL OFFICE v4.0 · 等距 3D 场景 · Kanban 实时数据接入 · 点击小家伙或卡片可选中';
+      log('SYSTEM','✅ 已连接 Kanban 看板，切换到实时数据模式','#4ade80');
+    }
+
+    /* 按 assignee 任务数降序，最多映射 6 个 */
+    const assignees=[...byAssignee.entries()]
+      .sort((a,b)=>b[1].length-a[1].length)
+      .slice(0,6)
+      .map(e=>e[0]);
+
+    assignees.forEach((who,i)=>{
+      const tasks=byAssignee.get(who);
+      const s=sim[i];
+
+      /* 状态优先级: running > ready > blocked > todo > triage */
+      let newStatus='resting', activeTask=null;
+      for(const prio of ['running','ready','blocked','todo','triage']){
+        const t=tasks.find(t=>t.status===prio);
+        if(t){ newStatus=KB_STATUS[prio]||'resting'; activeTask=t; break; }
+      }
+      const doneCnt=tasks.filter(t=>t.status==='done').length;
+
+      /* 检测状态变化 → 写入活动日志 */
+      if(lastKbSt[who]!==undefined && lastKbSt[who]!==newStatus){
+        log(who,'状态变更 → '+(STATUS[newStatus]?.label||newStatus),s.color);
+      }
+      lastKbSt[who]=newStatus;
+
+      /* 写入实时字段 (不触碰模拟位置 / 动画 / 能量) */
+      s.kanbanStatus=newStatus;
+      s.realDone=doneCnt;
+      if(activeTask) s.task=activeTask.title;
+
+      /* 同步名字显示 (agent 可能是新 assignee) */
+      if(s.name!==who){
+        s.name=who;
+        const nd=s.dom.querySelector('.name');
+        if(nd) nd.textContent=who;
+        const nc=s.card.querySelector('.nm');
+        if(nc) nc.textContent=who;
+      }
+    });
+
+  }catch(e){ /* 网络失败时保持上次数据 */ }
+}
+
+syncRealData();
+setInterval(syncRealData,8000);
+</script>
+</body>
+</html>
