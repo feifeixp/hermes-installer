@@ -1108,29 +1108,42 @@ _PROVIDER_MODELS = {
     # models under their canonical IDs (no provider/ prefix). New users
     # of neowow.studio should start here — their points / membership
     # already cover usage through this gateway.
-    # Live catalog from `curl https://ga.neodomain.cn/v1/models` snapshot
-    # 2026-05-13. Image / video / music / speech models filtered out —
-    # this list is consumed by the chat-completion model picker only.
-    # When ga.neodomain.cn adds a chat model, mirror it here AND in
-    # dashboard's lib/billing-math.DEFAULT_PRICES (or admin's
-    # cfg_model_prices row); otherwise pricing falls through to
-    # _default and the model dropdown won't show it.
+    # Mirror of the dashboard /api/me/plan catalog (snapshot 2026-06-07).
+    # Image / video / music / speech models filtered out — this list is
+    # consumed by the chat-completion model picker only. The live overlay
+    # (_sync_coding_plan_group_models) refreshes this from /api/me/plan when
+    # the user is logged in, but THIS static list is the fallback shown when
+    # offline / no JWT / cold cache — so it MUST be kept current.
+    # When ga.neodomain.cn adds a chat model, mirror it here AND in the
+    # dashboard's lib/billing-math.DEFAULT_PRICES (or admin's cfg_model_prices
+    # row); otherwise pricing falls through to _default and it won't show.
     "neodomain": [
-        # DeepSeek
-        {"id": "deepseek-v4-pro",                 "label": "DeepSeek V4 Pro"},
-        {"id": "deepseek-v4-flash",               "label": "DeepSeek V4 Flash"},
+        # Anthropic Claude (added to the plan 2026-05-31)
+        {"id": "claude-opus-4-8",                 "label": "Claude Opus 4.8"},
+        {"id": "claude-opus-4-7",                 "label": "Claude Opus 4.7"},
+        {"id": "claude-opus-4-6",                 "label": "Claude Opus 4.6"},
+        {"id": "claude-sonnet-4-6",               "label": "Claude Sonnet 4.6"},
+        {"id": "claude-haiku-4-5-20251001",       "label": "Claude Haiku 4.5"},
         # OpenAI
+        {"id": "gpt-5.5-pro",                     "label": "GPT-5.5 Pro"},
         {"id": "gpt-5.5",                         "label": "GPT-5.5"},
+        {"id": "gpt-5.4-pro",                     "label": "GPT-5.4 Pro"},
         {"id": "gpt-5.4",                         "label": "GPT-5.4"},
         {"id": "gpt-5.4-mini",                    "label": "GPT-5.4 Mini"},
+        {"id": "gpt-5.4-nano",                    "label": "GPT-5.4 Nano"},
         {"id": "gpt-4o",                          "label": "GPT-4o"},
         {"id": "gpt-4o-mini",                     "label": "GPT-4o Mini"},
         # Google Gemini
+        {"id": "gemini-3.5-flash",                "label": "Gemini 3.5 Flash"},
         {"id": "gemini-3.1-pro-preview",          "label": "Gemini 3.1 Pro (Preview)"},
         {"id": "gemini-3.1-flash-lite-preview",   "label": "Gemini 3.1 Flash Lite (Preview)"},
+        {"id": "gemini-3-pro-preview",            "label": "Gemini 3 Pro (Preview)"},
         {"id": "gemini-3-flash-preview",          "label": "Gemini 3 Flash (Preview)"},
         {"id": "gemini-2.5-flash",                "label": "Gemini 2.5 Flash"},
         {"id": "gemini-2.5-flash-lite",           "label": "Gemini 2.5 Flash Lite"},
+        # DeepSeek
+        {"id": "deepseek-v4-pro",                 "label": "DeepSeek V4 Pro"},
+        {"id": "deepseek-v4-flash",               "label": "DeepSeek V4 Flash"},
         # Zhipu / Moonshot / MiniMax / Qwen
         {"id": "glm-5",                           "label": "GLM-5"},
         {"id": "kimi-k2.6",                       "label": "Kimi K2.6"},
@@ -2483,7 +2496,10 @@ def _current_webui_version() -> str | None:
 # guarantees that even if a future release accidentally reuses the same
 # WebUI version string (or a debug build doesn't have a version), a structural
 # change still invalidates the cache.
-_MODELS_CACHE_SCHEMA_VERSION = 3
+# Bumped 3→4 (2026-06-07): coding-plan static catalog refreshed with the Claude
+# series + newer GPT/Gemini. Forces existing stale models_cache.json to rebuild
+# on upgrade so users see the new models immediately (not after the 24h TTL).
+_MODELS_CACHE_SCHEMA_VERSION = 4
 
 
 _models_cache_path = STATE_DIR / "models_cache.json"
