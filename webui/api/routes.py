@@ -4082,6 +4082,20 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/onboarding/status":
         return j(handler, get_onboarding_status())
 
+    if parsed.path == "/api/onboarding/local-gemma/status":
+        # Drives whether the wizard renders the 纯本地 Gemma card. False on
+        # cloud (HERMES_NEOWOW_ONLY) / Windows.
+        from api.local_gemma import status_payload
+        return j(handler, status_payload())
+
+    if parsed.path == "/api/onboarding/local-gemma/job":
+        from api.local_gemma import get_job
+        jid = parse_qs(parsed.query).get("id", [""])[0]
+        job = get_job(jid)
+        if not job:
+            return bad(handler, "job not found", status=404)
+        return j(handler, job)
+
     if parsed.path.startswith("/extensions/"):
         from api.extensions import serve_extension_static
 
@@ -6565,6 +6579,15 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e))
         except RuntimeError as e:
             return bad(handler, str(e), 500)
+
+    if parsed.path == "/api/onboarding/local-gemma/install":
+        # Desktop-only. Hard-reject on cloud / Windows even if POSTed directly.
+        from api.local_gemma import local_llm_available, start_install_job
+        if not local_llm_available():
+            return bad(handler, "本地模型仅在桌面版(macOS/Linux)可用", 403)
+        model = (body or {}).get("model") or None
+        job_id = start_install_job(model)
+        return j(handler, {"job_id": job_id})
 
     if parsed.path == "/api/onboarding/complete":
         return j(handler, complete_onboarding())
