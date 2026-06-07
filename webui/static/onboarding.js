@@ -276,6 +276,46 @@ async function _loadOnboardingPresets(){
   }catch(e){ ONBOARDING.presets=[]; }
   if(ONBOARDING.steps[ONBOARDING.step]==='persona') _renderOnboardingBody();
 }
+async function _loadGemmaStatus(){
+  ONBOARDING.gemmaLoading=true;
+  try{ ONBOARDING.gemma=await api('/api/onboarding/local-gemma/status'); }
+  catch(e){ ONBOARDING.gemma={available:false}; }
+  ONBOARDING.gemmaLoading=false;
+  if(ONBOARDING.steps[ONBOARDING.step]==='plan') _renderOnboardingBody();
+}
+async function startLocalGemma(model){
+  const panel=$('gemmaProgress'); if(panel) panel.innerHTML='<div class="onboarding-foot">⏳ 正在准备…</div>';
+  try{
+    const r=await api('/api/onboarding/local-gemma/install',{method:'POST',body:JSON.stringify({model:model||ONBOARDING.gemmaModel||''})});
+    if(r&&r.job_id) _pollGemmaJob(r.job_id);
+    else if(panel) panel.innerHTML='<div class="onboarding-foot" style="color:#ef4444">启动失败</div>';
+  }catch(e){ if(panel) panel.innerHTML='<div class="onboarding-foot" style="color:#ef4444">启动失败: '+((e&&e.message)||e)+'</div>'; }
+}
+function _pollGemmaJob(jobId){
+  const panel=$('gemmaProgress'); if(!panel) return;
+  const tick=async()=>{
+    let j; try{ j=await api('/api/onboarding/local-gemma/job?id='+encodeURIComponent(jobId)); }catch(e){ setTimeout(tick,2000); return; }
+    if(!j) return;
+    if(j.state==='need_manual_install'){
+      panel.innerHTML='<div class="onboarding-foot">未检测到 Ollama。请在终端安装:<br><code>'+(j.hint||'')+'</code><br>或访问 <a href="'+(j.download_url||'#')+'" target="_blank">ollama.com/download</a>,装好后 <button class="onboarding-alt" onclick="startLocalGemma()">点此继续</button></div>';
+      return;
+    }
+    if(j.state==='running'){
+      panel.innerHTML='<div class="onboarding-foot">⏳ 下载 '+(j.model||'')+' … '+(j.percent||0)+'%</div>';
+      setTimeout(tick,1500); return;
+    }
+    if(j.state==='done'){
+      panel.innerHTML='<div class="onboarding-foot" style="color:#22c55e">✓ 本地 Gemma 已就绪('+(j.model||'')+')</div>';
+      setTimeout(function(){ nextOnboardingStep(); },800); return;
+    }
+    if(j.state==='error'){
+      panel.innerHTML='<div class="onboarding-foot" style="color:#ef4444">✗ '+(j.error||'失败')+' <button class="onboarding-alt" onclick="startLocalGemma()">重试</button></div>';
+      return;
+    }
+    setTimeout(tick,1500);
+  };
+  tick();
+}
 function selectOnboardingPersona(id){
   ONBOARDING.form.persona=id;
   if(id&&id!=='__custom__'){
@@ -324,13 +364,22 @@ function _renderOnboardingBody(){
     _setOnboardingNotice('', 'info');
     const acct=ns.hasJwt?`<div class="onboarding-acct">${ns.points!=null?('积分 '+ns.points):'已登录'}</div>`:'';
     const buyCards=plans.map(p=>`<div class="onboarding-plan"><div class="op-name">${p.name||''}</div><div class="op-price">${p.price||''}</div><button class="onboarding-plan-btn" onclick="window.open('${(p.buy_url||'').replace(/'/g,'')}','_blank')">${t('onboarding_plan_buy')}</button></div>`).join('');
+    // 纯本地 Gemma card — desktop-only (status.available is false on cloud/Windows).
+    if(ONBOARDING.gemma===undefined && !ONBOARDING.gemmaLoading){ _loadGemmaStatus(); }
+    const g=ONBOARDING.gemma;
+    const gemmaModel=ONBOARDING.gemmaModel||(g&&g.recommended_model)||'';
+    const gb=(g&&g.ram_bytes)?Math.round(g.ram_bytes/1073741824):0;
+    const modelSel=(g&&g.available)?`<select onchange="ONBOARDING.gemmaModel=this.value" style="margin:4px 0;font-size:11px">${(g.models||[]).map(m=>`<option value="${m}" ${m===gemmaModel?'selected':''}>${m}</option>`).join('')}</select>`:'';
+    const gemmaCard=(g&&g.available)?`<div class="onboarding-plan"><div class="op-name">🖥️ 纯本地 Gemma</div><div class="op-price">免费</div><div style="font-size:11px;opacity:.75;margin:2px 0">本地运行·自动选 ${gemmaModel}${gb?(' · 内存 '+gb+'GB'):''}</div>${modelSel}<button class="onboarding-plan-btn" onclick="startLocalGemma()">安装并使用</button></div>`:'';
     body.innerHTML=`${acct}
       <h3 class="onboarding-h">${t('onboarding_plan_heading')}</h3>
       <p class="onboarding-sub">${t('onboarding_plan_sub')}</p>
       <div class="onboarding-plans">
         <div class="onboarding-plan is-hot"><div class="op-badge">${t('onboarding_plan_trial')}</div><div class="op-price">¥0</div><button class="onboarding-plan-btn solid" onclick="nextOnboardingStep()">${t('onboarding_plan_trial_btn')}</button></div>
         ${buyCards||''}
+        ${gemmaCard}
       </div>
+      <div id="gemmaProgress"></div>
       ${plans.length?'':('<p class="onboarding-foot">'+t('onboarding_plan_unreachable')+'</p>')}`;
     return;
   }
