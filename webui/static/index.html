@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>NeoMuse</title>
+<title>Neowow Studio</title>
 <!-- base href enables subpath mount support; all static paths must stay relative (no leading slash).
      MUST appear before manifest/favicon links so browsers resolve relative URLs against the
      correct base when the page is served from /session/<id> routes. See #2226. -->
@@ -15,7 +15,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="NeoMuse">
+<meta name="apple-mobile-web-app-title" content="Neowow Studio">
 <link rel="apple-touch-icon" sizes="512x512" href="static/favicon-512.png">
 <script>(function(){var themes={light:1,dark:1,system:1},skins={default:1,ares:1,mono:1,slate:1,poseidon:1,sisyphus:1,charizard:1,sienna:1,marvis:1,catppuccin:1,hepburn:1,nous:1,'geist-contrast':1},legacy={slate:['dark','slate'],solarized:['dark','poseidon'],monokai:['dark','sisyphus'],nord:['dark','slate'],oled:['dark','default']},t=(localStorage.getItem('hermes-theme')||'system').toLowerCase(),s=(localStorage.getItem('hermes-skin')||'').toLowerCase(),m=legacy[t],theme=m?m[0]:(themes[t]?t:'system'),skin=skins[s]?s:(m?m[1]:'marvis');localStorage.setItem('hermes-theme',theme);localStorage.setItem('hermes-skin',skin);if(theme==='system')theme=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';if(theme==='dark')document.documentElement.classList.add('dark');if(skin!=='default')document.documentElement.dataset.skin=skin;})()</script>
 <script>(function(){var fs=localStorage.getItem('hermes-font-size');if(fs&&fs!=='default')document.documentElement.dataset.fontSize=fs;})()</script>
@@ -117,6 +117,7 @@
   </script>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="neowow-mark" viewBox="0 0 392 301"><g transform="translate(-163.549,-201.871)" fill="currentColor"><path d="M374.82,266.5C374.393,264.947 374.757,263.74 375.91,262.88C389.357,252.813 397.74,239.37 401.06,222.55C401.973,217.943 402.63,212.97 403.03,207.63C403.083,206.863 403.463,205.91 404.17,204.77C405.8,202.14 409.45,202.58 411.71,204.05C424.437,212.283 432.2,223.85 435,238.75C435.42,240.99 435.463,243.227 435.13,245.46C433.41,257.147 429.697,268.45 423.99,279.37C422.643,281.957 420.387,283.083 417.22,282.75C404.147,281.357 391.61,277.15 379.61,270.13C377.01,268.61 375.58,267.7 375.32,267.4C375.09,267.143 374.919,266.836 374.82,266.5Z"/><path d="M277.01,244.39C270.737,254.23 266.09,262.24 263.07,268.42C262.871,268.831 262.521,269.153 262.09,269.32C253.943,272.52 246.26,276.89 239.04,282.43C239.019,282.446 238.998,282.461 238.976,282.475C238.604,282.709 238.104,282.592 237.867,282.216C237.854,282.195 237.841,282.173 237.83,282.15C234.87,276.3 232.87,269.77 232.94,262.7C233.033,254.587 233.633,248.023 234.74,243.01C238.15,227.63 247.2,213.11 262,206.99C263.807,206.25 264.993,205.873 265.56,205.86C266.978,205.837 268.217,206.854 268.47,208.25C269.07,211.537 269.65,216.45 270.21,222.99C270.87,230.67 273.133,237.457 277,243.35C277.207,243.664 277.211,244.072 277.01,244.39Z"/><path d="M344.08,238.63C344.043,238.73 344.025,238.836 344.027,238.943C344.033,239.425 344.441,239.817 344.929,239.81C345.035,239.809 345.141,239.788 345.24,239.75C354.32,236.203 363.407,233.86 372.5,232.72C376.34,232.24 384.62,230.96 386.04,234.99C387.22,238.33 380.95,249.16 377.02,249.47C367.047,250.243 360.127,251.257 356.26,252.51C356.247,252.517 349.81,254.327 336.95,257.94C335.59,258.32 333.463,259.21 330.57,260.61C327.83,261.93 325.04,262.64 323.07,260.23C321.28,258.04 322.44,255.32 323.71,252.96C326.01,248.667 327.547,245.59 328.32,243.73C328.356,243.643 328.381,243.553 328.396,243.46C328.498,242.815 328.056,242.201 327.417,242.1C327.322,242.085 327.226,242.081 327.13,242.09C325.417,242.23 323.54,242.697 321.5,243.49C315.693,245.757 309.487,248.89 302.88,252.89C294.5,257.98 287.35,264.9 279.69,272.2C278.724,273.124 277.377,273.418 276.29,272.94C275.163,272.433 274.12,271.58 273.16,270.38C272.671,269.77 272.596,268.923 272.97,268.24C274.497,265.473 277.697,259.947 282.57,251.66C284.977,247.573 287.19,244.657 289.21,242.91C295.42,237.55 301.66,234.06 310.74,228.86C315.927,225.893 320.4,223.993 324.16,223.16C331.22,221.607 337.043,221.013 341.63,221.38C344.75,221.627 346.66,223.497 347.36,226.99C347.89,229.68 345.07,235.9 344.08,238.63Z"/><path d="M227,282.01C227.005,282.006 227.011,282.003 227.016,281.999C227.233,281.86 227.524,281.921 227.66,282.134C227.663,282.139 227.667,282.144 227.67,282.15L234.1,293.28C234.195,293.443 234.147,293.655 233.99,293.76C223.88,300.8 216.32,310.87 210.41,321.7C207.183,327.62 204.577,335.12 202.59,344.2C199.623,357.773 198.393,370.417 198.9,382.13C198.99,384.29 197.64,386.8 195.91,388.79C191.443,393.917 188.153,399.737 186.04,406.25C178.74,428.7 189.79,447.98 209.11,459.95C215.643,463.997 221.78,467.083 227.52,469.21C230.96,470.483 236.413,471.797 243.88,473.15C261.073,476.257 276.287,478.593 289.52,480.16C323.48,484.187 356.97,484.477 389.99,481.03C404.937,479.463 419.523,476.787 433.75,473C438.88,471.63 444.25,472.11 450.36,473.67C460,476.12 472.79,477.67 481.38,474.44C486.8,472.4 485.41,467.24 483.61,462.94C483.478,462.624 483.417,462.286 483.43,461.95C483.517,459.23 484.89,457.837 487.55,457.77C498.35,457.52 510.45,457.04 518.36,453.85C530.98,448.75 530.73,436.54 524.7,426.33C522.873,423.243 520.82,420.413 518.54,417.84C515.59,414.52 513.99,411.34 518.48,408.68C523.46,405.72 537.21,397.41 534.82,391.28C533.33,387.46 526.43,383.77 522.37,381.71C517.31,379.143 508.923,375.117 497.21,369.63C494.017,368.137 492.247,365.913 491.9,362.96C491.2,356.92 494.23,355.1 499.62,352.31C510.87,346.48 518.28,337.23 524.37,325.88C526.49,321.93 529.13,317.61 525.82,313.38C523.887,310.927 520.623,308.96 516.03,307.48C502.96,303.29 490.73,302.92 477.72,303.25C474.21,303.34 470.38,302.06 469.88,298.44C467.92,284.38 451.54,273.49 439.14,270.04C438.965,269.99 438.843,269.828 438.843,269.646C438.843,269.607 438.849,269.568 438.86,269.53L442.71,257C442.755,256.847 442.896,256.741 443.055,256.741C443.094,256.741 443.133,256.748 443.17,256.76C444.59,257.22 447.7,258.087 452.5,259.36C466.09,262.98 476.89,271.52 483.31,284.15C484.097,285.703 485.597,286.527 487.81,286.62C492.2,286.81 499.31,286.31 504.43,286.79C518.75,288.13 531.56,293.67 542.86,303.41C547.3,307.24 547.19,312.78 546.5,318.6C545.793,324.667 544.333,329.59 542.12,333.37C541.62,334.217 539.573,337.253 535.98,342.48C531.807,348.56 526.253,354.427 519.32,360.08C518.86,360.46 518.607,360.707 518.56,360.82C518.267,361.604 518.672,362.491 519.46,362.79C523.19,364.22 526.98,364.8 530.8,366.55C537.88,369.78 550.4,377.07 552.85,385.43C555.17,393.34 552.4,399.32 546.66,404.67C543.14,407.943 539.447,410.993 535.58,413.82C534.802,414.39 534.6,415.482 535.12,416.3C540.04,423.98 544.6,431.64 544.71,440.71C544.85,451.98 538.91,459.73 528.93,463.69C521.223,466.75 513.023,468.573 504.33,469.16C503.066,469.245 502.08,470.324 502.11,471.59C502.39,483.06 497.05,487.38 486.48,489.28C475.09,491.32 463.97,489.4 453.12,486.94C451.952,486.675 450.727,486.839 449.67,487.4C447.297,488.66 444.927,489.543 442.56,490.05C434.4,491.8 421.42,494.84 410.39,496.54C373.03,502.31 333.6,502.86 295.47,499.69C281.02,498.49 265.17,495.57 250.07,492.37C238.35,489.883 227.49,486.847 217.49,483.26C208.9,480.18 198.37,476.05 190.94,470.36C182.487,463.893 176.273,456.763 172.3,448.97C160.373,425.557 162.21,402.937 177.81,381.11C178.75,379.803 179.287,378.09 179.42,375.97C180.14,364.99 180.24,353.52 182.63,343.38C186.923,325.127 195.593,308.967 208.64,294.9C213.9,289.23 220.75,286.49 227,282.01Z"/><path d="M519.16,315.49C519.633,316.683 519.54,317.693 518.88,318.52C518.653,318.809 518.3,318.973 517.93,318.96C505.41,318.57 494.7,321.3 485.4,329.59C485.124,329.84 484.762,329.973 484.39,329.96C478.95,329.72 477.14,325.35 480.74,321.21C490.2,310.31 505.8,310.71 518.55,314.93C518.829,315.019 519.053,315.225 519.16,315.49Z"/><path d="M346.14,367.394C346.164,353.801 355.301,342.78 366.533,342.8C377.764,342.82 386.864,353.872 386.84,367.466C386.816,381.059 377.678,392.08 366.447,392.06C355.215,392.04 346.116,380.988 346.14,367.394Z"/><path d="M231.693,368.309C232.197,354.564 241.423,343.729 252.283,344.127C263.143,344.525 271.551,356.007 271.047,369.752C270.543,383.496 261.317,394.331 250.457,393.933C239.597,393.535 231.189,382.053 231.693,368.309Z"/><path d="M310.687,381.477C313.639,377.752 317.654,376.012 319.648,377.592C321.642,379.173 320.864,383.479 317.913,387.204C314.961,390.928 310.946,392.668 308.952,391.088C306.958,389.507 307.735,385.201 310.687,381.477Z"/><path d="M284.595,387.474C281.794,383.927 281.161,379.75 283.184,378.153C285.207,376.555 289.123,378.138 291.925,381.686C294.726,385.233 295.359,389.41 293.336,391.007C291.313,392.605 287.397,391.022 284.595,387.474Z"/></g></symbol></svg>
 <!-- ════════════════════════════════════════════════════════════════
      BEGIN: Neowow integration — boot overlay  (custom; not from upstream)
      Shown immediately on every page load. Self-hides as soon as the
@@ -135,7 +136,7 @@
       <polyline points="20 6 9 17 4 12"/>
     </svg>
   </div>
-  <div id="neowowBootTitle" style="font-size:17px;font-weight:600;color:#e2e8f0;margin-bottom:6px;letter-spacing:0.2px">NeoMuse 正在登录 Neowow 账号</div>
+  <div id="neowowBootTitle" style="font-size:17px;font-weight:600;color:#e2e8f0;margin-bottom:6px;letter-spacing:0.2px">Neowow Studio 正在登录 Neowow 账号</div>
   <div id="neowowBootHint" style="font-size:13px;color:#94a3b8;line-height:1.55;max-width:320px;text-align:center;padding:0 16px">请稍等,正在验证您的 Neodomain 凭据并加载会话…</div>
   <style>
     @keyframes neoBootSpin { to { transform: rotate(360deg); } }
@@ -190,21 +191,8 @@
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
   </button>
   <div class="app-titlebar-inner">
-    <span class="app-titlebar-icon" aria-hidden="true">
-      <svg viewBox="0 0 64 64" width="16" height="16" aria-hidden="true">
-        <defs>
-          <linearGradient id="app-titlebar-gold" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" style="stop-color:#F5C542"/>
-            <stop offset="100%" style="stop-color:#D4961C"/>
-          </linearGradient>
-        </defs>
-        <rect x="30" y="10" width="4" height="46" rx="2" fill="url(#app-titlebar-gold)"/>
-        <path d="M30 18 C24 14, 14 14, 10 18 C14 16, 22 16, 28 20" fill="#F5C542" opacity="0.9"/>
-        <path d="M34 18 C40 14, 50 14, 54 18 C50 16, 42 16, 36 20" fill="#F5C542" opacity="0.9"/>
-        <circle cx="32" cy="10" r="4" fill="#F5C542"/>
-      </svg>
-    </span>
-    <span class="app-titlebar-title" id="appTitlebarTitle">NeoMuse</span>
+    <span class="app-titlebar-icon" aria-hidden="true"><svg viewBox="0 0 392 301" width="20" height="15"><use href="#neowow-mark"/></svg></span>
+    <span class="app-titlebar-title" id="appTitlebarTitle">Neowow Studio</span>
     <span class="app-titlebar-sub" id="appTitlebarSub" hidden></span>
   </div>
   <div class="app-titlebar-spacer" aria-hidden="true"></div>
@@ -265,8 +253,8 @@
   <aside class="sidebar">
     <!-- Brand header — shown in Marvis skin; hidden by default via CSS (.sidebar-header{display:none}) -->
     <div class="sidebar-header">
-      <span class="logo">H</span>
-      <h1>NeoMuse</h1>
+      <span class="logo" style="display:inline-flex;align-items:center;justify-content:center;padding:4px"><svg viewBox="0 0 392 301" width="26" height="20" aria-hidden="true"><use href="#neowow-mark"/></svg></span>
+      <h1>Neowow Studio</h1>
       <button class="sidebar-collapse-btn has-tooltip has-tooltip--left" onclick="if(typeof toggleSidebar==='function')toggleSidebar()" type="button" data-tooltip="收起侧栏" aria-label="收起侧栏">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
@@ -519,23 +507,7 @@
       <button id="scrollToBottomBtn" class="scroll-to-bottom-btn" style="display:none" onclick="scrollToBottom()" aria-label="Scroll to bottom" data-i18n-aria-label="session_jump_end_label" data-i18n-title="session_jump_end_label"><span aria-hidden="true">↓</span><span class="session-jump-btn__text" data-i18n="session_jump_end">End</span></button>
     <div class="messages" id="messages">
       <div class="empty-state" id="emptyState">
-        <div class="empty-logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="80" height="80" aria-label="Hermes caduceus">
-          <defs>
-            <linearGradient id="hermes-gold" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" style="stop-color:#F5C542;stop-opacity:1"/>
-              <stop offset="100%" style="stop-color:#D4961C;stop-opacity:1"/>
-            </linearGradient>
-          </defs>
-          <rect x="30" y="10" width="4" height="46" rx="2" fill="url(#hermes-gold)"/>
-          <path d="M30 18 C24 14, 14 14, 10 18 C14 16, 22 16, 28 20" fill="#F5C542" opacity="0.9"/>
-          <path d="M30 22 C26 19, 18 19, 14 22 C18 20, 24 20, 28 24" fill="#D4961C" opacity="0.8"/>
-          <path d="M34 18 C40 14, 50 14, 54 18 C50 16, 42 16, 36 20" fill="#F5C542" opacity="0.9"/>
-          <path d="M34 22 C38 19, 46 19, 50 22 C46 20, 40 20, 36 24" fill="#D4961C" opacity="0.8"/>
-          <path d="M32 48 C22 44, 20 38, 26 34 C20 36, 18 42, 24 46 C18 40, 22 30, 30 28 C24 32, 22 38, 28 42" fill="none" stroke="#F5C542" stroke-width="2.5" stroke-linecap="round"/>
-          <path d="M32 48 C42 44, 44 38, 38 34 C44 36, 46 42, 40 46 C46 40, 42 30, 34 28 C40 32, 42 38, 36 42" fill="none" stroke="#D4961C" stroke-width="2.5" stroke-linecap="round"/>
-          <circle cx="32" cy="10" r="4" fill="#F5C542"/>
-          <circle cx="32" cy="10" r="2" fill="#FFF8E1" opacity="0.7"/>
-        </svg></div>
+        <div class="empty-logo"><svg class="empty-logo-mark" viewBox="0 0 392 301" width="96" height="74" aria-label="Neowow Studio"><use href="#neowow-mark"/></svg></div>
         <h2 data-i18n="empty_title">What can I help with?</h2>
         <p data-i18n="empty_subtitle">Ask anything, run commands, explore files, or manage your scheduled tasks.</p>
         <div class="suggestion-grid">
