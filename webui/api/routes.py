@@ -6426,7 +6426,13 @@ def handle_post(handler, parsed) -> bool:
         if len(version) > 32 or not re.fullmatch(r"v\d+\.\d+\.\d+", version):
             bad(handler, "version must be in v<MAJOR>.<MINOR>.<PATCH> format", status=400)
             return True
-        from api.config import load_settings, save_settings
+        # NOTE: do not re-import load_settings/save_settings here. They are
+        # imported at module scope (see the `from api.config import (...)` block
+        # near the top of this file). A function-local `from api.config import
+        # ... save_settings` turns `save_settings` into a local for the WHOLE
+        # handle_post() function, so the unrelated `/api/settings` POST branch
+        # below hit `UnboundLocalError: save_settings` and 500'd on every
+        # settings save. See tests/test_sprint26.py etc.
         try:
             settings = load_settings()
             settings["installer_skipped_version"] = version

@@ -59,13 +59,18 @@ def test_sienna_skin_does_not_force_migration():
 
 
 def test_default_theme_is_still_dark():
-    """Adding a new skin must not change the default theme."""
-    # The early-init script defaults to 'dark' when no saved theme exists.
+    """Adding a new skin must not change the default theme.
+
+    The baseline default is 'system' (follows OS preference) since
+    first-class system-theme support was added; the early-init script
+    reads `localStorage.getItem('hermes-theme')||'system'`. This guards
+    that adding the Sienna skin doesn't silently alter that default.
+    """
     init_script_idx = INDEX_HTML.find("var themes=")
     end_idx = INDEX_HTML.find("</script>", init_script_idx)
     init_block = INDEX_HTML[init_script_idx:end_idx]
-    assert "||'dark'" in init_block, (
-        "Default theme must remain 'dark' (the existing baseline)"
+    assert "||'system'" in init_block, (
+        "Default theme must remain 'system' (the existing baseline)"
     )
 
 

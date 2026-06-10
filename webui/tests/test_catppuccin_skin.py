@@ -48,7 +48,9 @@ def test_catppuccin_skin_is_opt_in_and_preserves_default_dark():
     init_script_idx = INDEX_HTML.find("var themes=")
     end_idx = INDEX_HTML.find("</script>", init_script_idx)
     init_block = INDEX_HTML[init_script_idx:end_idx]
-    assert "||'dark'" in init_block, "Default theme must remain dark"
+    # Baseline default is 'system' (OS preference) since system-theme support
+    # was added; the early-init reads `hermes-theme`||'system'.
+    assert "||'system'" in init_block, "Default theme must remain 'system'"
     forbidden = [
         "catppuccin-migrated",
         "skin-catppuccin-migrated",
