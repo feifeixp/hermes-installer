@@ -1,5 +1,5 @@
 """
-NeoMuse — single source of truth for application metadata.
+Neowow Studio — single source of truth for application metadata.
 
 All other files (spec, webui, main.py) import from here so a version
 bump or legal-text change only needs one edit.
@@ -17,8 +17,8 @@ from pathlib import Path
 
 
 # ── Identity ────────────────────────────────────────────────────────────────
-APP_NAME         = "NeoMuse"
-APP_FULL_NAME    = "NeoMuse"
+APP_NAME         = "Neowow Studio"
+APP_FULL_NAME    = "Neowow Studio"
 # Kept as the legacy reverse-DNS bundle ID so existing installs are treated as
 # the SAME app by macOS/Windows (seamless upgrade; user data lives in ~/.hermes).
 BUNDLE_ID        = "cn.neodomain.hermes"          # reverse-DNS macOS bundle ID
@@ -92,11 +92,11 @@ MACOS_INFO_PLIST: dict = {
     "NSHighResolutionCapable":      True,
     "LSMinimumSystemVersion":       "11.0",
     # Privacy usage descriptions
-    "NSAppleEventsUsageDescription":      "NeoMuse automates setup steps.",
-    "NSDesktopFolderUsageDescription":    "NeoMuse reads config files from the Desktop.",
-    "NSDocumentsFolderUsageDescription":  "NeoMuse may access documents during setup.",
-    "NSDownloadsFolderUsageDescription":  "NeoMuse saves downloaded files here.",
-    "NSNetworkVolumesUsageDescription":   "NeoMuse connects to AI APIs over the network.",
+    "NSAppleEventsUsageDescription":      "Neowow Studio automates setup steps.",
+    "NSDesktopFolderUsageDescription":    "Neowow Studio reads config files from the Desktop.",
+    "NSDocumentsFolderUsageDescription":  "Neowow Studio may access documents during setup.",
+    "NSDownloadsFolderUsageDescription":  "Neowow Studio saves downloaded files here.",
+    "NSNetworkVolumesUsageDescription":   "Neowow Studio connects to AI APIs over the network.",
     # Hardened Runtime (required for PyObjC WKWebView)
     "com.apple.security.cs.allow-unsigned-executable-memory": True,
     "com.apple.security.cs.disable-library-validation":       True,

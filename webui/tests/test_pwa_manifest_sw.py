@@ -484,7 +484,7 @@ class TestSessionManifestRoute:
     def test_session_manifest_json_has_hermes_name(self):
         handler = self._get("/session/manifest.json")
         data = json.loads(bytes(handler.body).decode("utf-8"))
-        assert data.get("name") == "Hermes"
+        assert data.get("name") == "Neowow Studio"
 
     def test_session_manifest_json_has_512_icon(self):
         handler = self._get("/session/manifest.json")
@@ -516,7 +516,7 @@ class TestSessionManifestRoute:
     def test_session_manifest_webmanifest_is_parseable_json(self):
         handler = self._get("/session/manifest.webmanifest")
         data = json.loads(bytes(handler.body).decode("utf-8"))
-        assert data.get("name") == "Hermes"
+        assert data.get("name") == "Neowow Studio"
 
     def test_session_manifest_webmanifest_is_not_html(self):
         handler = self._get("/session/manifest.webmanifest")
@@ -549,7 +549,7 @@ class TestRootManifestRoute:
     def test_root_manifest_json_has_hermes_name_and_512_icon(self):
         handler = self._get("/manifest.json")
         data = json.loads(bytes(handler.body).decode("utf-8"))
-        assert data.get("name") == "Hermes"
+        assert data.get("name") == "Neowow Studio"
         icons = data.get("icons", [])
         sizes = [icon.get("sizes", "") for icon in icons]
         assert any("512" in s for s in sizes)

@@ -1,8 +1,8 @@
 {
   "id": "./",
-  "name": "Hermes",
-  "short_name": "Hermes",
-  "description": "Hermes AI Agent Web UI",
+  "name": "Neowow Studio",
+  "short_name": "Neowow",
+  "description": "Neowow Studio AI Agent Web UI",
   "start_url": "./?source=pwa",
   "scope": "./",
   "display": "standalone",

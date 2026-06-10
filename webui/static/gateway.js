@@ -12,7 +12,7 @@
 // to panels.js: panels.js is subtree-pulled from nesquena/hermes-webui
 // and gets rewritten on every upstream sync — overrides survive.
 //
-// After saving, the user is told to restart NeoMuse. main.py
+// After saving, the user is told to restart Neowow Studio. main.py
 // reads gateway.json once at startup so a config change mid-session
 // does NOT take effect until restart. We could file-watch + restart
 // automatically but that's surprising — better to make the trade-off
@@ -153,7 +153,7 @@
       if (result) {
         result.innerHTML = `
           <div style="padding:10px 12px;border-radius:6px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.3);color:var(--text)">
-            ✓ 已保存。<strong>需要重启 NeoMuse 才能生效</strong>。
+            ✓ 已保存。<strong>需要重启 Neowow Studio 才能生效</strong>。
           </div>
         `;
       }
@@ -168,7 +168,7 @@
 
   // ── Reset (clear gateway.json → revert to local) ────────────────────
   async function resetGatewayConfig() {
-    if (!confirm('确定重置为本机模式？\n下次启动 NeoMuse 将装/启动本地 Hermes Agent。')) return;
+    if (!confirm('确定重置为本机模式？\n下次启动 Neowow Studio 将装/启动本地 Hermes Agent。')) return;
     const result = $('gatewaySaveResult');
     if (result) result.innerHTML = '<span style="color:var(--muted)">重置中…</span>';
     try {
@@ -190,7 +190,7 @@
       if (result) {
         result.innerHTML = `
           <div style="padding:10px 12px;border-radius:6px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.3);color:var(--text)">
-            ✓ 已重置为本机模式。重启 NeoMuse 生效。
+            ✓ 已重置为本机模式。重启 Neowow Studio 生效。
           </div>
         `;
       }

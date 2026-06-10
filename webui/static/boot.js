@@ -1508,11 +1508,11 @@ function applyBotName(){
   // The saved assistant name applies to the default profile only.
   // Non-default profiles use their own profile names.
   const name=assistantDisplayName();
-  document.title=name;
-  const sidebarH1=document.querySelector('.sidebar-header h1');
-  if(sidebarH1) sidebarH1.textContent=name;
-  const logo=document.querySelector('.sidebar-header .logo');
-  if(logo) logo.textContent=name.charAt(0).toUpperCase();
+  // Product brand (tab title + sidebar logo + sidebar name) is fixed —
+  // "Neowow Studio" + the mascot, set statically in index.html. We must NOT
+  // overwrite it with the assistant/bot name (that conflation is what made the
+  // sidebar always read "Hermes"). Only the assistant-name surfaces below
+  // (top bar when idle + composer placeholder) follow the configurable bot name.
   const topbarTitle=$('topbarTitle');
   if(topbarTitle && (!S.session)) topbarTitle.textContent=name;
   const msg=$('msg');

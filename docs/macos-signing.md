@@ -104,5 +104,5 @@ spctl -a -t open --context context:primary-signature -vv ~/Downloads/Hermes-Inst
 ```bash
 xattr -dr com.apple.quarantine ~/Downloads/Hermes-Installer-macOS.dmg
 # 挂载、拖进 Applications 后：
-xattr -dr com.apple.quarantine "/Applications/NeoMuse.app"
+xattr -dr com.apple.quarantine "/Applications/Neowow Studio.app"
 ```

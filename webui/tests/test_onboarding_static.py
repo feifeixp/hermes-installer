@@ -51,8 +51,8 @@ def test_onboarding_uses_i18n_helpers():
     assert "t('onboarding_step_login_title')" in js
     assert "t('onboarding_step_persona_title')" in js
     assert "t('onboarding_complete')" in js
-    assert "onboarding_title: 'Welcome to NeoMuse'" in i18n
-    assert "onboarding_title: 'Bienvenido a NeoMuse'" in i18n
+    assert "onboarding_title: 'Welcome to Neowow Studio'" in i18n
+    assert "onboarding_title: 'Bienvenido a Neowow Studio'" in i18n
 
 
 def test_bootstrap_script_contains_official_installer_and_windows_guard():
