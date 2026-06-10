@@ -1,6 +1,6 @@
 @echo off
 REM ──────────────────────────────────────────────────────────────────────────
-REM build.bat — Build NeoMuse as Windows single-file .exe
+REM build.bat — Build Neowow Studio as Windows single-file .exe
 REM Usage: Double-click or run in CMD / PowerShell as Administrator
 REM Requires: Python 3.10+ (not RC), pip
 REM ──────────────────────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@ set ZIP_NAME=Hermes-Installer-Windows.zip
 set EXE_PATH=%DIST_DIR%\%APP_NAME%.exe
 
 echo.
-echo  ⚡ NeoMuse — Windows 打包脚本
+echo  ⚡ Neowow Studio — Windows 打包脚本
 echo  ──────────────────────────────────────────────
 
 REM ── 1. Check Python ───────────────────────────────────────────────────────

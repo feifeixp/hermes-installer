@@ -1,4 +1,4 @@
-# ⚡ NeoMuse
+# ⚡ Neowow Studio
 
 > Hermes Agent 一键部署 · 桌面安装器 + 现代化 WebUI
 
@@ -141,7 +141,7 @@ cd webui && bash start.sh
 **macOS：**
 ```bash
 bash build.sh
-# 产物：dist/NeoMuse.app  +  dist/Hermes-Installer-macOS.dmg
+# 产物：dist/Neowow Studio.app  +  dist/Hermes-Installer-macOS.dmg
 ```
 
 **Windows（在 Windows 机器上运行）：**
@@ -229,7 +229,7 @@ platforms:
 ## macOS 用户说明
 
 - 首次运行：右键 → 打开（绕过 Gatekeeper 未签名提示）
-- 或在终端执行：`xattr -cr "/Applications/NeoMuse.app"`
+- 或在终端执行：`xattr -cr "/Applications/Neowow Studio.app"`
 
 ---
 

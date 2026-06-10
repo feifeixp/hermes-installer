@@ -1,6 +1,6 @@
 # 远程模式 — 让桌面 Hermes 连云端 WebUI
 
-> **谁该看这个文档：** 已经装了 NeoMuse 桌面版的用户，想让它
+> **谁该看这个文档：** 已经装了 Neowow Studio 桌面版的用户，想让它
 > 直接打开云端 WebUI，而不是在本机跑 Hermes Agent。
 >
 > **运维 / 部署人员**看 [CLOUD_DEPLOY.md](./CLOUD_DEPLOY.md)。
@@ -9,7 +9,7 @@
 
 ## 三种连接模式
 
-桌面版 NeoMuse 现在支持三种打开方式：
+桌面版 Neowow Studio 现在支持三种打开方式：
 
 ### 1. 本机模式（默认）
 跟之前一样 — Hermes Agent 装在你这台机器上，所有数据本地。
@@ -26,7 +26,7 @@
 - ❌ 需要云端服务（你自己部署 OR 用 `chat.neowow.studio` 公共版）
 
 ### 3. 直接用浏览器
-连桌面 NeoMuse 都不用装，直接 https://chat.neowow.studio。
+连桌面 Neowow Studio 都不用装，直接 https://chat.neowow.studio。
 - ✅ 完全零安装
 - 唯一缺点：要切换的时候要在浏览器收藏夹里找
 
@@ -34,9 +34,9 @@
 
 ## 怎么切到云端模式
 
-### 在桌面 NeoMuse 里：
+### 在桌面 Neowow Studio 里：
 
-1. 打开 NeoMuse
+1. 打开 Neowow Studio
 2. 点齿轮（⚙️）→ 「连接模式」
 3. 选「远程连接」
 4. 填 URL：
@@ -44,7 +44,7 @@
    - 用你自己部署的：`https://chat.yourdomain.com`
 5. （可选）显示名称：`我的 GPU 服务器`
 6. 点「保存」
-7. **退出 NeoMuse 重启**
+7. **退出 Neowow Studio 重启**
 
 下次打开就是云端 WebUI 了。
 
@@ -61,7 +61,7 @@ cat > ~/.hermes/webui/gateway.json <<EOF
 EOF
 ```
 
-启动 NeoMuse。
+启动 Neowow Studio。
 
 ---
 
@@ -79,7 +79,7 @@ hermes-installer --reset-gateway
 
 ## 出问题的应急恢复
 
-如果你保存了一个错误的 URL（比如 typo），重启 NeoMuse 之后
+如果你保存了一个错误的 URL（比如 typo），重启 Neowow Studio 之后
 会卡住或者报错。**应急恢复命令**：
 
 ```bash
@@ -87,7 +87,7 @@ hermes-installer --reset-gateway
 hermes-installer --reset-gateway
 
 # Windows（在终端 / Powershell）
-"NeoMuse.exe" --reset-gateway
+"Neowow Studio.exe" --reset-gateway
 
 # 或者直接删配置文件
 rm ~/.hermes/webui/gateway.json

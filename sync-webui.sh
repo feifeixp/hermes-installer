@@ -10,7 +10,7 @@ UPSTREAM="upstream-webui"
 UPSTREAM_URL="https://github.com/nesquena/hermes-webui.git"
 BRANCH="master"
 
-echo "⚡ NeoMuse — WebUI 上游同步"
+echo "⚡ Neowow Studio — WebUI 上游同步"
 echo "──────────────────────────────────────"
 
 # 确保 upstream remote 存在
