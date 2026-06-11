@@ -20,8 +20,10 @@ def test_neodomain_catalog_includes_claude_series():
 
 def test_neodomain_catalog_includes_newer_openai_gemini():
     ids = {m["id"] for m in _PROVIDER_MODELS["neodomain"]}
+    # gemini-3-pro-preview was shut down by Google 2026-03-09 (#669) and was
+    # removed from the catalog; its successor 3.1-pro-preview is pinned instead.
     for cid in ("gpt-5.4-pro", "gpt-5.5-pro", "gpt-5.4-nano",
-                "gemini-3-pro-preview", "gemini-3.5-flash"):
+                "gemini-3.1-pro-preview", "gemini-3.5-flash"):
         assert cid in ids, f"static coding-plan catalog missing {cid}"
 
 

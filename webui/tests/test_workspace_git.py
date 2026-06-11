@@ -509,6 +509,11 @@ def test_git_fetch_pull_and_push_with_upstream(tmp_path):
 
     remote = tmp_path / "remote.git"
     _git(tmp_path, "init", "--bare", str(remote))
+    # Point the bare remote's HEAD at master to match _init_repo's pinned
+    # branch — otherwise the clone below tracks whatever the HOST's
+    # init.defaultBranch names (often 'main'), which doesn't exist here,
+    # and fetch/behind silently sees no upstream.
+    _git(remote, "symbolic-ref", "HEAD", "refs/heads/master")
 
     origin = _init_repo(tmp_path / "origin")
     (origin / "tracked.txt").write_text("one\n", encoding="utf-8")
