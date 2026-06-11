@@ -55,7 +55,7 @@ jobs:
       # (markdown rendering, session time sync, model picker de-dup, …).
       # Runners ship node, but pin it explicitly so image churn can't
       # silently change the JS engine under the suite.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
 
