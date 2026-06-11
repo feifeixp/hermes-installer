@@ -96,7 +96,7 @@ def test_turkish_locale_includes_representative_translations():
         "tab_tasks: 'Görevler'",
         "tab_profiles: 'Agent profilleri'",
         "empty_title: 'Hangi konuda yardımcı olabilirim?'",
-        "onboarding_title: 'Hermes Web Kullanıcı Arayüzüne Hoş Geldiniz'",
+        "onboarding_title: 'Neowow Studio\\'ye Hoş Geldiniz'",
     ]
     for entry in expected:
         assert entry in tr_block
