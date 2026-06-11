@@ -1137,7 +1137,7 @@ _PROVIDER_MODELS = {
         {"id": "gemini-3.5-flash",                "label": "Gemini 3.5 Flash"},
         {"id": "gemini-3.1-pro-preview",          "label": "Gemini 3.1 Pro (Preview)"},
         {"id": "gemini-3.1-flash-lite-preview",   "label": "Gemini 3.1 Flash Lite (Preview)"},
-        {"id": "gemini-3-pro-preview",            "label": "Gemini 3 Pro (Preview)"},
+        # gemini-3-pro-preview was shut down 2026-03-09 (#669); use 3.1-pro-preview above.
         {"id": "gemini-3-flash-preview",          "label": "Gemini 3 Flash (Preview)"},
         {"id": "gemini-2.5-flash",                "label": "Gemini 2.5 Flash"},
         {"id": "gemini-2.5-flash-lite",           "label": "Gemini 2.5 Flash Lite"},
@@ -4424,13 +4424,21 @@ def get_available_models() -> dict:
         _current_mtime = Path(_get_config_path()).stat().st_mtime
     except OSError:
         _current_mtime = 0.0
-    _cfg_changed = _current_mtime != _cfg_mtime
+    # Mirror the guarded check at the top of this function: a config.yaml
+    # mtime change must NOT trigger reload_config() when cfg has been
+    # mutated in memory (tests, runtime set_hermes_default_model paths) —
+    # the unguarded reload here used to silently wipe those overrides and
+    # rebuild the picker from the on-disk file (see issue #2545 test).
+    _cfg_changed = _current_mtime != _cfg_mtime and not _cfg_has_in_memory_overrides()
 
     # Disk load BEFORE lock: ~0.1ms, lets concurrent requests skip entirely.
     # Then acquire lock and check memory cache.  Cold path runs inside the lock
     # so only one thread rebuilds while others wait.
+    # Skipped when cfg holds in-memory overrides: the disk snapshot reflects
+    # the on-disk config (its fingerprint can't see in-memory mutations), so
+    # serving it would bypass the override the caller just installed.
     disk_groups = None
-    if _available_models_cache is None:
+    if _available_models_cache is None and not _cfg_has_in_memory_overrides():
         disk_groups = _load_models_cache_from_disk()
 
     with _available_models_cache_lock:

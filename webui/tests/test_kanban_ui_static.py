@@ -32,7 +32,14 @@ def test_kanban_has_native_sidebar_rail_and_mobile_tab():
         "kanban rail/mobile button must call switchPanel('kanban') (with or without fromRailClick opts)"
     assert 'data-label="Kanban"' in INDEX
     kanban_section = INDEX[INDEX.find('id="mainKanban"'):INDEX.find('id="mainWorkspaces"')]
-    assert "<iframe" not in kanban_section.lower()
+    # The kanban board itself must stay native (no iframe-based board — the
+    # pre-parity legacy). The only iframe allowed in this section is the
+    # opt-in Neural Office embed (id="neuralOfficeFrame"), hidden by default
+    # and toggled explicitly via the 神经办公室 button.
+    iframes = re.findall(r"<iframe[^>]*>", kanban_section, flags=re.IGNORECASE)
+    assert all("neuralofficeframe" in tag.lower() for tag in iframes), (
+        f"unexpected iframe(s) in kanban section: {iframes!r}"
+    )
 
 
 def test_kanban_has_sidebar_panel_and_main_board_mounts():

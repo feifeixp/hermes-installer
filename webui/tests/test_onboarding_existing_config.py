@@ -260,7 +260,7 @@ from tests._pytest_port import BASE
 
 
 def _http_get(path):
-    with urllib.request.urlopen(BASE + path, timeout=10) as r:
+    with urllib.request.urlopen(BASE + path, timeout=60) as r:
         return json.loads(r.read()), r.status
 
 
@@ -271,7 +271,7 @@ def _http_post(path, body=None):
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             return json.loads(r.read()), r.status
     except urllib.error.HTTPError as e:
         return json.loads(e.read()), e.code

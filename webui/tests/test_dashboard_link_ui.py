@@ -18,8 +18,11 @@ def test_dashboard_nav_buttons_are_hidden_by_default_and_subpath_safe():
 
 
 def test_dashboard_rail_item_sits_between_insights_and_settings_spacer():
+    # The rail was redesigned: insights moved into the overflow side menu, so
+    # the dashboard button now anchors between the profiles tab and the
+    # rail-spacer (still in the primary nav group, above the spacer).
     rail = re.search(r'<nav class="rail".*?</nav>', INDEX_HTML, re.DOTALL).group(0)
-    assert rail.index('data-panel="insights"') < rail.index('id="dashboardRailBtn"') < rail.index('rail-spacer')
+    assert rail.index('data-panel="profiles"') < rail.index('id="dashboardRailBtn"') < rail.index('rail-spacer')
 
 
 def test_dashboard_frontend_fetches_status_with_sixty_second_cache():

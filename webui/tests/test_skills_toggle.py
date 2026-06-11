@@ -40,14 +40,19 @@ def test_toggle_css_classes_exist():
 
 
 def test_render_skills_produces_toggle_buttons():
-    """renderSkills() must include toggleSkill and skill-toggle."""
-    assert "toggleSkill(" in PANELS_JS
+    """The skills panel must render toggle controls wired to the toggle fn.
+
+    The legacy single-list `toggleSkill()` was refactored into
+    `renderSkillsPanel()` + the `skillsToggleLocal()` checkbox handler
+    (see the legacy-removal note near the top of panels.js).
+    """
+    assert "skillsToggleLocal(" in PANELS_JS
     assert "skill-toggle" in PANELS_JS
 
 
 def test_toggle_skill_function_defined():
-    """toggleSkill() async function must be defined."""
-    assert "async function toggleSkill(" in PANELS_JS
+    """The async skill-toggle handler must be defined."""
+    assert "async function skillsToggleLocal(" in PANELS_JS
 
 
 def test_disabled_list_round_trip(tmp_path):

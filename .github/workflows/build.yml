@@ -33,6 +33,40 @@ permissions:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════════
+  # WebUI test suite — pytest
+  # ═══════════════════════════════════════════════════════════════════════
+  # The suite was red for months without anyone noticing because CI was
+  # build-only. Tests MUST run from webui/ (they read static/… via relative
+  # paths); conftest.py spawns an isolated test server on an auto-derived
+  # port with its own state dir. hermes-agent is not installed on the
+  # runner — conftest auto-skips the agent-dependent tests.
+  webui-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      # ~60 frontend tests execute JS snippets via `node` subprocesses
+      # (markdown rendering, session time sync, model picker de-dup, …).
+      # Runners ship node, but pin it explicitly so image churn can't
+      # silently change the JS engine under the suite.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install test deps
+        run: pip install -r webui/requirements.txt pytest
+
+      - name: Run webui test suite
+        working-directory: webui
+        run: pytest -q -p no:cacheprovider
+
+  # ═══════════════════════════════════════════════════════════════════════
   # macOS — .dmg
   # ═══════════════════════════════════════════════════════════════════════
   macos:

@@ -6426,7 +6426,13 @@ def handle_post(handler, parsed) -> bool:
         if len(version) > 32 or not re.fullmatch(r"v\d+\.\d+\.\d+", version):
             bad(handler, "version must be in v<MAJOR>.<MINOR>.<PATCH> format", status=400)
             return True
-        from api.config import load_settings, save_settings
+        # NOTE: do not re-import load_settings/save_settings here. They are
+        # imported at module scope (see the `from api.config import (...)` block
+        # near the top of this file). A function-local `from api.config import
+        # ... save_settings` turns `save_settings` into a local for the WHOLE
+        # handle_post() function, so the unrelated `/api/settings` POST branch
+        # below hit `UnboundLocalError: save_settings` and 500'd on every
+        # settings save. See tests/test_sprint26.py etc.
         try:
             settings = load_settings()
             settings["installer_skipped_version"] = version
@@ -7225,10 +7231,15 @@ def handle_post(handler, parsed) -> bool:
     # apply_onboarding_setup), writes neowow-coding-plan to config.yaml.
     if parsed.path == "/api/neowow/activate-provider":
         try:
+            # NOTE: apply_onboarding_setup must NOT be re-imported here. It is
+            # already a module-level import; a function-local `from
+            # api.onboarding import ... apply_onboarding_setup` makes the name
+            # a local for ALL of handle_post(), so the unrelated
+            # /api/onboarding/setup branch above hit
+            # `UnboundLocalError: apply_onboarding_setup` and 500'd.
             from api.onboarding import (
                 _NEOWOW_CODING_PLAN_PROVIDER_ID,
                 _fetch_neowow_plan_models,
-                apply_onboarding_setup,
             )
             models, default_model = _fetch_neowow_plan_models()
             model = default_model or (models[0]["id"] if models else "deepseek-v4-flash")

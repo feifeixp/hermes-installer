@@ -32,10 +32,16 @@ class TestPWAAuthRedirect:
         # Guard must appear inside the !res.ok block, before throwing
         assert "res.status===401" in src, \
             "workspace.js api() must check res.status===401"
-        assert "window.location.href='login" in src or 'window.location.href="login' in src, \
-            "workspace.js api() must redirect to login on 401"
+        # The redirect now goes through a `fallback` const ('login?next=…')
+        # that the server's loginUrl (if provided in the 401 body) overrides;
+        # assert the relative login target exists rather than the old direct
+        # `window.location.href='login…'` literal.
+        assert "'login?next='" in src, \
+            "workspace.js api() must redirect to relative login?next= on 401"
         assert "window.location.href='/login" not in src and 'window.location.href="/login' not in src, \
             "workspace.js api() must not escape subpath mounts by redirecting to root /login"
+        assert "'/login?next='" not in src, \
+            "workspace.js api() must not use an absolute /login?next= fallback"
 
     def test_workspace_js_401_before_throw(self):
         """The 401 redirect must come before any error throw."""
