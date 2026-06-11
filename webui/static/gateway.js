@@ -168,7 +168,7 @@
 
   // ── Reset (clear gateway.json → revert to local) ────────────────────
   async function resetGatewayConfig() {
-    if (!confirm('确定重置为本机模式？\n下次启动 Neowow Studio 将装/启动本地 Hermes Agent。')) return;
+    if (!await showConfirmDialog({ message: '确定重置为本机模式？\n下次启动 Neowow Studio 将装/启动本地 Hermes Agent。', danger: true })) return;
     const result = $('gatewaySaveResult');
     if (result) result.innerHTML = '<span style="color:var(--muted)">重置中…</span>';
     try {

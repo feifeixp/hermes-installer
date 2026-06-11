@@ -21,7 +21,10 @@ class TestCSPConnectSrcJsdelivr:
     def test_connect_src_includes_jsdelivr(self):
         """connect-src must include https://cdn.jsdelivr.net."""
         src = _helpers_src()
-        connect_match = re.search(r"connect-src\s+([^;]+);", src)
+        # Anchor on the directive's "'self'" token so the regex targets the
+        # actual CSP string, not the prose "connect-src list must include …"
+        # in the _security_headers docstring (which appears earlier in the file).
+        connect_match = re.search(r"connect-src ('self'[^;]+);", src)
         assert connect_match, "connect-src directive must exist in CSP"
         assert "https://cdn.jsdelivr.net" in connect_match.group(1), (
             "connect-src must allow cdn.jsdelivr.net — xterm.js source maps are "
@@ -31,7 +34,10 @@ class TestCSPConnectSrcJsdelivr:
     def test_connect_src_still_includes_self(self):
         """connect-src must still include 'self' alongside the new jsdelivr entry."""
         src = _helpers_src()
-        connect_match = re.search(r"connect-src\s+([^;]+);", src)
+        # Anchor on the directive's "'self'" token so the regex targets the
+        # actual CSP string, not the prose "connect-src list must include …"
+        # in the _security_headers docstring (which appears earlier in the file).
+        connect_match = re.search(r"connect-src ('self'[^;]+);", src)
         assert connect_match, "connect-src directive must exist in CSP"
         assert "'self'" in connect_match.group(1), (
             "connect-src must retain 'self' after adding cdn.jsdelivr.net"

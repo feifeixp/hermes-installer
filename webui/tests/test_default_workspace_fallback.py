@@ -51,14 +51,23 @@ def test_resolve_default_workspace_creates_home_workspace_when_missing(monkeypat
 
 
 def test_resolve_default_workspace_raises_when_all_candidates_fail(monkeypatch, tmp_path):
-    """RuntimeError is raised when every candidate is unwritable."""
-    import stat, pytest
+    """RuntimeError is raised when every candidate — including the /tmp last
+    resort — is unwritable."""
+    import stat, tempfile, pytest
     # Make tmp_path read-only so mkdir inside it fails
     tmp_path.chmod(stat.S_IRUSR | stat.S_IXUSR)
     state_dir = tmp_path / "state"
     monkeypatch.setattr(config, "HOME", tmp_path)
     monkeypatch.setattr(config, "STATE_DIR", state_dir)
     monkeypatch.delenv("HERMES_WEBUI_DEFAULT_WORKSPACE", raising=False)
+    # resolve_default_workspace deliberately NEVER raises on a normal machine:
+    # the candidate list ends with hardcoded /opt/hermes/workspace and
+    # /tmp/hermes-workspace (writable here), and it then degrades to a
+    # `tempfile.gettempdir()/hermes-webui-workspace` last resort. Force every
+    # candidate probe to fail AND point the last resort inside the read-only
+    # tmp_path, so the genuine "everything failed" RuntimeError path runs.
+    monkeypatch.setattr(config, "_ensure_workspace_dir", lambda p: False)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "ro-tmp"))
     try:
         with pytest.raises(RuntimeError, match="Could not create or access"):
             config.resolve_default_workspace(None)

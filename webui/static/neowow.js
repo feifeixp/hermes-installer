@@ -1168,7 +1168,7 @@
   }, 10_000);
 
   window.neowowClearJwt = async function () {
-    if (!confirm('确认退出 Neodomain？\n积分余额信息会消失，但保存的 deploy token 不受影响。')) return;
+    if (!await showConfirmDialog({ message: '确认退出 Neodomain？\n积分余额信息会消失，但保存的 deploy token 不受影响。', danger: true })) return;
     try {
       const r = await fetch('/api/neowow/jwt', { cache: 'no-store',
         method:  'POST',
@@ -1261,7 +1261,7 @@
   };
 
   window.neowowClearToken = async function () {
-    if (!confirm('清除已保存的部署 token？\n你之前用此 token 部署的应用不受影响。')) return;
+    if (!await showConfirmDialog({ message: '清除已保存的部署 token？\n你之前用此 token 部署的应用不受影响。', danger: true })) return;
     try {
       const r = await fetch('/api/neowow/token', { cache: 'no-store',
         method: 'POST',

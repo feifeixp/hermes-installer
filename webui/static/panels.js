@@ -4148,12 +4148,12 @@ function _renderPersonaPresetGrid() {
     </button>`).join('');
 }
 
-function applyPersonaPreset(index) {
+async function applyPersonaPreset(index) {
   if (!_personaPresets || !_personaPresets[index]) return;
   const preset = _personaPresets[index];
   const ta = $('memEditContent');
   if (!ta) return;
-  if (ta.value.trim() && !confirm(t('persona_presets_overwrite_confirm'))) return;
+  if (ta.value.trim() && !await showConfirmDialog({ message: t('persona_presets_overwrite_confirm'), danger: true })) return;
   ta.value = preset.content || '';
   ta.focus();
   showToast(t('persona_presets_applied', preset.name || preset.id || ''));

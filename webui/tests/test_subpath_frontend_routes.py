@@ -12,20 +12,25 @@ def read(path: str) -> str:
 def test_workspace_api_401_redirect_uses_relative_login_path():
     src = read("static/workspace.js")
     assert "res.status===401" in src
-    assert "window.location.href='login?next='" in src, (
+    # The 401 handler builds a relative fallback const
+    # (`const fallback='login?next='+…`) that a server-provided loginUrl may
+    # override — assert the relative target, not the old direct-assignment
+    # `window.location.href='login?next='` literal.
+    assert "'login?next='" in src, (
         "workspace api() must redirect to relative login?next= so /hermes/ "
         "does not escape to the personal site root /login."
     )
-    assert "window.location.href='/login?next='" not in src
+    assert "'/login?next='" not in src
 
 
 def test_ui_401_redirect_helper_uses_relative_login_path():
     src = read("static/ui.js")
     assert "function _redirectIfUnauth" in src
-    assert "window.location.href='login?next='" in src, (
+    # Same fallback-const pattern as workspace.js api().
+    assert "'login?next='" in src, (
         "UI auth-expiry redirect must stay under the current subpath mount."
     )
-    assert "window.location.href='/login?next='" not in src
+    assert "'/login?next='" not in src
 
 
 def test_server_auth_redirect_uses_relative_login_path_with_encoded_next():

@@ -18,8 +18,12 @@ class TestManifestSrcCSP:
         text = (ROOT / "api" / "helpers.py").read_text(encoding="utf-8")
         start = text.find("Content-Security-Policy")
         assert start != -1, "Content-Security-Policy not found in helpers.py"
-        # Grab the full CSP string (up to the closing paren of send_header)
-        chunk = text[start:start + 600]
+        # Grab the full CSP string up to the closing paren of the send_header
+        # call. A fixed-width window truncated the last directive
+        # (form-action 'self' begins ~588 chars in) once the CSP grew; the CSP
+        # value itself contains no ')', so the first ')' after it is the call's.
+        end = text.find(")", start)
+        chunk = text[start:end] if end != -1 else text[start:start + 900]
         return chunk
 
     def test_manifest_src_self_present(self):

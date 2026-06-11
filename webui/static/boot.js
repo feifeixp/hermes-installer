@@ -1950,7 +1950,8 @@ function _showServerStopped() {
 
   async function postSkip(version){
     try {
-      const r = await fetch('/api/installer-update/skip', {
+      // Relative path (no leading slash) so subpath mounts like /hermes/ work.
+      const r = await fetch('api/installer-update/skip', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version }),
@@ -2017,7 +2018,7 @@ function _showServerStopped() {
     let skippedVersion = '';
     try {
       const s = (typeof S === 'object' && S && S.settings) ? S.settings
-              : await fetch('/api/settings').then(r => r.json());
+              : await fetch('api/settings').then(r => r.json());
       skippedVersion = (s && s.installer_skipped_version) || '';
     } catch (e) {
       // Best-effort; default to empty skip list.
@@ -2025,7 +2026,7 @@ function _showServerStopped() {
 
     let payload;
     try {
-      const r = await fetch('/api/installer-update/check');
+      const r = await fetch('api/installer-update/check');
       if (!r.ok) return;
       payload = await r.json();
     } catch (e) {

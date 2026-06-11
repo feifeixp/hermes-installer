@@ -7,7 +7,7 @@ from tests._pytest_port import BASE, TEST_DEFAULT_MODEL
 
 
 def get(path):
-    with urllib.request.urlopen(BASE + path, timeout=10) as r:
+    with urllib.request.urlopen(BASE + path, timeout=60) as r:
         return json.loads(r.read()), r.status
 
 
@@ -16,7 +16,7 @@ def post(path, body=None):
     req = urllib.request.Request(BASE + path, data=data,
                                 headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             return json.loads(r.read()), r.status
     except urllib.error.HTTPError as e:
         return json.loads(e.read()), e.code

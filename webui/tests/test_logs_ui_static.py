@@ -65,15 +65,16 @@ def _function_body(src: str, name: str) -> str:
 
 
 def test_logs_tab_is_wired_between_insights_and_settings_in_rail_and_mobile_nav():
-    rail = INDEX[INDEX.index('data-panel="insights"'):INDEX.index('<div class="rail-spacer"')]
-    assert 'data-panel="logs"' in rail
-    assert rail.index('data-panel="insights"') < rail.index('data-panel="logs"')
-
-    mobile_start = INDEX.index('class="sidebar-nav"')
-    mobile_end = INDEX.index('<!-- Settings button mirrored here for mobile')
-    mobile_nav = INDEX[mobile_start:mobile_end]
-    assert 'data-panel="logs"' in mobile_nav
-    assert mobile_nav.index('data-panel="insights"') < mobile_nav.index('data-panel="logs"')
+    # The rail was redesigned: insights and logs moved out of the rail and
+    # mobile nav into the overflow side menu. The logs entry must still be
+    # reachable there, after insights, and its panel mounts must exist.
+    insights_entry = "switchPanel('insights',{fromRailClick:true})"
+    logs_entry = "switchPanel('logs',{fromRailClick:true})"
+    assert insights_entry in INDEX, "insights side-menu entry missing"
+    assert logs_entry in INDEX, "logs side-menu entry missing"
+    assert INDEX.index(insights_entry) < INDEX.index(logs_entry), (
+        "logs side-menu entry must come after insights"
+    )
 
     assert 'id="panelLogs"' in INDEX
     assert 'id="mainLogs"' in INDEX

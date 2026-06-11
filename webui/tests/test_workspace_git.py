@@ -31,7 +31,11 @@ def _git(cwd, *args):
 
 def _init_repo(path):
     path.mkdir(parents=True, exist_ok=True)
-    _git(path, "init")
+    # Force the initial branch name so these tests don't depend on the host's
+    # git `init.defaultBranch` (modern git defaults to 'main', older to
+    # 'master'). Tests needing 'main' rename explicitly via `branch -M main`;
+    # the rest rely on the 'master' baseline this establishes.
+    _git(path, "init", "-b", "master")
     _git(path, "config", "user.email", "hermes-tests@example.invalid")
     _git(path, "config", "user.name", "Hermes Tests")
     return path

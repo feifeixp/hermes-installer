@@ -89,8 +89,13 @@ class TestApplyUpdateDiagnostics:
     # Path 2: pull fails + diverged history
     # ------------------------------------------------------------------
 
-    def test_diverged_history_returns_reset_hard_command(self, tmp_path):
-        """Diverged history produces a message with 'reset --hard'."""
+    def test_diverged_history_returns_rebase_command(self, tmp_path):
+        """Diverged history produces a recovery message recommending `git rebase`.
+
+        The apply path now preserves local commits via rebase instead of the
+        old destructive `git reset --hard`; the ff-only fallback's diverged
+        branch surfaces a `fetch && rebase <ref>` recovery command.
+        """
         (tmp_path / '.git').mkdir()
 
         from api import updates
@@ -101,6 +106,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),                                       # no release tags
                 ('origin/master', True),                          # upstream query
                 ('', True),                                       # status --porcelain (clean)
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 ('Not possible to fast-forward, aborting.', False),  # pull fails
             ]
             result = updates._apply_update_inner('webui')
@@ -108,7 +114,7 @@ class TestApplyUpdateDiagnostics:
         assert result['ok'] is False
         assert result.get('diverged') is True
         msg = result['message']
-        assert 'reset --hard' in msg
+        assert 'rebase' in msg
 
     def test_diverged_history_message_contains_compare_ref(self, tmp_path):
         """Diverged history message includes the upstream ref."""
@@ -122,6 +128,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),                         # no release tags
                 ('origin/feat/my-feature', True),   # upstream query
                 ('', True),                         # status (clean)
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 ('Your branch and origin have diverged.', False),  # pull
             ]
             result = updates._apply_update_inner('webui')
@@ -141,6 +148,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),
                 ('origin/master', True),
                 ('', True),
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 ('DIVERGED from upstream', False),
             ]
             result = updates._apply_update_inner('webui')
@@ -164,6 +172,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),                                            # no release tags
                 ('origin/master', True),                               # upstream query
                 ('', True),                                            # status (clean)
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 ('There is no tracking information for the current branch.', False),  # pull
             ]
             result = updates._apply_update_inner('webui')
@@ -184,6 +193,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),
                 ('origin/master', True),
                 ('', True),
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 ('fatal: The current branch local does not track a remote branch.', False),
             ]
             result = updates._apply_update_inner('webui')
@@ -203,6 +213,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),
                 ('origin/main', True),
                 ('', True),
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 ('no tracking information', False),
             ]
             result = updates._apply_update_inner('webui')
@@ -227,6 +238,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),
                 ('origin/master', True),
                 ('', True),
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 (long_error, False),
             ]
             result = updates._apply_update_inner('webui')
@@ -249,6 +261,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),
                 ('origin/master', True),
                 ('', True),
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 ('', False),   # pull fails with empty output
             ]
             result = updates._apply_update_inner('webui')
@@ -268,6 +281,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),
                 ('origin/master', True),
                 ('', True),
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 ('Some unrecognized git error', False),
             ]
             result = updates._apply_update_inner('webui')
@@ -296,6 +310,7 @@ class TestApplyUpdateDiagnostics:
                 ('', True),                       # no release tags
                 ('origin/master', True),          # upstream query
                 ('', True),                       # status (clean working tree)
+                ('0', True),  # rev-list --count ahead=0 -> ff-only path
                 ('Already up to date.', True),    # pull succeeds
             ]
             result = updates._apply_update_inner('webui')

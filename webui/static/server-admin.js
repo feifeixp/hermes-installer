@@ -245,7 +245,7 @@ async function _saPost(path, body) {
 
 async function serverAdminStop(silent) {
   if (_serverAdminBusy) return;
-  if (!silent && !confirm('确定关机吗?会话数据保留,可随时启动。')) return;
+  if (!silent && !await showConfirmDialog({ message: '确定关机吗?会话数据保留,可随时启动。', danger: true })) return;
   _serverAdminBusy = true;
   if (!silent) _saToast('正在关机…');
   try {
@@ -283,7 +283,7 @@ async function serverAdminStart() {
 
 async function serverAdminRestart() {
   if (_serverAdminBusy) return;
-  if (!confirm('重启会先关机再启动,约 60 秒不可用。继续?')) return;
+  if (!await showConfirmDialog({ message: '重启会先关机再启动,约 60 秒不可用。继续?', danger: true })) return;
   _serverAdminBusy = true;
   _saToast('步骤 1/2:正在关机…');
   try {
@@ -353,8 +353,8 @@ async function serverAdminDownloadBackup() {
 async function serverAdminDestroy() {
   if (_serverAdminBusy) return;
   // Two-step confirm — this is destroying user data permanently.
-  if (!confirm('永久删除实例?磁盘 + 会话历史一并清除,无法恢复。\n\n建议先点上面的「下载备份」保存一份。')) return;
-  const phrase = prompt('为了防止误操作,请输入「DELETE」(全大写)以确认:');
+  if (!await showConfirmDialog({ message: '永久删除实例?磁盘 + 会话历史一并清除,无法恢复。\n\n建议先点上面的「下载备份」保存一份。', danger: true })) return;
+  const phrase = await showPromptDialog({ message: '为了防止误操作,请输入「DELETE」(全大写)以确认:' });
   if (phrase !== 'DELETE') {
     _saToast('确认词不正确,已取消');
     return;

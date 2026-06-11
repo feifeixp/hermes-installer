@@ -7231,10 +7231,15 @@ def handle_post(handler, parsed) -> bool:
     # apply_onboarding_setup), writes neowow-coding-plan to config.yaml.
     if parsed.path == "/api/neowow/activate-provider":
         try:
+            # NOTE: apply_onboarding_setup must NOT be re-imported here. It is
+            # already a module-level import; a function-local `from
+            # api.onboarding import ... apply_onboarding_setup` makes the name
+            # a local for ALL of handle_post(), so the unrelated
+            # /api/onboarding/setup branch above hit
+            # `UnboundLocalError: apply_onboarding_setup` and 500'd.
             from api.onboarding import (
                 _NEOWOW_CODING_PLAN_PROVIDER_ID,
                 _fetch_neowow_plan_models,
-                apply_onboarding_setup,
             )
             models, default_model = _fetch_neowow_plan_models()
             model = default_model or (models[0]["id"] if models else "deepseek-v4-flash")
