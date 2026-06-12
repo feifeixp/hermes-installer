@@ -406,3 +406,25 @@ jobs:
             --repo "${{ github.repository }}" \
             --field tag="$TAG"
           echo "✓ mirror-to-oss dispatched (runs async in background)"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # cloud-init guard — keep the spawn UserData under Aliyun's 16 KB cap
+  # ═══════════════════════════════════════════════════════════════════════
+  #
+  # Aliyun ECS RunInstances rejects UserData larger than 16 KB once
+  # Base64-encoded (~12 KB raw). The broker renders docker/cloud-init.yaml.
+  # template and submits it as UserData; if it grows past the cap the spawn
+  # fails with HTTP 502 ("Could not prepare cloud-init"). This job renders
+  # the template with representative secrets and fails the build if it gets
+  # close, so the regression can't reach production unnoticed. Keep new
+  # provisioning logic in docker/provision.sh (fetched at boot), not inline.
+  cloud-init:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Check cloud-init UserData size
+        run: ./scripts/check-cloud-init-size.sh
+      - name: Syntax-check provisioning scripts
+        run: bash -n docker/provision.sh && bash -n scripts/spawn-hermes.sh
