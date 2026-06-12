@@ -1108,47 +1108,43 @@ _PROVIDER_MODELS = {
     # models under their canonical IDs (no provider/ prefix). New users
     # of neowow.studio should start here — their points / membership
     # already cover usage through this gateway.
-    # Mirror of the dashboard /api/me/plan catalog (snapshot 2026-06-07).
-    # Image / video / music / speech models filtered out — this list is
-    # consumed by the chat-completion model picker only. The live overlay
-    # (_sync_coding_plan_group_models) refreshes this from /api/me/plan when
-    # the user is logged in, but THIS static list is the fallback shown when
-    # offline / no JWT / cold cache — so it MUST be kept current.
-    # When ga.neodomain.cn adds a chat model, mirror it here AND in the
-    # dashboard's lib/billing-math.DEFAULT_PRICES (or admin's cfg_model_prices
-    # row); otherwise pricing falls through to _default and it won't show.
+    # Mirror of the dashboard /api/me/plan catalog (snapshot 2026-06-12 —
+    # taken from the auto-synced cfg_model_prices, which the dashboard now
+    # refreshes hourly from ga.neodomain.cn /v1/models). ga REMOVED the whole
+    # gpt-* family + gemini-3.5-flash / gemini-3-pro-preview, and added the
+    # Claude series, qwen3.7, MiniMax-M2.7 etc. — keep this fallback aligned
+    # or stale models reappear whenever the live overlay can't run (offline /
+    # no JWT / cold cache). Chat models only (image/video/audio live on
+    # story.neodomain.cn, never here).
     "neodomain": [
-        # Anthropic Claude (added to the plan 2026-05-31)
+        # Anthropic Claude
         {"id": "claude-opus-4-8",                 "label": "Claude Opus 4.8"},
         {"id": "claude-opus-4-7",                 "label": "Claude Opus 4.7"},
         {"id": "claude-opus-4-6",                 "label": "Claude Opus 4.6"},
         {"id": "claude-sonnet-4-6",               "label": "Claude Sonnet 4.6"},
         {"id": "claude-haiku-4-5-20251001",       "label": "Claude Haiku 4.5"},
-        # OpenAI
-        {"id": "gpt-5.5-pro",                     "label": "GPT-5.5 Pro"},
-        {"id": "gpt-5.5",                         "label": "GPT-5.5"},
-        {"id": "gpt-5.4-pro",                     "label": "GPT-5.4 Pro"},
-        {"id": "gpt-5.4",                         "label": "GPT-5.4"},
-        {"id": "gpt-5.4-mini",                    "label": "GPT-5.4 Mini"},
-        {"id": "gpt-5.4-nano",                    "label": "GPT-5.4 Nano"},
-        {"id": "gpt-4o",                          "label": "GPT-4o"},
-        {"id": "gpt-4o-mini",                     "label": "GPT-4o Mini"},
+        {"id": "global.anthropic.claude-fable-5", "label": "Claude Fable 5 (Global)"},
         # Google Gemini
-        {"id": "gemini-3.5-flash",                "label": "Gemini 3.5 Flash"},
         {"id": "gemini-3.1-pro-preview",          "label": "Gemini 3.1 Pro (Preview)"},
+        {"id": "gemini-3.1-flash-lite",           "label": "Gemini 3.1 Flash Lite"},
         {"id": "gemini-3.1-flash-lite-preview",   "label": "Gemini 3.1 Flash Lite (Preview)"},
-        {"id": "gemini-3-pro-preview",            "label": "Gemini 3 Pro (Preview)"},
         {"id": "gemini-3-flash-preview",          "label": "Gemini 3 Flash (Preview)"},
         {"id": "gemini-2.5-flash",                "label": "Gemini 2.5 Flash"},
         {"id": "gemini-2.5-flash-lite",           "label": "Gemini 2.5 Flash Lite"},
         # DeepSeek
         {"id": "deepseek-v4-pro",                 "label": "DeepSeek V4 Pro"},
         {"id": "deepseek-v4-flash",               "label": "DeepSeek V4 Flash"},
+        # ByteDance Doubao (chat — the seedance/seedream media families
+        # live on story.neodomain.cn and must never appear here)
+        {"id": "doubao-seed-2-0-pro-260215",      "label": "Doubao Seed 2.0 Pro"},
         # Zhipu / Moonshot / MiniMax / Qwen
         {"id": "glm-5",                           "label": "GLM-5"},
         {"id": "kimi-k2.6",                       "label": "Kimi K2.6"},
         {"id": "kimi-k2.5",                       "label": "Kimi K2.5"},
+        {"id": "MiniMax-M2.7",                    "label": "MiniMax M2.7"},
         {"id": "MiniMax-M2.5",                    "label": "MiniMax M2.5"},
+        {"id": "qwen3.7-max",                     "label": "Qwen 3.7 Max"},
+        {"id": "qwen3.7-plus",                    "label": "Qwen 3.7 Plus"},
         {"id": "qwen3.5-plus",                    "label": "Qwen 3.5 Plus"},
     ],
     "anthropic": [
@@ -2499,7 +2495,11 @@ def _current_webui_version() -> str | None:
 # Bumped 3→4 (2026-06-07): coding-plan static catalog refreshed with the Claude
 # series + newer GPT/Gemini. Forces existing stale models_cache.json to rebuild
 # on upgrade so users see the new models immediately (not after the 24h TTL).
-_MODELS_CACHE_SCHEMA_VERSION = 4
+# Bumped 4→5 (2026-06-12): ga.neodomain.cn dropped the whole gpt-* family (and
+# gemini-3.5-flash / gemini-3-pro-preview); catalog re-snapshotted from the
+# auto-synced dashboard list. Old caches still show GPT for up to 24h — bump
+# forces an immediate rebuild on upgrade.
+_MODELS_CACHE_SCHEMA_VERSION = 5
 
 
 _models_cache_path = STATE_DIR / "models_cache.json"
