@@ -628,6 +628,41 @@ def clear_token() -> dict:
 # we keep it alongside the deploy token in the same neowow.json so a
 # single `clear` action can wipe everything.
 
+def _bridge_jwt_to_agent_env(jwt: str | None) -> None:
+    """Mirror the saved JWT into the agent's API-key env var (.env + process env).
+
+    The agent's patched neowow-coding-plan ProviderConfig authenticates chat
+    calls with NEOWOW_CODING_PLAN_API_KEY (docker/patch_hermes_agent.py).
+    Historically ONLY onboarding-finish wrote that var — so any login that
+    happened AFTER onboarding (sidebar OAuth button, or a re-login once the
+    30-day JWT expires) updated neowow.json but left the agent keyless or
+    holding the expired key: the UI showed 已登录 while every chat 401'd
+    with "Login required". Bridge here so EVERY login path repairs the
+    agent credential. jwt=None removes the key (logout).
+
+    Best-effort: the JWT is already persisted to neowow.json; a bridge
+    failure must not fail the save.
+    """
+    try:
+        from api.profiles import get_active_hermes_home
+        from api.providers import _write_env_file
+        home = get_active_hermes_home()
+        _write_env_file(home / ".env", {"NEOWOW_CODING_PLAN_API_KEY": jwt})
+        if jwt:
+            os.environ["NEOWOW_CODING_PLAN_API_KEY"] = jwt
+        else:
+            os.environ.pop("NEOWOW_CODING_PLAN_API_KEY", None)
+        # Reload the agent runtime so the next chat picks up the new key
+        # without a server restart (agent runs in-process).
+        try:
+            from api.profiles import _reload_dotenv
+            _reload_dotenv(home)
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.warning("JWT saved but agent env bridge failed: %s", exc)
+
+
 def save_jwt(jwt: str) -> dict:
     jwt = (jwt or "").strip()
     if not jwt:
@@ -643,6 +678,7 @@ def save_jwt(jwt: str) -> dict:
     state = _read_state()
     state["jwt"] = jwt
     _write_state(state)
+    _bridge_jwt_to_agent_env(jwt)
     return get_status()
 
 
@@ -650,6 +686,7 @@ def clear_jwt() -> dict:
     state = _read_state()
     state.pop("jwt", None)
     _write_state(state)
+    _bridge_jwt_to_agent_env(None)
     return get_status()
 
 
