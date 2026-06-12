@@ -248,7 +248,10 @@ function toggleOnboardingApiKey(){
 async function startOnboardingLogin(){
   try{
     const returnUrl=location.origin+'/api/neowow/oauth-callback';
-    const r=await api('/api/neowow/oauth/launch',{method:'POST',body:JSON.stringify({return_url:returnUrl})});
+    // Backend reads the camelCase `returnUrl` key (routes.py oauth/launch).
+    // Sending snake_case `return_url` made it read "" → "Invalid return URL"
+    // and blocked first-run login since the 3-step onboarding shipped.
+    const r=await api('/api/neowow/oauth/launch',{method:'POST',body:JSON.stringify({returnUrl:returnUrl})});
     if(r&&r.url&&!r.ok){ window.open(r.url,'_blank'); }
     _setOnboardingNotice(t('onboarding_login_waiting'),'info');
     _pollOnboardingLogin();
