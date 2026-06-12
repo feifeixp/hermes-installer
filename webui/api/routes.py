@@ -7254,7 +7254,10 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/neowow/oauth/launch":
         try:
             from api.neowow import launch_oauth
-            return_url = (body or {}).get("returnUrl", "")
+            # Accept both camelCase (neowow.js) and snake_case (older onboarding)
+            # so a key-casing mismatch can't silently send "" → "Invalid return URL".
+            _b = body or {}
+            return_url = _b.get("returnUrl") or _b.get("return_url") or ""
             return j(handler, launch_oauth(return_url))
         except ValueError as e:
             return bad(handler, str(e))

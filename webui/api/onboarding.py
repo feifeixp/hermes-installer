@@ -153,12 +153,11 @@ def _agent_recognizes_provider(provider_id: str) -> tuple[bool, str]:
 def _neowow_coding_plan_default_models() -> list[dict]:
     """Last-resort fallback model list when the dashboard's /api/me/plan
     is unreachable AND the user hasn't picked a plan yet. Kept tiny on
-    purpose — Trial users only get deepseek-v4-flash + gpt-4o-mini, so
-    a wider list would just confuse new users. These two are the
-    cheapest chat models on ga.neodomain.cn as of Phase ε."""
+    purpose — Trial users get deepseek-v4-flash, the cheapest chat model on
+    ga.neodomain.cn. (gpt-4o-mini was dropped here on 2026-06-12: ga removed the
+    whole gpt-* family, so it would 502 and reintroduce a non-ga model.)"""
     return [
         {"id": "deepseek-v4-flash",  "label": "DeepSeek V4 Flash (trial 默认)"},
-        {"id": "gpt-4o-mini",        "label": "GPT-4o Mini"},
     ]
 
 
