@@ -299,3 +299,58 @@ class TestNeowowAutoOnboard:
         # which itself requires config.yaml to exist — it doesn't, so
         # completed should be False here too.
         assert status["completed"] is False
+
+
+class TestSaveJwtBridgesAgentEnv:
+    """save_jwt / clear_jwt must mirror the JWT into the agent's API-key
+    env var (NEOWOW_CODING_PLAN_API_KEY, .env + process env).
+
+    Historically only onboarding-finish wrote it (and silently skipped
+    when login was broken and _jwt was empty), so any login AFTER
+    onboarding — sidebar OAuth button, or a re-login once the 30-day JWT
+    expires — updated neowow.json but left the agent keyless or holding
+    the expired key: the UI showed 已登录 while every coding-plan chat
+    401'd with "Login required".
+    """
+
+    def _wire(self, monkeypatch, tmp_path):
+        import api.neowow as nw
+        import api.profiles as profiles_mod
+        import api.providers as providers_mod
+        written_env: dict = {}
+        monkeypatch.setattr(profiles_mod, "get_active_hermes_home", lambda: tmp_path)
+        monkeypatch.setattr(profiles_mod, "_reload_dotenv", lambda home: None)
+        monkeypatch.setattr(providers_mod, "_write_env_file", lambda p, d: written_env.update(d))
+        # State I/O + status round-trip are not under test — stub them.
+        monkeypatch.setattr(nw, "_read_state", lambda: {})
+        monkeypatch.setattr(nw, "_write_state", lambda s: None)
+        monkeypatch.setattr(nw, "get_status", lambda: {"ok": True})
+        return nw, written_env
+
+    def test_save_jwt_bridges_key_to_env(self, monkeypatch, tmp_path):
+        nw, written_env = self._wire(monkeypatch, tmp_path)
+        monkeypatch.delenv("NEOWOW_CODING_PLAN_API_KEY", raising=False)
+        nw.save_jwt("eyJfake.payload.sig")
+        assert written_env.get("NEOWOW_CODING_PLAN_API_KEY") == "eyJfake.payload.sig"
+        import os
+        assert os.environ.get("NEOWOW_CODING_PLAN_API_KEY") == "eyJfake.payload.sig"
+
+    def test_clear_jwt_removes_key_from_env(self, monkeypatch, tmp_path):
+        nw, written_env = self._wire(monkeypatch, tmp_path)
+        monkeypatch.setenv("NEOWOW_CODING_PLAN_API_KEY", "stale-old-jwt")
+        nw.clear_jwt()
+        # None = remove the key from .env (see _write_env_file semantics)
+        assert "NEOWOW_CODING_PLAN_API_KEY" in written_env
+        assert written_env["NEOWOW_CODING_PLAN_API_KEY"] is None
+        import os
+        assert "NEOWOW_CODING_PLAN_API_KEY" not in os.environ
+
+    def test_bridge_failure_does_not_fail_save(self, monkeypatch, tmp_path):
+        nw, _ = self._wire(monkeypatch, tmp_path)
+        import api.providers as providers_mod
+        def _boom(p, d):
+            raise OSError("disk full")
+        monkeypatch.setattr(providers_mod, "_write_env_file", _boom)
+        # JWT persistence must survive a bridge failure (best-effort).
+        out = nw.save_jwt("eyJfake.payload.sig")
+        assert out == {"ok": True}
