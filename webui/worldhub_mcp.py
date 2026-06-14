@@ -72,9 +72,17 @@ def _deploy_token() -> str:
     return (st.get("token") or st.get("jwt") or "").strip()
 
 
+# app.neowow.studio sits behind Cloudflare bot management, which 403s the
+# default `Python-urllib/x` user-agent. Present a browser-like UA so the
+# identity-bridge call gets through (Supabase REST is unaffected but harmless).
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 WorldHubMCP")
+
+
 def _http(method, url, *, headers, body=None, timeout=15):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    hdrs = {"User-Agent": _UA, "Accept": "application/json", **headers}
+    req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read().decode()
         return resp.status, (json.loads(raw) if raw.strip() else None)
@@ -177,9 +185,14 @@ def _detect_conflicts(existing, draft):
 
 
 def _resolve_world(world):
-    """Return the world row by id or slug, or None."""
-    rows = _rest("GET", "/worlds", params={
-        "or": f"(id.eq.{world},slug.eq.{world})", "select": "*", "limit": 1})
+    """Return the world row by id (uuid) or slug, or None.
+
+    A slug ("world_xxx") is not a valid uuid, so filtering `id.eq.<slug>`
+    makes Postgres 400 on the uuid cast — pick the column by shape.
+    """
+    s = str(world)
+    key = "id" if (len(s) == 36 and s.count("-") == 4) else "slug"
+    rows = _rest("GET", "/worlds", params={key: f"eq.{world}", "select": "*", "limit": 1})
     return rows[0] if rows else None
 
 
