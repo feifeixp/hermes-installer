@@ -177,7 +177,7 @@ def test_call_tool_check_consistency(monkeypatch):
     monkeypatch.setattr(wh, "_get_world_data", lambda w: {
         "overview": {"id": "w1"},
         "entities": [{"ent_id": "a", "name": "A", "aliases": []}], "edges": []})
-    res = asyncio.get_event_loop().run_until_complete(
+    res = asyncio.run(
         wh.call_tool("check_consistency", {"world": "w1",
             "draft": {"entities": [{"id": "a", "name": "A2"}], "relations": [], "edits": [], "deletes": []}}))
     payload = json.loads(res[0].text)
