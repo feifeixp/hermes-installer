@@ -566,10 +566,20 @@ def get_status(handler=None) -> dict:
         else ("file" if file_jwt else "")
     )
 
+    # Expiry awareness — a PRESENT-but-EXPIRED JWT used to report hasJwt=True
+    # ("已登录"), yet every chat 401'd because the agent was bridged a dead
+    # key → the desktop froze on "Waiting on model". Treat an expired token as
+    # effectively logged-out so the UI shows the re-login prompt at startup,
+    # and surface `jwtExpired` so the frontend can say "登录已过期" instead of a
+    # generic "未登录". (No silent refresh is possible — the platform has no
+    # refresh-token endpoint — so re-login is the only recovery.)
+    jwt_expired = bool(effective_jwt) and _jwt_is_expired(effective_jwt)
+
     return {
         "hasToken":     bool(token),
         "maskedToken":  _mask_token(token) if token else "",
-        "hasJwt":       bool(effective_jwt),
+        "hasJwt":       bool(effective_jwt) and not jwt_expired,
+        "jwtExpired":   jwt_expired,
         "maskedJwt":    _mask_jwt(effective_jwt) if effective_jwt else "",
         # Lets the UI know WHERE the JWT came from. Cookie-mode means
         # logout has to clear the cookie (server-side via dashboard),
@@ -841,6 +851,41 @@ def _mask_jwt(t: str) -> str:
     if len(t) < 16:
         return "eyJ***"
     return f"{t[:6]}…{t[-4:]}"
+
+
+def _jwt_is_expired(jwt: str, skew_seconds: int = 60) -> bool:
+    """Best-effort: is this Neodomain JWT past its ``exp`` claim?
+
+    Decodes the (unverified) payload segment and compares ``exp`` to now.
+    The skew matches the dashboard's own acceptance window (resolveIdentity
+    rejects at exp+60s), so the desktop only reports "expired" once the
+    server would actually reject it — no premature re-login prompts.
+
+    Returns False for any token we can't decode or that carries no numeric
+    ``exp``: we never force a re-login on a credential we can't read (avoids
+    false positives on an opaque-but-valid token). The whole point is to
+    catch the common case — a stored JWT whose 30-day life ran out, or the
+    platform handing back an already-expired token — so the UI flips to
+    "未登录 · 请重新登录" at startup instead of silently bridging a dead key
+    to the agent and 401'ing every chat into a frozen "Waiting on model".
+    """
+    if not jwt:
+        return False
+    parts = jwt.split(".")
+    if len(parts) != 3:
+        return False
+    try:
+        import base64
+        import time
+        seg = parts[1]
+        seg += "=" * (-len(seg) % 4)  # pad base64url to a multiple of 4
+        payload = json.loads(base64.urlsafe_b64decode(seg).decode("utf-8", "ignore"))
+    except Exception:
+        return False
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return False
+    return time.time() > (float(exp) + skew_seconds)
 
 
 # ── Workspace bundling ───────────────────────────────────────────────────────

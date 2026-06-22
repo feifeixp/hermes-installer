@@ -346,7 +346,14 @@ function _renderOnboardingBody(){
     const ns=ONBOARDING.status.neowow||{};
     const signedIn=!!ns.hasJwt;
     const m=ONBOARDING.form.loginMethod;
-    _setOnboardingNotice(signedIn?t('onboarding_login_done'):t('onboarding_login_required'), signedIn?'success':'info');
+    // Distinguish "session expired" (had a JWT, it lapsed) from a first-run
+    // "please log in". jwtExpired comes from /api/neowow/status (set at boot in
+    // neowow.js → window._neowowJwtExpired) or directly on the status object.
+    const expired = !signedIn && (ns.jwtExpired || window._neowowJwtExpired);
+    _setOnboardingNotice(
+      signedIn ? t('onboarding_login_done')
+               : (expired ? '登录已过期，请重新登录以继续使用 AI 对话' : t('onboarding_login_required')),
+      signedIn ? 'success' : 'info');
     body.innerHTML=`
       <div class="onboarding-welcome">${t('onboarding_title')}</div>
       <h3 class="onboarding-h">${t('onboarding_login_heading')}</h3>

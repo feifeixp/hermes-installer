@@ -4320,24 +4320,19 @@ def get_available_models() -> dict:
         # a Hermes redeploy. Cached by get_available_models()'s TTL, so this is
         # at most one 3s round-trip per TTL; silent static fallback on any error.
         try:
-            from api.neowow import get_jwt
-            # Only sync for logged-in users — and only when we got a GENUINE
-            # live catalogue. _fetch_neowow_plan_models() returns a non-empty
-            # offline fallback on no-JWT / network error; overlaying THAT would
-            # shrink the picker to the cheap fallback on a transient blip, so we
-            # skip it and keep the static alias when the result equals the fallback.
-            if get_jwt():
-                from api.onboarding import (
-                    _fetch_neowow_plan_models,
-                    _neowow_coding_plan_default_models,
-                )
-                _live_cp_models, _ = _fetch_neowow_plan_models()
-                _fb_ids = {str(m.get("id")) for m in _neowow_coding_plan_default_models()}
-                _live_ids = {str(m.get("id")) for m in (_live_cp_models or [])}
-                if _live_cp_models and _live_ids != _fb_ids:
-                    _sync_coding_plan_group_models(groups, _live_cp_models)
+            from api.onboarding import _fetch_neowow_plan_models
+            # ALWAYS constrain the coding-plan picker to what the user's plan
+            # actually serves — never leave the full static catalogue. The plan
+            # gate is server-side (chat 400 model_not_in_plan); the picker must
+            # not offer a model the gate will refuse (e.g. a Basic user seeing
+            # Claude). _fetch_neowow_plan_models() returns: the live plan list
+            # (logged in + ok), the last-known-good plan list (logged in + blip),
+            # or the universal safe model (logged out / never fetched) — and
+            # _sync_coding_plan_group_models replaces the group with whichever.
+            _cp_models, _ = _fetch_neowow_plan_models()
+            _sync_coding_plan_group_models(groups, _cp_models)
         except Exception:
-            logger.debug("neowow-coding-plan live model sync failed; using static list", exc_info=True)
+            logger.debug("neowow-coding-plan model sync failed; static list kept", exc_info=True)
 
         # ── Phase β.11: HERMES_NEOWOW_ONLY enforcement (model picker) ──────
         # Mirrors the same filter applied to /api/providers in

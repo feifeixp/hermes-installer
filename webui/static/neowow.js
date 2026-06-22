@@ -139,6 +139,11 @@
       if (r.ok) {
         const j = await r.json();
         hasJwt = !!(j && j.hasJwt);
+        // A present-but-EXPIRED JWT comes back hasJwt=false + jwtExpired=true.
+        // Flag it so the onboarding login step says "登录已过期，请重新登录"
+        // instead of the first-run greeting — the user had a session, it just
+        // lapsed (the desktop can't silently refresh: no platform refresh API).
+        window._neowowJwtExpired = !!(j && j.jwtExpired);
       }
     } catch (_) {
       networkOk = false;
