@@ -988,12 +988,25 @@ def _status_from_runtime(cfg: dict, imports_ok: bool) -> dict:
     }
 
 
+# Last GENUINE /api/me/plan model list seen this process. Reused on a transient
+# fetch failure (logged in but a blip) so the picker keeps the user's REAL plan
+# catalogue instead of collapsing to the cheap offline list — and, critically,
+# so the caller never has to fall back to the full static catalogue (which would
+# let a Basic user pick a Claude model their plan rejects). No annotation on the
+# global so it's safe on the py3.9 runtime the desktop sometimes ships.
+_LAST_GOOD_PLAN_MODELS = None
+
+
 def _fetch_neowow_plan_models() -> tuple[list[dict], str | None]:
     """Hit the dashboard's /api/me/plan and return (models, default_model).
-    Falls back to the static neowow-coding-plan model list on any error —
-    onboarding mustn't block when the user is offline. The JWT is read
-    via api/neowow.get_jwt(); on cloud (chat-*.neowow.studio) the cookie
-    has already been turned into a saved JWT by /api/neowow/oauth-callback.
+
+    Resolution on failure:
+      • no JWT (logged out / token cleared) → universal safe fallback only
+        (don't leak a prior session's plan; the user can't chat anyway).
+      • transient error WHILE logged in → the last GENUINE plan list if we
+        have one, else the universal safe fallback.
+    The JWT is read via api/neowow.get_jwt(); on cloud (chat-*.neowow.studio)
+    the cookie has already been turned into a saved JWT by the oauth-callback.
     """
     try:
         from api.neowow import get_jwt  # local import — avoid circular at module load
@@ -1034,10 +1047,19 @@ def _fetch_neowow_plan_models() -> tuple[list[dict], str | None]:
             # first listed model (see _pick_neowow_default). Previously this took
             # models[0] blindly, which made claude-sonnet-4.5 the default for
             # plans that listed it first.
+            if shaped:
+                global _LAST_GOOD_PLAN_MODELS
+                _LAST_GOOD_PLAN_MODELS = shaped   # cache the genuine catalogue
             default_model = _pick_neowow_default([s["id"] for s in shaped])
             return shaped or _neowow_coding_plan_default_models(), default_model
     except (urllib.error.URLError, socket.timeout, json.JSONDecodeError, KeyError, ValueError):
-        logger.debug("Falling back to static neowow-coding-plan model list", exc_info=True)
+        logger.debug("plan-models fetch failed; reusing last-good / fallback", exc_info=True)
+        # Still logged in (we had a JWT), just a transient blip — reuse the last
+        # GENUINE plan catalogue so the picker keeps the user's real model set.
+        # Only when we've NEVER had a good fetch do we hand back the safe model.
+        if _LAST_GOOD_PLAN_MODELS:
+            return (_LAST_GOOD_PLAN_MODELS,
+                    _pick_neowow_default([m["id"] for m in _LAST_GOOD_PLAN_MODELS]))
         return _neowow_coding_plan_default_models(), None
 
 
