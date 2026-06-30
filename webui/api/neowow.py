@@ -638,8 +638,106 @@ def clear_token() -> dict:
 # we keep it alongside the deploy token in the same neowow.json so a
 # single `clear` action can wipe everything.
 
+# ── Non-expiring agent credential (deploy token) ─────────────────────────────
+#
+# The agent's chat key (NEOWOW_CODING_PLAN_API_KEY) used to be the raw login
+# JWT — a 30-DAY token with NO refresh endpoint. When it lapsed, every chat
+# 401'd and the desktop froze on "Waiting on model …" until the user
+# re-logged-in (the recurring complaint). A nws_dt_ deploy token scoped to
+# chat:invoke carries the SAME credit-spending authority — the dashboard
+# resolveCaller + requireScope(caller, 'chat:invoke') accept it — but NEVER
+# expires. So we mint one once, cache it, and bridge THAT to the agent instead
+# of the JWT. Re-login is no longer needed just to keep chatting.
+
+_DEPLOY_TOKENS_URL = f"{_NEOWOW_BASE}/api/me/deploy-tokens"
+
+
+def _jwt_user_id(jwt: str) -> str:
+    """Best-effort: the userId claim from an (unverified) JWT payload. Used to
+    detect an account switch so a cached deploy token minted for a different
+    user is never reused. Returns '' when undecodable."""
+    if not jwt or jwt.count(".") != 2:
+        return ""
+    try:
+        import base64
+        seg = jwt.split(".")[1]
+        seg += "=" * (-len(seg) % 4)  # pad base64url
+        payload = json.loads(base64.urlsafe_b64decode(seg).decode("utf-8", "ignore"))
+    except Exception:
+        return ""
+    # Claim order MUST match the dashboard's tokenIdentity() (lib/owner.ts) so
+    # our cache key lines up with the tk_<userId> the server bills against.
+    for k in ("userId", "user_id", "uid", "sub", "id"):
+        v = payload.get(k)
+        if isinstance(v, (str, int)) and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _mint_coding_plan_token(jwt: str) -> str | None:
+    """Mint a non-expiring nws_dt_ deploy token carrying ONLY chat:invoke, using
+    the (fresh) JWT for auth. Returns the token, or None on any failure so the
+    caller can fall back to the JWT (never regress to a keyless agent)."""
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "label":  "Hermes desktop · Coding Plan chat",
+            "scopes": ["chat:invoke"],
+        }).encode("utf-8")
+        req = urllib.request.Request(_DEPLOY_TOKENS_URL, data=payload, method="POST", headers={
+            "Authorization": f"Bearer {jwt}",
+            "Content-Type":  "application/json",
+            "Accept":        "application/json",
+            # CF Bot-Fight Mode 403s the default Python-urllib UA → set Hermes/*
+            # like every sibling caller here.
+            "User-Agent":    "Hermes/coding-plan-token",
+        })
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception as exc:
+        logger.warning("Coding-Plan deploy-token mint failed (falling back to JWT): %s", exc)
+        return None
+    tok = str(data.get("token") or "").strip()
+    return tok if tok.startswith("nws_dt_") else None
+
+
+def _coding_plan_agent_credential(jwt: str | None) -> str | None:
+    """Resolve what to write into NEOWOW_CODING_PLAN_API_KEY.
+
+    Prefer a cached non-expiring deploy token (chat:invoke) so the agent never
+    breaks when the 30-day JWT lapses. Mint once per account and cache it in
+    state; re-mint when the cache is empty or was minted for a DIFFERENT user
+    (account switch). Fall back to the JWT itself when minting is unavailable
+    (offline / old dashboard) so we never write a keyless agent."""
+    if not jwt:
+        return None
+    state   = _read_state()
+    cur_uid = _jwt_user_id(jwt)
+    cached  = str(state.get("codingPlanToken") or "").strip()
+    # Reuse the cached deploy token for THIS user even if the JWT has since
+    # lapsed — the token doesn't expire, so chat keeps working without a
+    # re-login (the whole point of this mechanism).
+    if (cached.startswith("nws_dt_") and cur_uid
+            and str(state.get("codingPlanTokenUserId") or "") == cur_uid):
+        return cached
+    # Only mint from a REAL, non-expired user JWT. A JWT with no userId claim is
+    # a hash-id token that can't spend Coding-Plan credits anyway (the chat
+    # route rejects empty userId); an expired one the dashboard would reject (or
+    # hash-fallback to a phantom owner). Either way, don't mint — bridge the JWT
+    # as-is so get_status() can flag it and prompt re-login.
+    if not cur_uid or _jwt_is_expired(jwt):
+        return jwt
+    tok = _mint_coding_plan_token(jwt)
+    if tok:
+        state["codingPlanToken"]       = tok
+        state["codingPlanTokenUserId"] = cur_uid
+        _write_state(state)
+        return tok
+    return jwt
+
+
 def _bridge_jwt_to_agent_env(jwt: str | None) -> None:
-    """Mirror the saved JWT into the agent's API-key env var (.env + process env).
+    """Mirror the agent's chat credential into its API-key env var (.env + process env).
 
     The agent's patched neowow-coding-plan ProviderConfig authenticates chat
     calls with NEOWOW_CODING_PLAN_API_KEY (docker/patch_hermes_agent.py).
@@ -657,9 +755,13 @@ def _bridge_jwt_to_agent_env(jwt: str | None) -> None:
         from api.profiles import get_active_hermes_home
         from api.providers import _write_env_file
         home = get_active_hermes_home()
-        _write_env_file(home / ".env", {"NEOWOW_CODING_PLAN_API_KEY": jwt})
-        if jwt:
-            os.environ["NEOWOW_CODING_PLAN_API_KEY"] = jwt
+        # Prefer a non-expiring deploy token over the 30-day JWT (see
+        # _coding_plan_agent_credential) so the agent doesn't 401 → freeze on
+        # "Waiting on model" the moment the JWT lapses. None on logout.
+        cred = _coding_plan_agent_credential(jwt) if jwt else None
+        _write_env_file(home / ".env", {"NEOWOW_CODING_PLAN_API_KEY": cred})
+        if cred:
+            os.environ["NEOWOW_CODING_PLAN_API_KEY"] = cred
         else:
             os.environ.pop("NEOWOW_CODING_PLAN_API_KEY", None)
         # Reload the agent runtime so the next chat picks up the new key
@@ -695,6 +797,11 @@ def save_jwt(jwt: str) -> dict:
 def clear_jwt() -> dict:
     state = _read_state()
     state.pop("jwt", None)
+    # Drop the cached Coding-Plan deploy token too, so logout fully wipes the
+    # local credential and the next login (possibly a different account)
+    # mints a fresh one rather than reusing this user's token.
+    state.pop("codingPlanToken", None)
+    state.pop("codingPlanTokenUserId", None)
     _write_state(state)
     _bridge_jwt_to_agent_env(None)
     return get_status()
