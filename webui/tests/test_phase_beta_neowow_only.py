@@ -325,15 +325,37 @@ class TestSaveJwtBridgesAgentEnv:
         monkeypatch.setattr(nw, "_read_state", lambda: {})
         monkeypatch.setattr(nw, "_write_state", lambda s: None)
         monkeypatch.setattr(nw, "get_status", lambda: {"ok": True})
+        # The agent credential is now a minted deploy token, not the raw JWT.
+        # Stub the mint so the bridge never makes a real network call.
+        monkeypatch.setattr(nw, "_mint_coding_plan_token", lambda jwt: "nws_dt_testmint")
         return nw, written_env
 
-    def test_save_jwt_bridges_key_to_env(self, monkeypatch, tmp_path):
+    def _jwt(self, user_id="u1"):
+        import base64, json
+        hdr = base64.urlsafe_b64encode(b'{"alg":"none"}').decode().rstrip("=")
+        pay = base64.urlsafe_b64encode(
+            json.dumps({"userId": user_id, "exp": 9999999999}).encode()
+        ).decode().rstrip("=")
+        return f"{hdr}.{pay}.sig"
+
+    def test_save_jwt_bridges_deploy_token_to_env(self, monkeypatch, tmp_path):
+        # A valid user JWT → the agent gets the NON-EXPIRING deploy token (so it
+        # never 401s → freezes on "Waiting on model" when the 30-day JWT lapses).
         nw, written_env = self._wire(monkeypatch, tmp_path)
         monkeypatch.delenv("NEOWOW_CODING_PLAN_API_KEY", raising=False)
-        nw.save_jwt("eyJfake.payload.sig")
-        assert written_env.get("NEOWOW_CODING_PLAN_API_KEY") == "eyJfake.payload.sig"
+        nw.save_jwt(self._jwt())
+        assert written_env.get("NEOWOW_CODING_PLAN_API_KEY") == "nws_dt_testmint"
         import os
-        assert os.environ.get("NEOWOW_CODING_PLAN_API_KEY") == "eyJfake.payload.sig"
+        assert os.environ.get("NEOWOW_CODING_PLAN_API_KEY") == "nws_dt_testmint"
+
+    def test_save_jwt_falls_back_to_jwt_when_mint_unavailable(self, monkeypatch, tmp_path):
+        # Offline / old dashboard → mint returns None → bridge the JWT itself
+        # rather than leaving the agent keyless.
+        nw, written_env = self._wire(monkeypatch, tmp_path)
+        monkeypatch.setattr(nw, "_mint_coding_plan_token", lambda jwt: None)
+        jwt = self._jwt()
+        nw.save_jwt(jwt)
+        assert written_env.get("NEOWOW_CODING_PLAN_API_KEY") == jwt
 
     def test_clear_jwt_removes_key_from_env(self, monkeypatch, tmp_path):
         nw, written_env = self._wire(monkeypatch, tmp_path)
