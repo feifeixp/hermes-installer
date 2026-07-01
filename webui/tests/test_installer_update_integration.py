@@ -43,7 +43,7 @@ def mock_endpoints(monkeypatch):
                     "body": "## What's Changed\n- integration test fixture",
                     "html_url": f"https://github.com/feifeixp/hermes-installer/releases/tag/{state['tag']}",
                     "assets": [{"name": "Hermes-Installer-macOS.dmg"},
-                               {"name": "Hermes-Installer-Windows.zip"}],
+                               {"name": "Neowow-Studio-Setup.exe"}],
                 }).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
