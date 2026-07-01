@@ -995,6 +995,32 @@ def _jwt_is_expired(jwt: str, skew_seconds: int = 60) -> bool:
     return time.time() > (float(exp) + skew_seconds)
 
 
+def chat_credential_is_expired() -> bool:
+    """True iff the agent's Coding-Plan chat credential is an EXPIRED login JWT
+    — i.e. the next chat WILL 401 at the gateway and hang on "Waiting on model".
+
+    Returns False (don't block) whenever chat will actually work:
+      - credential is a non-expiring nws_dt_ deploy token (desktop, #45);
+      - credential is a still-valid JWT;
+      - chat doesn't ride the neowow JWT at all (user's own provider/key).
+
+    Used by /api/chat/start to convert the silent hang into a 401 + loginUrl so
+    the client bounces to re-login instead of freezing. Precise on purpose — a
+    false positive here would block a working chat."""
+    cred = (os.environ.get("NEOWOW_CODING_PLAN_API_KEY") or "").strip()
+    # Desktop post-#45: deploy token never expires.
+    if cred.startswith("nws_dt_"):
+        return False
+    # Cloud (neodomain) mode: chat rides the per-request cookie JWT.
+    if _is_neodomain_mode():
+        jwt = get_jwt()
+        return bool(jwt) and _jwt_is_expired(jwt)
+    # Desktop pre-#45 / fallback: only when the coding-plan credential IS a JWT.
+    if cred and cred.count(".") == 2 and _jwt_is_expired(cred):
+        return True
+    return False
+
+
 # ── Workspace bundling ───────────────────────────────────────────────────────
 
 def collect_files(root: Path) -> list[dict]:
