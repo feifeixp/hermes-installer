@@ -119,21 +119,27 @@ jobs:
             exit 1
           fi
 
-          # 2. Pre-validate the .p12 password + that it contains a private key,
-          #    using openssl so we get a precise verdict (security import's
-          #    error is generic). Never prints the password.
-          if openssl pkcs12 -in "$CERT_PATH" -nokeys -passin "pass:${APPLE_CERT_PASSWORD}" -info >/dev/null 2>/tmp/p12err; then
+          # 2. Pre-validate with openssl for a friendly HINT — but do NOT hard-fail
+          #    on it. macOS Keychain exports a legacy-MAC .p12 that LibreSSL /
+          #    OpenSSL-3-without-`-legacy` can't verify EVEN WITH THE CORRECT
+          #    PASSWORD → a false "Mac verify error: invalid password?". That
+          #    false-negative was blocking a perfectly good cert. The real
+          #    authority is `security import` (step 4, native macOS Security
+          #    framework), so treat openssl as advisory only: try the modern
+          #    reader, then the -legacy reader, and downgrade any failure to a
+          #    warning instead of aborting.
+          if openssl pkcs12 -in "$CERT_PATH" -nokeys -passin "pass:${APPLE_CERT_PASSWORD}" -info >/dev/null 2>/tmp/p12err \
+             || openssl pkcs12 -legacy -in "$CERT_PATH" -nokeys -passin "pass:${APPLE_CERT_PASSWORD}" -info >/dev/null 2>>/tmp/p12err; then
             echo "p12 password OK (openssl MAC verified)"
           else
-            echo "::error::p12 password REJECTED by openssl — APPLE_CERT_PASSWORD does not match this .p12"
-            sed -E 's/.*(invalid password|Mac verify error).*/\1/' /tmp/p12err | head -2
-            exit 1
+            echo "::warning::openssl couldn't verify the .p12 MAC (common legacy-export / LibreSSL-vs-OpenSSL3 quirk) — deferring to 'security import' as the source of truth"
+            sed -E 's/.*(invalid password|Mac verify error).*/\1/' /tmp/p12err | head -2 || true
           fi
-          if openssl pkcs12 -in "$CERT_PATH" -nocerts -passin "pass:${APPLE_CERT_PASSWORD}" -nodes 2>/dev/null | grep -q "PRIVATE KEY"; then
+          if { openssl pkcs12 -in "$CERT_PATH" -nocerts -passin "pass:${APPLE_CERT_PASSWORD}" -nodes 2>/dev/null \
+               || openssl pkcs12 -legacy -in "$CERT_PATH" -nocerts -passin "pass:${APPLE_CERT_PASSWORD}" -nodes 2>/dev/null; } | grep -q "PRIVATE KEY"; then
             echo "p12 contains a private key: OK"
           else
-            echo "::error::p12 has NO private key — re-export from Keychain selecting the cert WITH its key"
-            exit 1
+            echo "::warning::openssl couldn't extract a private key (legacy-export / openssl-version quirk) — deferring to 'security import'"
           fi
 
           # 3. Create + unlock a temp keychain.
@@ -146,7 +152,7 @@ jobs:
           # 4. Import the cert+key, allowing codesign/productsign to use the key.
           security import "$CERT_PATH" -P "$APPLE_CERT_PASSWORD" \
             -A -t cert -f pkcs12 -k "$KEYCHAIN" || {
-            echo "::error::security import failed despite openssl pre-check passing"; exit 1; }
+            echo "::error::security import failed — APPLE_CERT_PASSWORD likely doesn't match this .p12 (or the .p12 has no private key). Re-export from Keychain (Developer ID Application WITH its private key) and update BOTH APPLE_CERT_P12_BASE64 and APPLE_CERT_PASSWORD together."; exit 1; }
           security set-key-partition-list -S apple-tool:,apple: \
             -k "$APPLE_KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null 2>&1 || true
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed s/\"//g)
