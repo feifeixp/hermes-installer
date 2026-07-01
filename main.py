@@ -217,6 +217,20 @@ os.environ["HERMES_INSTALLER_BASE_DIR"] = str(BASE_DIR)
 # preserves any value the operator already chose.
 os.environ.setdefault("HERMES_NEOWOW_ONLY", "1")
 
+# ── No surprise mid-chat pip installs ─────────────────────────────────────
+# The agent's tools/lazy_deps.py runs a blocking `uv pip install` the first
+# time a lazy feature (TTS backends edge-tts / elevenlabs / mistral, some
+# search / image backends, IM platforms …) is touched. On a fresh install /
+# update that happens on the user's FIRST chat turn and takes minutes over the
+# network — the WebUI just shows "Waiting on model" the whole time, looking
+# broken. Default lazy installs OFF so a plain text chat is instant; the
+# feature is cleanly reported "unavailable" (with a manual-install hint) rather
+# than silently blocking. TTS etc. will come back via a better-bundled path.
+# Power users can opt back in with HERMES_DISABLE_LAZY_INSTALLS=0 — `setdefault`
+# + the profile .env (which _reload_dotenv applies over os.environ) both let an
+# explicit value win.
+os.environ.setdefault("HERMES_DISABLE_LAZY_INSTALLS", "1")
+
 # ── Unify HERMES_HOME across all subprocesses ─────────────────────────────
 # webui/api/config.py defaults to %LOCALAPPDATA%/hermes on native Windows
 # (and ~/.hermes on POSIX). The hermes-agent CLI defaults to ~/.hermes
