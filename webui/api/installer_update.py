@@ -31,7 +31,8 @@ OSS_HEAD_TIMEOUT = 3
 # Linux is intentionally absent — no installer published for it.
 PLATFORM_ASSETS = {
     "darwin": "Hermes-Installer-macOS.dmg",
-    "win32":  "Hermes-Installer-Windows.zip",
+    # Windows update → the installer (re-runs setup, refreshes shortcuts).
+    "win32":  "Neowow-Studio-Setup.exe",
 }
 
 

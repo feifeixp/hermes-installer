@@ -361,28 +361,52 @@ jobs:
           }
           Write-Host "✓ .exe found"
 
-      - name: Create .zip
+      # Wrap the portable .exe into a real setup.exe (Start Menu + Desktop
+      # shortcuts, per-user install, uninstaller) — Windows users expect an
+      # installer, not a bare .exe. See installer/windows/hermes.iss.
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        env:
+          INSTALLER_VERSION: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup -y --no-progress | Out-Null
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { Write-Error "ISCC.exe not found after choco install innosetup"; exit 1 }
+          $ver = "${env:INSTALLER_VERSION}" -replace '^v',''
+          if ([string]::IsNullOrWhiteSpace($ver) -or ($ver -notmatch '^\d')) { $ver = "0.0.0" }
+          Write-Host "Building installer for version $ver ..."
+          & $iscc "/DAppVersion=$ver" installer\windows\hermes.iss
+          $setup = Get-ChildItem dist\Neowow-Studio-Setup.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $setup) { Write-Error "installer not produced"; exit 1 }
+          $size = [math]::Round($setup.Length / 1MB, 1)
+          Write-Host "✓ installer: $($setup.Name) ($size MB)"
+
+      - name: Create portable .zip
         shell: pwsh
         run: |
           Compress-Archive -Path 'dist\Hermes Installer.exe' -DestinationPath 'dist\Hermes-Installer-Windows.zip' -Force
-          Write-Host "✓ .zip created"
+          Write-Host "✓ portable .zip created"
 
-      - name: Upload .exe + .zip artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
           name: Hermes-Installer-Windows
           path: |
+            dist/Neowow-Studio-Setup.exe
             dist/Hermes-Installer-Windows.zip
-            dist/Hermes Installer.exe
           retention-days: 30
 
-      - name: Upload .exe + .zip to release
+      # Ship the installer as the primary download + keep the portable zip for
+      # advanced users. The bare `Hermes Installer.exe` is deliberately NOT
+      # released — it's the one that reads as suspicious to Windows users.
+      - name: Upload installer + portable zip to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            dist/Neowow-Studio-Setup.exe
             dist/Hermes-Installer-Windows.zip
-            dist/Hermes Installer.exe
           generate_release_notes: true
 
   # ═══════════════════════════════════════════════════════════════════════

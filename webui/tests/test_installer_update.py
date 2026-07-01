@@ -20,8 +20,8 @@ def test_platform_asset_darwin():
 
 
 def test_platform_asset_win32():
-    """win32 maps to .zip asset."""
-    assert iu.PLATFORM_ASSETS.get("win32") == "Hermes-Installer-Windows.zip"
+    """win32 maps to the installer .exe asset."""
+    assert iu.PLATFORM_ASSETS.get("win32") == "Neowow-Studio-Setup.exe"
 
 
 def test_platform_asset_for_returns_none_on_linux():
@@ -32,7 +32,7 @@ def test_platform_asset_for_returns_none_on_linux():
 def test_platform_asset_for_returns_correct_filename():
     """darwin/win32 return the right asset filename."""
     assert iu._platform_asset_for("darwin") == "Hermes-Installer-macOS.dmg"
-    assert iu._platform_asset_for("win32") == "Hermes-Installer-Windows.zip"
+    assert iu._platform_asset_for("win32") == "Neowow-Studio-Setup.exe"
 
 
 def test_is_clean_semver_accepts_v_prefixed():
@@ -87,7 +87,7 @@ def _make_github_response(tag: str = "v1.5.0", prerelease: bool = False, body: s
         "html_url": f"https://github.com/feifeixp/hermes-installer/releases/tag/{tag}",
         "assets": [
             {"name": "Hermes-Installer-macOS.dmg"},
-            {"name": "Hermes-Installer-Windows.zip"},
+            {"name": "Neowow-Studio-Setup.exe"},
         ],
     }).encode("utf-8")
     resp = MagicMock()
