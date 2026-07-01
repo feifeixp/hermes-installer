@@ -10080,6 +10080,32 @@ def _handle_chat_start(handler, body, diag=None):
         msg = str(body.get("message", "")).strip()
         if not msg:
             return bad(handler, "message is required")
+        # Expired-JWT guard: when the Coding-Plan chat credential is an EXPIRED
+        # login JWT, the gateway 401s and the agent silently hangs on "Waiting
+        # on model". Catch it here → return 401 + loginUrl so the client
+        # auto-bounces to re-login (workspace.js api() handles 401+loginUrl)
+        # instead of freezing. Only fires when the credential really is an
+        # expired JWT — a non-expiring nws_dt_ deploy token (#45) or a valid
+        # JWT never triggers it. Wrapped so the guard can never break chat.
+        try:
+            from api.neowow import chat_credential_is_expired
+            if chat_credential_is_expired():
+                import os as _os, urllib.parse as _up
+                proto = handler.headers.get('X-Forwarded-Proto', '').strip() or 'https'
+                host = (handler.headers.get('X-Forwarded-Host', '').strip()
+                        or handler.headers.get('Host', '').strip()
+                        or 'chat.neowow.studio')
+                oauth_base = _os.getenv('HERMES_NEODOMAIN_OAUTH_START',
+                                        'https://app.neowow.studio/api/oauth/start').strip()
+                login_url = f"{oauth_base}?return={_up.quote(f'{proto}://{host}/', safe='')}"
+                return j(handler, {
+                    'error': '登录已过期，请重新登录后再发消息。',
+                    'mode': 'neodomain',
+                    'loginUrl': login_url,
+                    'code': 'session_expired',
+                }, status=401)
+        except Exception:
+            pass
         diag.stage("normalize_attachments") if diag else None
         attachments = _normalize_chat_attachments(body.get("attachments") or [])[:20]
         diag.stage("resolve_workspace") if diag else None
