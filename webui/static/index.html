@@ -429,6 +429,8 @@
         <label class="logs-check-row"><input id="logsAutoRefresh" type="checkbox" checked onchange="_syncLogsAutoRefresh()"><span data-i18n="logs_auto_refresh">Auto-refresh (5s)</span></label>
         <label class="logs-check-row"><input id="logsWrap" type="checkbox" onchange="_syncLogsWrap()"><span data-i18n="logs_wrap">Wrap lines</span></label>
         <button type="button" class="logs-copy" id="logsCopyAll" onclick="copyLogsAll()" data-i18n="logs_copy_all">Copy all</button>
+        <button id="reportIssueBtn" type="button" onclick="window.__reportIssue()"
+                style="margin-left:auto;">报告问题</button>
       </div>
     </div>
     <!-- Backup panel (content renders in .main via iframe) -->

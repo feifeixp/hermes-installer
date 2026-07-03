@@ -8053,3 +8053,49 @@ async function _restoreCheckpoint(workspace,checkpoint,message){
     showToast(t('checkpoint_restore')+': '+e.message,'error');
   }
 }
+
+// ── 报告问题 / 上传日志 ─────────────────────────────────────────────────────
+// Bundles the current logs + diagnostics server-side and returns a BR-XXXXXX
+// ticket id the user can send to support. See webui/api/report_bundle.py.
+window.__reportIssue = async function () {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;color:#111;border-radius:12px;padding:20px;width:min(440px,92vw);box-shadow:0 8px 30px rgba(0,0,0,.25);font-size:14px;';
+  box.innerHTML = `
+    <h3 style="margin:0 0 8px;">报告问题</h3>
+    <p style="margin:0 0 10px;color:#6b7280;">描述一下卡在哪里（可选）。点击上传后，我们会自动<strong>脱敏</strong>你的日志用于排查。</p>
+    <textarea id="__riDesc" rows="3" style="width:100%;box-sizing:border-box;" placeholder="例如：点了发送就一直转圈"></textarea>
+    <div id="__riResult" style="margin:10px 0;min-height:20px;"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button id="__riCancel" type="button">取消</button>
+      <button id="__riSend" type="button">上传日志</button>
+    </div>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  box.querySelector('#__riCancel').onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+  box.querySelector('#__riSend').onclick = async () => {
+    const desc = box.querySelector('#__riDesc').value || '';
+    const result = box.querySelector('#__riResult');
+    const send = box.querySelector('#__riSend');
+    send.disabled = true; result.textContent = '正在上传…';
+    try {
+      const data = await api('/api/report-issue', { method: 'POST', body: JSON.stringify({ description: desc }) });
+      if (data && data.ok && data.reportId) {
+        result.innerHTML = '已上传，工单号 <strong style="font-family:monospace;">' + data.reportId +
+          '</strong>。把这个编号发给客服即可。';
+      } else if (data && data.saved) {
+        result.innerHTML = '上传失败，日志已保存到本地：<code>' + data.saved + '</code>，请把该文件发给客服。';
+      } else {
+        result.textContent = '上传失败，请稍后重试。';
+      }
+    } catch (e) {
+      result.textContent = '上传失败：' + (e && e.message ? e.message : e);
+    } finally {
+      send.disabled = false;
+    }
+  };
+};
