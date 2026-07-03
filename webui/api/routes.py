@@ -3605,6 +3605,30 @@ def _handle_health(handler, parsed):
     return j(handler, payload)
 
 
+def _health_snapshot() -> dict:
+    """Small, dict-returning health summary for the diagnostic bundle.
+    Reuses the same module state as _handle_health (which writes to the
+    response and can't be called for a value)."""
+    try:
+        return {
+            "sessions": len(SESSIONS),
+            "active_streams": int(_streams_lock_health().get("active_streams") or 0),
+            "active_runs": int(_run_lifecycle_health().get("active_runs") or 0),
+            "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+        }
+    except Exception:
+        return {}
+
+
+def _handle_report_issue(handler, body) -> bool:
+    """POST /api/report-issue — build + upload the user diagnostic bundle."""
+    description = str((body or {}).get("description") or "")
+    from api.report_bundle import build_report_bundle, upload_report
+    bundle = build_report_bundle(description, health=_health_snapshot())
+    result = upload_report(bundle)
+    return j(handler, result, status=200)
+
+
 # ── Plugin visibility endpoint (#539) ───────────────────────────────────────
 _PLUGIN_VISIBILITY_HOOKS = (
     "pre_tool_call",
@@ -5437,6 +5461,9 @@ def handle_post(handler, parsed) -> bool:
         if diag:
             diag.finish()
         raise
+
+    if parsed.path == "/api/report-issue":
+        return _handle_report_issue(handler, body)
 
     if parsed.path == "/api/session/recovery/repair-safe":
         from api.session_recovery import repair_safe_session_recovery
