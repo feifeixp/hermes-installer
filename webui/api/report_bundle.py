@@ -33,6 +33,7 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'/Users/[^/\s"\']+'), '/Users/<USER>'),
     (re.compile(r'/home/[^/\s"\']+'), '/home/<USER>'),
     (re.compile(r'sk-[A-Za-z0-9_-]{20,}'), 'sk-***REDACTED***'),
+    (re.compile(r'api[_-]?key[=:]["\']?[^\s"\',;)]+', re.IGNORECASE), 'api_key=***REDACTED***'),
     (re.compile(r'Authorization:\s*Bearer\s+\S+', re.IGNORECASE), 'Authorization: Bearer ***REDACTED***'),
     (re.compile(r'Bearer\s+[A-Za-z0-9._-]{20,}'), 'Bearer ***REDACTED***'),
     (re.compile(r'neoToken=[^;\s]+'), 'neoToken=***REDACTED***'),
