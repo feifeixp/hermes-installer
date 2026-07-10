@@ -566,19 +566,16 @@ def get_status(handler=None) -> dict:
         else ("file" if file_jwt else "")
     )
 
-    # Expiry awareness — a PRESENT-but-EXPIRED JWT used to report hasJwt=True
-    # ("已登录"), yet every chat 401'd because the agent was bridged a dead
-    # key → the desktop froze on "Waiting on model". Treat an expired token as
-    # effectively logged-out so the UI shows the re-login prompt at startup,
-    # and surface `jwtExpired` so the frontend can say "登录已过期" instead of a
-    # generic "未登录". (No silent refresh is possible — the platform has no
-    # refresh-token endpoint — so re-login is the only recovery.)
-    jwt_expired = bool(effective_jwt) and _jwt_is_expired(effective_jwt)
+    # Token is long-lived + server-refreshed per contract; don't flag it expired
+    # client-side. We keep `jwtExpired` for frontend compat but always False —
+    # the only authoritative "session dead / re-login" signal is errCode 2001
+    # from a business API (JwtRevokedError), not the local JWT `exp` claim.
+    jwt_expired = False
 
     return {
         "hasToken":     bool(token),
         "maskedToken":  _mask_token(token) if token else "",
-        "hasJwt":       bool(effective_jwt) and not jwt_expired,
+        "hasJwt":       bool(effective_jwt),
         "jwtExpired":   jwt_expired,
         "maskedJwt":    _mask_jwt(effective_jwt) if effective_jwt else "",
         # Lets the UI know WHERE the JWT came from. Cookie-mode means
@@ -996,28 +993,11 @@ def _jwt_is_expired(jwt: str, skew_seconds: int = 60) -> bool:
 
 
 def chat_credential_is_expired() -> bool:
-    """True iff the agent's Coding-Plan chat credential is an EXPIRED login JWT
-    — i.e. the next chat WILL 401 at the gateway and hang on "Waiting on model".
-
-    Returns False (don't block) whenever chat will actually work:
-      - credential is a non-expiring nws_dt_ deploy token (desktop, #45);
-      - credential is a still-valid JWT;
-      - chat doesn't ride the neowow JWT at all (user's own provider/key).
-
-    Used by /api/chat/start to convert the silent hang into a 401 + loginUrl so
-    the client bounces to re-login instead of freezing. Precise on purpose — a
-    false positive here would block a working chat."""
-    cred = (os.environ.get("NEOWOW_CODING_PLAN_API_KEY") or "").strip()
-    # Desktop post-#45: deploy token never expires.
-    if cred.startswith("nws_dt_"):
-        return False
-    # Cloud (neodomain) mode: chat rides the per-request cookie JWT.
-    if _is_neodomain_mode():
-        jwt = get_jwt()
-        return bool(jwt) and _jwt_is_expired(jwt)
-    # Desktop pre-#45 / fallback: only when the coding-plan credential IS a JWT.
-    if cred and cred.count(".") == 2 and _jwt_is_expired(cred):
-        return True
+    # Retired: the client never pre-judges token expiry. The accessToken is
+    # long-lived + server-refreshed; the desktop agent rides a non-expiring
+    # nws_dt_ deploy token, and a truly dead session surfaces as errCode 2001
+    # (JwtRevokedError), not the local `exp` claim. Always False so the
+    # chat-start guard in routes.py no longer pre-blocks sends.
     return False
 
 
@@ -1705,6 +1685,37 @@ def _auto_clear_revoked(body: str, err: str, code: int):
         )
 
 
+def _is_errcode_2001(data: object) -> bool:
+    """errCode 2001 is the platform's authoritative 'session dead / re-login'
+    signal — a business API returns it (as a string or number) in the JSON body,
+    frequently with HTTP 200. It's the single source of truth for revocation, so
+    we honor it regardless of HTTP status (the 401/403 + text-hint path stays as
+    a fallback for older/edge responses)."""
+    if not isinstance(data, dict):
+        return False
+    code = data.get("errCode", data.get("err_code"))
+    return code is not None and str(code) == "2001"
+
+
+def _raise_if_revoked_code(data: object, code: int = 401) -> None:
+    """When the parsed response body carries errCode/err_code == '2001', the
+    session is revoked: clear the local JWT and raise JwtRevokedError so the
+    route handler maps it to a structured re-login prompt — same as the 401/403
+    revocation path, but keyed on the numeric/string errCode instead of HTTP
+    status or a text hint."""
+    if not _is_errcode_2001(data):
+        return
+    try:
+        clear_jwt()
+    except Exception:
+        logger.debug("clear_jwt during errCode 2001 revoke failed", exc_info=True)
+    raise JwtRevokedError(
+        "Neowow 登录已失效（errCode 2001）：会话已在服务端结束。"
+        "已自动清除本地凭据，请点「重新登录 Neowow」。",
+        upstream_code=code,
+    )
+
+
 def _neodomain_get(path: str) -> dict:
     """GET <NEODOMAIN_BASE><path> with the saved JWT.
 
@@ -1732,14 +1743,22 @@ def _neodomain_get(path: str) -> dict:
     )
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            data = json.loads(resp.read().decode("utf-8"))
+        # errCode 2001 is the authoritative 'session dead' signal and can arrive
+        # on an HTTP 200 body, so check it before returning (regardless of status).
+        _raise_if_revoked_code(data)
+        return data
     except urllib.error.HTTPError as e:
         body = ""
+        parsed: dict = {}
         try:
             body = e.read().decode("utf-8")
-            err = json.loads(body).get("errMessage") or body
+            parsed = json.loads(body)
+            err = parsed.get("errMessage") or body
         except Exception:
             err = body or str(e)
+        # errCode 2001 in the error body → revoked too, regardless of status.
+        _raise_if_revoked_code(parsed, e.code)
         # 401 / 403 → JWT likely expired (Neodomain JWTs ~30 days).
         # If the body explicitly mentions revocation/expiry, auto-clear
         # the local JWT + raise JwtRevokedError (route handler maps to

@@ -1,8 +1,13 @@
-"""chat_credential_is_expired() — the /api/chat/start expired-JWT guard.
+"""chat_credential_is_expired() — retired; never pre-blocks a send on exp.
 
-Converts the silent "Waiting on model" hang into a 401 + re-login, but ONLY
-when the chat credential is truly an expired login JWT — never for a
-non-expiring nws_dt_ deploy token (#45) or a valid JWT (no false-blocks).
+The accessToken is long-lived + server-refreshed, so the client must NOT
+pre-judge token expiry from the local JWT `exp` claim. The desktop agent rides
+a non-expiring nws_dt_ deploy token, and a truly dead session surfaces as
+errCode 2001 (JwtRevokedError) from a business API — not a local exp check.
+
+chat_credential_is_expired() therefore ALWAYS returns False now, so the
+/api/chat/start guard in routes.py can no longer pre-block sends. These tests
+pin that contract across every credential shape.
 
 Run: python3.13 -m pytest webui/tests/test_chat_credential_expiry.py -q
 """
@@ -29,12 +34,14 @@ def test_deploy_token_never_blocks(monkeypatch):
     assert nw.chat_credential_is_expired() is False
 
 
-def test_neodomain_expired_cookie_jwt_blocks(monkeypatch):
+def test_neodomain_expired_cookie_jwt_does_not_block(monkeypatch):
+    # Retired: even an expired cookie JWT in neodomain mode no longer pre-blocks
+    # — a dead session surfaces as errCode 2001, not this local exp check.
     import api.neowow as nw
     monkeypatch.delenv("NEOWOW_CODING_PLAN_API_KEY", raising=False)
     monkeypatch.setattr(nw, "_is_neodomain_mode", lambda: True)
     monkeypatch.setattr(nw, "get_jwt", lambda: _jwt(int(time.time()) - 3600))
-    assert nw.chat_credential_is_expired() is True
+    assert nw.chat_credential_is_expired() is False
 
 
 def test_neodomain_valid_cookie_jwt_ok(monkeypatch):
@@ -45,11 +52,12 @@ def test_neodomain_valid_cookie_jwt_ok(monkeypatch):
     assert nw.chat_credential_is_expired() is False
 
 
-def test_desktop_expired_jwt_cred_blocks(monkeypatch):
+def test_desktop_expired_jwt_cred_does_not_block(monkeypatch):
+    # Retired: an expired desktop JWT credential no longer pre-blocks either.
     import api.neowow as nw
     monkeypatch.setenv("NEOWOW_CODING_PLAN_API_KEY", _jwt(int(time.time()) - 3600))
     monkeypatch.setattr(nw, "_is_neodomain_mode", lambda: False)
-    assert nw.chat_credential_is_expired() is True
+    assert nw.chat_credential_is_expired() is False
 
 
 def test_desktop_valid_jwt_cred_ok(monkeypatch):
@@ -60,8 +68,7 @@ def test_desktop_valid_jwt_cred_ok(monkeypatch):
 
 
 def test_own_provider_no_neowow_cred_ok(monkeypatch):
-    # User's own provider: no coding-plan cred, not neodomain → never block,
-    # even if a stale file JWT lingers (we only read the env cred here).
+    # User's own provider: no coding-plan cred, not neodomain → never block.
     import api.neowow as nw
     monkeypatch.delenv("NEOWOW_CODING_PLAN_API_KEY", raising=False)
     monkeypatch.setattr(nw, "_is_neodomain_mode", lambda: False)
