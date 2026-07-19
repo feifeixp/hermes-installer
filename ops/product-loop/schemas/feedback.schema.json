@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neowow.studio/schemas/product-loop/feedback.schema.json",
+  "title": "Product feedback item",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "submitted_at",
+    "source",
+    "kind",
+    "description",
+    "status"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "submitted_at": { "type": "string", "format": "date-time" },
+    "source": { "type": "string", "enum": ["client-report", "github", "support", "manual"] },
+    "kind": { "type": "string", "enum": ["bug", "request", "question", "unknown"] },
+    "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "app_version": { "type": "string", "maxLength": 40 },
+    "platform": { "type": "string", "maxLength": 80 },
+    "evidence_count": { "type": "integer", "minimum": 1 },
+    "related_ids": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 80 },
+      "uniqueItems": true
+    },
+    "status": {
+      "type": "string",
+      "enum": ["new", "triaged", "needs-review", "accepted", "rejected", "needs-info"]
+    },
+    "privacy_class": { "type": "string", "enum": ["metadata-only", "redacted-user-text"] }
+  }
+}

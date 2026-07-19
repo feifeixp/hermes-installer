@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neowow.studio/schemas/product-loop/requirement.schema.json",
+  "title": "Candidate product requirement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "problem",
+    "evidence",
+    "recommendation",
+    "acceptance_criteria",
+    "status"
+  ],
+  "properties": {
+    "title": { "type": "string", "minLength": 5, "maxLength": 120 },
+    "problem": { "type": "string", "minLength": 20, "maxLength": 2000 },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "maxLength": 200 }
+    },
+    "frequency": { "type": "string", "enum": ["single", "repeated", "systemic", "unknown"] },
+    "severity": { "type": "string", "enum": ["p0", "p1", "p2", "p3"] },
+    "recommendation": { "type": "string", "minLength": 10, "maxLength": 2000 },
+    "non_goals": { "type": "array", "items": { "type": "string", "maxLength": 300 } },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "maxLength": 500 }
+    },
+    "source_feedback_ids": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 80 },
+      "uniqueItems": true
+    },
+    "status": { "type": "string", "enum": ["needs-review", "accepted", "prd-review", "ready-to-build"] }
+  }
+}
