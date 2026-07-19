@@ -32,6 +32,10 @@ def test_catalog_includes_2026_06_additions():
         assert cid in ids, f"static coding-plan catalog missing {cid}"
 
 
+def test_catalog_includes_kimi_k3():
+    assert "kimi-k3" in _ids(), "static coding-plan catalog missing kimi-k3"
+
+
 def test_catalog_excludes_models_ga_removed():
     # ga dropped these 2026-06-11; a fallback that still lists them produces
     # picker entries that 502 on every call.

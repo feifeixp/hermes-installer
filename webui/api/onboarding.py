@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import socket
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -82,6 +83,87 @@ def _safe_neowow_status() -> dict:
         return {"hasJwt": bool(s.get("hasJwt")), "points": s.get("points")}
     except Exception:
         return {"hasJwt": False, "points": None}
+
+
+def get_onboarding_capabilities() -> dict:
+    """Return deployment capabilities that affect first-run authentication.
+
+    Neowow OAuth is completed by the managed online deployment.  Native/local
+    WebUI processes must not advertise a login flow that cannot finish.  An
+    HERMES_DEPLOYMENT_MODE may distinguish local desktop/server builds, while
+    online OAuth requires the managed HERMES_WEBUI_AUTH_MODE=neodomain marker.
+    """
+    explicit = os.getenv("HERMES_DEPLOYMENT_MODE", "").strip().lower()
+    auth_mode = os.getenv("HERMES_WEBUI_AUTH_MODE", "").strip().lower()
+    if auth_mode == "neodomain":
+        deployment_mode = "online"
+    elif explicit in {"local_desktop", "local_server"}:
+        deployment_mode = explicit
+    elif getattr(sys, "frozen", False) or os.getenv("HERMES_INSTALLER_VERSION"):
+        deployment_mode = "local_desktop"
+    else:
+        deployment_mode = "local_server"
+    oauth_supported = deployment_mode == "online"
+    return {
+        "deployment_mode": deployment_mode,
+        "neowow_oauth_supported": oauth_supported,
+        "neowow_oauth_unavailable_reason": (
+            "Neowow 账号授权仅支持实际线上部署。"
+            if not oauth_supported else ""
+        ),
+    }
+
+
+def _experience_state(runtime: dict, neowow: dict, completed: bool) -> dict:
+    """Build the single user-facing readiness state used by onboarding UI."""
+    capabilities = get_onboarding_capabilities()
+    has_jwt = bool(neowow.get("hasJwt"))
+    chat_ready = bool(runtime.get("chat_ready"))
+    provider_configured = bool(runtime.get("provider_configured"))
+
+    if chat_ready:
+        stage = "ready"
+        message = "聊天能力已就绪"
+        actions: list[str] = []
+    elif _neowow_only_enabled() and not has_jwt:
+        if capabilities["neowow_oauth_supported"]:
+            stage = "auth_required"
+            message = "登录 Neowow 后将自动同步套餐和模型"
+            actions = ["login", "report_issue"]
+        else:
+            stage = "auth_unavailable_local"
+            message = capabilities["neowow_oauth_unavailable_reason"]
+            actions = ["deployment_help", "report_issue"]
+    elif _neowow_only_enabled() and has_jwt:
+        stage = "provider_syncing"
+        message = "登录成功，正在同步套餐和模型"
+        actions = ["retry", "relogin", "report_issue"]
+    elif not completed:
+        stage = "first_run_setup"
+        message = "完成模型配置后即可开始对话"
+        actions = ["configure_provider", "report_issue"]
+    elif provider_configured:
+        stage = "provider_error"
+        message = "模型配置尚未就绪"
+        actions = ["retry", "configure_provider", "report_issue"]
+    else:
+        stage = "first_run_setup"
+        message = "请选择可用的模型服务"
+        actions = ["configure_provider", "report_issue"]
+
+    return {
+        **capabilities,
+        "stage": stage,
+        "authenticated": has_jwt,
+        "provider_configured": provider_configured,
+        "chat_ready": chat_ready,
+        "progress": {
+            "step": stage,
+            "message": message,
+        },
+        "available_actions": actions,
+        "error": None,
+    }
 
 
 _NEOWOW_CODING_PLAN_PROVIDER_ID = "neowow-coding-plan"
@@ -994,10 +1076,62 @@ def _status_from_runtime(cfg: dict, imports_ok: bool) -> dict:
 # so the caller never has to fall back to the full static catalogue (which would
 # let a Basic user pick a Claude model their plan rejects). No annotation on the
 # global so it's safe on the py3.9 runtime the desktop sometimes ships.
+#
+# This is ALSO mirrored to disk (neowow.json → "lastGoodPlanModels"). The pure
+# in-memory copy is wiped on every webui restart, so the very first /api/me/plan
+# fetch after a restart is decisive: if that one request times out (the endpoint
+# routinely takes 3–4s and network blips are intermittent — observed 000/200/
+# 000/000/200), a memory-only cache has nothing to fall back on and the user
+# collapses to the trial/"non-member" list until a later fetch succeeds. The
+# disk mirror survives restarts so a logged-in Max user keeps their real plan
+# catalogue even when the first post-restart fetch fails (#neowow-nonmember).
 _LAST_GOOD_PLAN_MODELS = None
 
 
-def _fetch_neowow_plan_models() -> tuple[list[dict], str | None]:
+def _load_last_good_plan_models_from_disk() -> "list[dict] | None":
+    """Return the persisted last-good plan model list, or None.
+
+    Survives webui restarts so the first (possibly slow / flaky) /api/me/plan
+    fetch after a restart never collapses a real member down to the trial list.
+    Never raises — a missing / corrupt file just means "no disk cache".
+    """
+    try:
+        from api.neowow import _read_state
+        raw = (_read_state() or {}).get("lastGoodPlanModels")
+        if not isinstance(raw, list):
+            return None
+        shaped = [
+            {"id": str(m["id"]).strip(), "label": str(m.get("label") or m["id"]).strip()}
+            for m in raw
+            if isinstance(m, dict) and str(m.get("id") or "").strip()
+        ]
+        return shaped or None
+    except Exception:
+        return None
+
+
+def _persist_last_good_plan_models(models: "list[dict]") -> None:
+    """Mirror the genuine plan model list to neowow.json for restart survival.
+
+    Best-effort: never raises, never blocks the fetch path. Only non-secret
+    model ids/labels are written (no JWT, no credits).
+    """
+    try:
+        if not models:
+            return
+        from api.neowow import _read_state, _write_state
+        state = _read_state() or {}
+        state["lastGoodPlanModels"] = [
+            {"id": m["id"], "label": m.get("label") or m["id"]}
+            for m in models
+            if isinstance(m, dict) and m.get("id")
+        ]
+        _write_state(state)
+    except Exception:
+        logger.debug("failed to persist lastGoodPlanModels to disk", exc_info=True)
+
+
+def _fetch_neowow_plan_models(*, cached_only: bool = False) -> tuple[list[dict], str | None]:
     """Hit the dashboard's /api/me/plan and return (models, default_model).
 
     Resolution on failure:
@@ -1008,6 +1142,7 @@ def _fetch_neowow_plan_models() -> tuple[list[dict], str | None]:
     The JWT is read via api/neowow.get_jwt(); on cloud (chat-*.neowow.studio)
     the cookie has already been turned into a saved JWT by the oauth-callback.
     """
+    global _LAST_GOOD_PLAN_MODELS
     try:
         from api.neowow import get_jwt  # local import — avoid circular at module load
     except Exception:
@@ -1015,52 +1150,88 @@ def _fetch_neowow_plan_models() -> tuple[list[dict], str | None]:
     jwt = get_jwt()
     if not jwt:
         return _neowow_coding_plan_default_models(), None
-    url = f"{_neowow_dashboard_base()}/api/me/plan"
-    try:
-        # Cloudflare's Bot Fight Mode in front of app.neowow.studio rejects
-        # urllib's default User-Agent ('Python-urllib/3.11') with error 1010
-        # ("browser signature banned") → 403. Sibling neowow.py callers all
-        # set a Hermes/* UA for the same reason; mirror that here so the
-        # plan-models fetch succeeds and users see their real catalogue
-        # instead of the trial fallback.
-        req = urllib.request.Request(url, method="GET", headers={
-            "Authorization": f"Bearer {jwt}",
-            "Accept":        "application/json",
-            "User-Agent":    "Hermes/neowow-plan-models",
-        })
-        # 3s is enough for a CF Workers round-trip from any region; if it's
-        # really down, the user gets the static fallback list and a probe
-        # error on first chat.
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            body = resp.read().decode("utf-8", "replace")
-            data = json.loads(body)
-            models = data.get("models") or []
-            if not isinstance(models, list):
-                return _neowow_coding_plan_default_models(), None
-            shaped: list[dict] = []
-            for m in models:
-                mid = str(m).strip()
-                if not mid:
-                    continue
-                shaped.append({"id": mid, "label": mid})
-            # Default = deepseek-v4-flash when the plan includes it, else the
-            # first listed model (see _pick_neowow_default). Previously this took
-            # models[0] blindly, which made claude-sonnet-4.5 the default for
-            # plans that listed it first.
-            if shaped:
-                global _LAST_GOOD_PLAN_MODELS
-                _LAST_GOOD_PLAN_MODELS = shaped   # cache the genuine catalogue
-            default_model = _pick_neowow_default([s["id"] for s in shaped])
-            return shaped or _neowow_coding_plan_default_models(), default_model
-    except (urllib.error.URLError, socket.timeout, json.JSONDecodeError, KeyError, ValueError):
-        logger.debug("plan-models fetch failed; reusing last-good / fallback", exc_info=True)
-        # Still logged in (we had a JWT), just a transient blip — reuse the last
-        # GENUINE plan catalogue so the picker keeps the user's real model set.
-        # Only when we've NEVER had a good fetch do we hand back the safe model.
-        if _LAST_GOOD_PLAN_MODELS:
-            return (_LAST_GOOD_PLAN_MODELS,
-                    _pick_neowow_default([m["id"] for m in _LAST_GOOD_PLAN_MODELS]))
+    if cached_only:
+        cached = _LAST_GOOD_PLAN_MODELS or _load_last_good_plan_models_from_disk()
+        if cached:
+            _LAST_GOOD_PLAN_MODELS = cached
+            return cached, _pick_neowow_default([m["id"] for m in cached])
+        # Readiness/status must render immediately.  Provider activation and
+        # the live model endpoint perform the real network refresh later.
         return _neowow_coding_plan_default_models(), None
+    url = f"{_neowow_dashboard_base()}/api/me/plan"
+
+    # Cloudflare's Bot Fight Mode in front of app.neowow.studio rejects
+    # urllib's default User-Agent ('Python-urllib/3.11') with error 1010
+    # ("browser signature banned") → 403. Sibling neowow.py callers all
+    # set a Hermes/* UA for the same reason; mirror that here so the
+    # plan-models fetch succeeds and users see their real catalogue
+    # instead of the trial fallback.
+    req = urllib.request.Request(url, method="GET", headers={
+        "Authorization": f"Bearer {jwt}",
+        "Accept":        "application/json",
+        "User-Agent":    "Hermes/neowow-plan-models",
+    })
+
+    # The endpoint routinely takes 3–4s (observed: 3.1s / 3.9s on success) and
+    # network blips are intermittent (observed sequence 000/200/000/000/200).
+    # A 3s timeout was BELOW the normal response time, so healthy requests were
+    # being killed as "failures" → real Max users collapsed to the trial list.
+    # 8s covers the slow-but-fine case; one retry rides out a single blip. This
+    # only ever costs extra latency on the failure path — a fast success returns
+    # immediately.
+    _TIMEOUT_S = 8
+    _MAX_ATTEMPTS = 2  # initial + 1 retry
+    last_exc = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
+                body = resp.read().decode("utf-8", "replace")
+                data = json.loads(body)
+                models = data.get("models") or []
+                if not isinstance(models, list):
+                    return _neowow_coding_plan_default_models(), None
+                shaped: list[dict] = []
+                for m in models:
+                    mid = str(m).strip()
+                    if not mid:
+                        continue
+                    shaped.append({"id": mid, "label": mid})
+                # Default = deepseek-v4-flash when the plan includes it, else the
+                # first listed model (see _pick_neowow_default). Previously this took
+                # models[0] blindly, which made claude-sonnet-4.5 the default for
+                # plans that listed it first.
+                if shaped:
+                    _LAST_GOOD_PLAN_MODELS = shaped   # cache the genuine catalogue
+                    _persist_last_good_plan_models(shaped)  # survive restarts
+                default_model = _pick_neowow_default([s["id"] for s in shaped])
+                return shaped or _neowow_coding_plan_default_models(), default_model
+        except (urllib.error.URLError, socket.timeout, json.JSONDecodeError,
+                KeyError, ValueError) as exc:
+            last_exc = exc
+            if attempt + 1 < _MAX_ATTEMPTS:
+                # A single blip is common; one quick retry recovers most of them
+                # before we resort to the cached / fallback list.
+                import time as _time
+                _time.sleep(0.5)
+                continue
+
+    logger.debug(
+        "plan-models fetch failed after %d attempts; reusing last-good / fallback: %s",
+        _MAX_ATTEMPTS, last_exc,
+    )
+    # Still logged in (we had a JWT), just a transient blip — reuse the last
+    # GENUINE plan catalogue so the picker keeps the user's real model set.
+    # Prefer the in-memory copy, then the disk mirror (survives restart), and
+    # only when we've NEVER had a good fetch do we hand back the safe model.
+    if _LAST_GOOD_PLAN_MODELS:
+        return (_LAST_GOOD_PLAN_MODELS,
+                _pick_neowow_default([m["id"] for m in _LAST_GOOD_PLAN_MODELS]))
+    _disk = _load_last_good_plan_models_from_disk()
+    if _disk:
+        # Warm the in-memory cache too so subsequent calls this process skip disk.
+        _LAST_GOOD_PLAN_MODELS = _disk
+        return (_disk, _pick_neowow_default([m["id"] for m in _disk]))
+    return _neowow_coding_plan_default_models(), None
 
 
 def _build_setup_catalog(cfg: dict) -> dict:
@@ -1083,14 +1254,13 @@ def _build_setup_catalog(cfg: dict) -> dict:
         # config.yaml until they confirm overwrite.
         current_provider = _NEOWOW_CODING_PLAN_PROVIDER_ID
 
-    # Dynamic model list for the neowow-coding-plan card — replaces the
-    # static placeholder at catalog-build time. Cheap (1 HTTP round-trip,
-    # 3s budget) so we do it inline; if you find this dominating wizard
-    # latency, hoist to a TTL'd cache (TTLCache from api/helpers).
+    # Dynamic model list for the neowow-coding-plan card.  Status rendering is
+    # cache-only so a slow dashboard cannot leave the first screen blank for
+    # two 8-second attempts.  Explicit activation/live-model routes refresh it.
     neowow_models: list[dict] | None = None
     neowow_default_model: str | None = None
     if _NEOWOW_CODING_PLAN_PROVIDER_ID in _SUPPORTED_PROVIDER_SETUPS:
-        neowow_models, neowow_default_model = _fetch_neowow_plan_models()
+        neowow_models, neowow_default_model = _fetch_neowow_plan_models(cached_only=True)
 
     providers = []
     for provider_id, meta in _SUPPORTED_PROVIDER_SETUPS.items():
@@ -1172,6 +1342,7 @@ def get_onboarding_status() -> dict:
     workspaces = load_workspaces()
     last_workspace = get_last_workspace()
     available_models = get_available_models()
+    neowow_status = _safe_neowow_status()
 
     # HERMES_WEBUI_SKIP_ONBOARDING=1 lets hosting providers (e.g. Agent37) ship
     # a pre-configured instance without the wizard blocking the first load.
@@ -1206,7 +1377,9 @@ def get_onboarding_status() -> dict:
         _current_provider and _current_provider not in _SUPPORTED_PROVIDER_SETUPS
     )
 
-    config_auto_completed = config_exists and (
+    config_auto_completed = config_exists and not (
+        _neowow_only_enabled() and not settings.get("onboarding_completed")
+    ) and (
         bool(runtime.get("chat_ready"))
         or (_is_non_wizard_provider and bool(runtime.get("provider_configured")))
     )
@@ -1230,31 +1403,13 @@ def get_onboarding_status() -> dict:
         except Exception:
             logger.debug("Failed to persist onboarding_completed", exc_info=True)
 
-    # ── Phase β.10: Neowow auto-onboard ─────────────────────────────────
-    # When the build is locked to Coding Plan (HERMES_NEOWOW_ONLY=1) AND
-    # the user has already done the Neowow OAuth flow (JWT saved in
-    # ~/.hermes/webui/state.json via api.neowow.save_jwt), there's nothing
-    # for the user to choose — both fields the wizard exists to collect
-    # (provider + api_key) are uniquely determined by the build flag.
-    # Skip the wizard entirely, autowrite config.yaml + .env, and return
-    # completed=True so the SPA boots straight into chat.
-    #
-    # If JWT is missing, fall through to the normal wizard path — but in
-    # neowow-only mode, the wizard already shows a single "登录 Neowow"
-    # card (see _build_setup_catalog), so the user just clicks that and
-    # bounces through OAuth back into this same auto-complete path.
-    #
-    # IMPORTANT — DO NOT call apply_onboarding_setup() here. That helper
-    # ends with `return get_onboarding_status()`, which would recurse
-    # back into this branch and infinite-loop. Inline the file writes
-    # instead (same logic, just no terminal recursion).
-    # Phase β.11 widening: also overwrite when an EXISTING config picked a
-    # different provider before the build was locked. Without this, a user
-    # who had model.provider=anthropic from a pre-NEOWOW_ONLY install
-    # would stay on anthropic — the Settings panel filter drops every
-    # other provider card, leaving the user staring at an anthropic row
-    # they can't actually use (no key). Re-running auto-onboard rewrites
-    # config.yaml in that case.
+    # ── Legacy Neowow config repair ──────────────────────────────────────
+    # New users stay inside the canonical wizard after OAuth so the UI can
+    # show provider_syncing and require server-confirmed chat_ready.  This
+    # inline write path is retained only for installations already marked
+    # complete whose config is missing or uses a pre-fix provider shape.
+    # Do not call apply_onboarding_setup() here: it ends by calling this status
+    # function and would recurse.  The guards below make the repair idempotent.
     _existing_provider = str(
         (cfg.get("model", {}) or {}).get("provider", "")
             if isinstance(cfg.get("model"), dict) else ""
@@ -1296,10 +1451,13 @@ def get_onboarding_status() -> dict:
     # under us. Without this branch we get stuck: JWT in neowow.json,
     # settings says done, /api/models returns empty groups forever.
     _no_model_provider = not _existing_provider
-    _should_auto_onboard = _neowow_only_enabled() and (
-        not settings.get("onboarding_completed")
-        or _needs_neowow_overwrite
-        or _no_model_provider
+    # First-run users now stay in the canonical wizard and activate through
+    # /api/neowow/activate-provider, which can expose progress and errors.
+    # Retain this repair path only for already-completed legacy installations.
+    _should_auto_onboard = (
+        _neowow_only_enabled()
+        and bool(settings.get("onboarding_completed"))
+        and (_needs_neowow_overwrite or _no_model_provider)
     )
     if _should_auto_onboard:
         # ── Phase ζ.5 safety gate: bail BEFORE writing config.yaml if
@@ -1373,11 +1531,24 @@ def get_onboarding_status() -> dict:
                 logger.debug("Neowow auto-onboard failed; falling through to wizard",
                              exc_info=True)
 
+    completed = (bool(settings.get("onboarding_completed"))
+                 or auto_completed
+                 or config_auto_completed
+                 or neowow_auto_completed)
+    if neowow_auto_completed:
+        # Auto-onboard mutates config/env after the initial runtime snapshot.
+        # Re-evaluate readiness so this response never reports a stale
+        # provider_syncing state after the provider is already usable.
+        runtime = _status_from_runtime(get_config(), imports_ok)
+    experience = _experience_state(runtime, neowow_status, completed)
+
     return {
-        "completed": (bool(settings.get("onboarding_completed"))
-                      or auto_completed
-                      or config_auto_completed
-                      or neowow_auto_completed),
+        "completed": completed,
+        "deployment_mode": experience["deployment_mode"],
+        "stage": experience["stage"],
+        "chat_ready": experience["chat_ready"],
+        "available_actions": experience["available_actions"],
+        "experience": experience,
         "settings": {
             "default_model": settings.get("default_model") or DEFAULT_MODEL,
             "default_workspace": settings.get("default_workspace")
@@ -1395,7 +1566,7 @@ def get_onboarding_status() -> dict:
             **runtime,
         },
         "setup": _build_setup_catalog(cfg),
-        "neowow": _safe_neowow_status(),
+        "neowow": neowow_status,
         "workspaces": {
             "items": workspaces,
             "last": last_workspace,

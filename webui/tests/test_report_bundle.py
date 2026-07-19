@@ -11,7 +11,7 @@ import api.report_bundle as rb
 
 
 def test_sanitize_redacts_secrets_everywhere(monkeypatch):
-    monkeypatch.setattr(rb, "_collect_logs", lambda: {
+    monkeypatch.setattr(rb, "_collect_logs", lambda _include_logs=None: {
         "agent": {"tail": ["hello sk-ABCDEFGHIJKLMNOPQRSTUV world"], "bytes": 1, "truncated": False},
     })
     monkeypatch.setattr(rb, "_collect_config", lambda: {"base_url": "app.neowow.studio"})

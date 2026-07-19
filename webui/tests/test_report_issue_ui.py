@@ -16,3 +16,17 @@ def test_button_present_in_index():
 def test_handler_calls_endpoint():
     assert "__reportIssue" in PANELS
     assert "/api/report-issue" in PANELS
+
+
+def test_report_requires_preview_then_explicit_confirmation():
+    assert "预览上传内容" in PANELS
+    assert "confirm_upload: true" in PANELS
+    assert "include_logs" in PANELS
+
+
+def test_report_dialog_has_accessibility_contract():
+    assert "aria-modal" in PANELS
+    assert "aria-labelledby" in PANELS
+    assert "focusable" in PANELS
+    assert "e.key==='Escape'" in PANELS
+    assert "e.stopImmediatePropagation" in PANELS

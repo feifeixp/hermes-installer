@@ -76,6 +76,37 @@ def test_client_event_log_bounds_untrusted_values():
     assert len(sanitized["reason"]) == 160
 
 
+def test_product_funnel_event_keeps_only_bounded_non_content_fields():
+    sanitized = routes._sanitize_client_event_payload({
+        "event": "provider_activation_result",
+        "deployment_mode": "online",
+        "stage": "provider_syncing",
+        "result": "error",
+        "error_code": "plan_sync_failed",
+        "duration_ms": 4321.9,
+        "used_cache": True,
+        "action": "retry",
+        "bundle_size_bucket": "10-100kb",
+        "content": "user prompt must not survive",
+        "api_key": "sk-secret",
+        "workspace": "/private/user/project",
+    })
+
+    assert sanitized == {
+        "event": "provider_activation_result",
+        "deployment_mode": "online",
+        "stage": "provider_syncing",
+        "result": "error",
+        "error_code": "plan_sync_failed",
+        "duration_ms": 4321,
+        "used_cache": True,
+        "action": "retry",
+        "bundle_size_bucket": "10-100kb",
+    }
+    assert "prompt" not in repr(sanitized)
+    assert "sk-secret" not in repr(sanitized)
+
+
 def test_client_event_log_route_is_wired(monkeypatch):
     captured = {}
 

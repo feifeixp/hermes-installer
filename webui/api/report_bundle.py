@@ -18,6 +18,7 @@ import re
 import sys
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
 REPORT_ENDPOINT = "https://app.neowow.studio/api/client-report"
@@ -38,6 +39,11 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'Bearer\s+[A-Za-z0-9._-]{20,}'), 'Bearer ***REDACTED***'),
     (re.compile(r'neoToken=[^;\s]+'), 'neoToken=***REDACTED***'),
     (re.compile(r'\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b'), '<JWT_REDACTED>'),
+    (re.compile(r'\bgh[pousr]_[A-Za-z0-9]{20,}\b'), '<GITHUB_TOKEN_REDACTED>'),
+    (re.compile(r'\bAKIA[0-9A-Z]{16}\b'), '<AWS_ACCESS_KEY_REDACTED>'),
+    (re.compile(r'([?&](?:api[_-]?key|access[_-]?token|token|secret|password)=)[^&\s]+', re.IGNORECASE), r'\1***REDACTED***'),
+    (re.compile(r'(\b(?:cookie|set-cookie|x-api-key|client-secret|password)\s*[:=]\s*)[^\s,;]+', re.IGNORECASE), r'\1***REDACTED***'),
+    (re.compile(r'\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b', re.IGNORECASE), '<EMAIL_REDACTED>'),
 ]
 
 
@@ -115,10 +121,12 @@ def _read_tail(path: Path) -> dict:
         return {"tail": [f"<read error: {exc}>"], "bytes": 0, "truncated": False}
 
 
-def _collect_logs() -> dict:
+def _collect_logs(include_logs: list[str] | None = None) -> dict:
     d = _logs_dir()
-    out = {key: _read_tail(d / fn) for key, fn in _LOG_FILES.items()}
-    out["startup"] = _read_tail(_startup_log_path())
+    allowed = set([*_LOG_FILES.keys(), "startup"] if include_logs is None else include_logs)
+    out = {key: _read_tail(d / fn) for key, fn in _LOG_FILES.items() if key in allowed}
+    if "startup" in allowed:
+        out["startup"] = _read_tail(_startup_log_path())
     return out
 
 
@@ -161,7 +169,19 @@ def _collect_config() -> dict:
     }
 
 
-def build_report_bundle(description: str, health: dict | None = None) -> dict:
+def build_report_bundle(
+    description: str,
+    health: dict | None = None,
+    *,
+    context: dict | None = None,
+    include_logs: list[str] | None = None,
+) -> dict:
+    raw_context = context if isinstance(context, dict) else {}
+    safe_context = {
+        key: str(raw_context.get(key) or "")[:160]
+        for key in ("source", "stage", "error_code", "request_id")
+        if raw_context.get(key)
+    }
     bundle = {
         "kind": "user_report",
         "app": "neowow-studio",
@@ -169,11 +189,38 @@ def build_report_bundle(description: str, health: dict | None = None) -> dict:
         "platform": f"{sys.platform} {platform.release()}",
         "createdAt": _now_iso(),
         "description": (description or "")[:2000],
+        "context": safe_context,
         "health": health or {},
         "config": _collect_config(),
-        "logs": _collect_logs(),
+        "logs": _collect_logs(include_logs),
     }
     return _sanitize_bundle(bundle)
+
+
+def preview_report_bundle(bundle: dict) -> dict:
+    """Return metadata for explicit user consent without exposing log text."""
+    files = []
+    total_bytes = 0
+    for name, info in (bundle.get("logs") or {}).items():
+        if not isinstance(info, dict):
+            continue
+        size = int(info.get("bytes") or 0)
+        total_bytes += size
+        files.append({
+            "id": name,
+            "name": f"{name}.log",
+            "bytes": size,
+            "lines": len(info.get("tail") or []),
+            "truncated": bool(info.get("truncated")),
+        })
+    return {
+        "ok": True,
+        "preview": True,
+        "files": files,
+        "totalBytes": total_bytes,
+        "descriptionLength": len(str(bundle.get("description") or "")),
+        "redactionNotice": "将自动识别并脱敏常见敏感信息，请提交前确认。",
+    }
 
 
 # ── Upload ──────────────────────────────────────────────────────────────────
@@ -195,7 +242,12 @@ def _attach_jwt(headers: dict) -> None:
 
 
 def _pending_dir() -> Path:
-    return Path.home() / ".hermes" / "pending-reports"
+    try:
+        from api.profiles import get_active_hermes_home
+        return Path(get_active_hermes_home()).expanduser() / "pending-reports"
+    except Exception:
+        home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+        return Path(home).expanduser() / "pending-reports"
 
 
 def _save_pending(bundle: dict) -> str:
@@ -203,8 +255,12 @@ def _save_pending(bundle: dict) -> str:
         d = _pending_dir()
         d.mkdir(parents=True, exist_ok=True)
         stamp = _now_iso().replace(":", "-").replace(".", "-")
-        p = d / f"report-{stamp}.json"
+        p = d / f"report-{stamp}-{uuid.uuid4().hex[:8]}.json"
         p.write_text(json.dumps(bundle, indent=2, ensure_ascii=False), encoding="utf-8")
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
         return str(p)
     except Exception:
         return ""

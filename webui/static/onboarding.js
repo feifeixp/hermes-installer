@@ -1,4 +1,22 @@
-const ONBOARDING={status:null,step:0,steps:['login','plan','persona'],form:{provider:'neowow-coding-plan',workspace:'',model:'',password:'',apiKey:'',baseUrl:'',loginMethod:'',persona:'',personaContent:''},active:false,probe:{status:'idle',error:null,detail:'',models:null,probedKey:''},presets:null};
+const ONBOARDING={status:null,step:0,steps:['login','plan','persona'],form:{provider:'neowow-coding-plan',workspace:'',model:'',password:'',apiKey:'',baseUrl:'',loginMethod:'',persona:'',personaContent:''},active:false,viewStartedAt:0,authStartedAt:0,activation:{state:'idle',error:null},probe:{status:'idle',error:null,detail:'',models:null,probedKey:''},presets:null};
+
+function _onboardingExperience(){
+  return ((ONBOARDING.status||{}).experience)||{};
+}
+
+function _onboardingReportContext(extra){
+  const exp=_onboardingExperience();
+  const activationError=(ONBOARDING.activation&&ONBOARDING.activation.error)||{};
+  return {source:'onboarding',stage:exp.stage||((ONBOARDING.status||{}).stage)||'unknown',error_code:(extra&&extra.error_code)||activationError.error_code||'',request_id:(extra&&extra.request_id)||activationError.request_id||''};
+}
+
+function reportOnboardingIssue(extra){
+  if(typeof window.__reportIssue==='function'){
+    window.__reportIssue(_onboardingReportContext(extra));
+  }else if(typeof showToast==='function'){
+    showToast('问题报告功能暂不可用',3000,'warning');
+  }
+}
 
 // ── Onboarding base-URL probe (#1499) ───────────────────────────────────────
 // Probes <base_url>/models so the wizard can validate the configured endpoint
@@ -246,7 +264,14 @@ function toggleOnboardingApiKey(){
   _renderOnboardingBody();
 }
 async function startOnboardingLogin(){
+  const exp=_onboardingExperience();
+  if(exp.neowow_oauth_supported===false){
+    _setOnboardingNotice(exp.neowow_oauth_unavailable_reason||'Neowow 账号授权仅支持实际线上部署。','warn');
+    return;
+  }
   try{
+    ONBOARDING.authStartedAt=Date.now();
+    if(typeof recordProductEvent==='function')recordProductEvent('auth_start',{deployment_mode:exp.deployment_mode||'unknown'});
     const returnUrl=location.origin+'/api/neowow/oauth-callback';
     // Backend reads the camelCase `returnUrl` key (routes.py oauth/launch).
     // Sending snake_case `return_url` made it read "" → "Invalid return URL"
@@ -255,22 +280,78 @@ async function startOnboardingLogin(){
     if(r&&r.url&&!r.ok){ window.open(r.url,'_blank'); }
     _setOnboardingNotice(t('onboarding_login_waiting'),'info');
     _pollOnboardingLogin();
-  }catch(e){ _setOnboardingNotice(e.message||String(e),'warn'); }
+  }catch(e){
+    let detail=null;
+    try{detail=e&&e.body?JSON.parse(e.body):null;}catch(_){}
+    if(typeof recordProductEvent==='function')recordProductEvent('auth_result',{result:'error',error_code:(detail&&detail.error_code)||'auth_start_failed',duration_ms:ONBOARDING.authStartedAt?Date.now()-ONBOARDING.authStartedAt:0});
+    _setOnboardingNotice((detail&&detail.message)||e.message||String(e),'warn');
+  }
 }
 let _onbLoginTimer=null;
+
+async function _activateOnboardingProvider(){
+  if(ONBOARDING.activation.state==='syncing')return false;
+  ONBOARDING.activation={state:'syncing',error:null};
+  const activationStartedAt=Date.now();
+  const slowTimer=setTimeout(()=>{
+    if(ONBOARDING.activation.state==='syncing')_setOnboardingNotice('仍在同步套餐和模型，请稍候…','info');
+  },5000);
+  _setOnboardingNotice('登录成功，正在同步套餐和模型…','info');
+  _renderOnboardingBody();
+  try{
+    const activated=await api('/api/neowow/activate-provider',{method:'POST',body:'{}',timeoutMs:30000});
+    if(!activated||activated.chat_ready!==true){
+      throw new Error((activated&&activated.message)||'套餐或模型尚未完成同步');
+    }
+    const status=await api('/api/onboarding/status',{timeoutMs:30000});
+    ONBOARDING.status=status;
+    if(!status||status.chat_ready!==true){
+      throw new Error('服务端尚未确认聊天能力可用');
+    }
+    ONBOARDING.activation={state:'ready',error:null};
+    ONBOARDING.form.loginMethod='neowow';
+    _setOnboardingNotice('✓ 套餐和模型已同步，可以继续','success');
+    _renderOnboardingBody();
+    if(typeof recordProductEvent==='function')recordProductEvent('provider_activation_result',{result:'success',duration_ms:Date.now()-activationStartedAt,used_cache:!!activated.used_cache});
+    clearTimeout(slowTimer);
+    return true;
+  }catch(e){
+    let detail=null;
+    try{detail=e&&e.body?JSON.parse(e.body):null;}catch(_){}
+    ONBOARDING.activation={
+      state:'error',
+      error:{
+        error_code:(detail&&detail.error_code)||'provider_activation_failed',
+        message:(detail&&detail.message)||e.message||String(e),
+        request_id:(detail&&detail.request_id)||''
+      }
+    };
+    if(typeof recordProductEvent==='function')recordProductEvent('provider_activation_result',{result:'error',error_code:ONBOARDING.activation.error.error_code,duration_ms:Date.now()-activationStartedAt,used_cache:false});
+    clearTimeout(slowTimer);
+    _renderOnboardingBody();
+    return false;
+  }
+}
+
 async function _pollOnboardingLogin(){
   try{
     const s=await api('/api/neowow/status');
     if(s&&s.hasJwt){
+      if(ONBOARDING.authStartedAt&&typeof recordProductEvent==='function')recordProductEvent('auth_result',{result:'success',duration_ms:Date.now()-ONBOARDING.authStartedAt});
+      ONBOARDING.authStartedAt=0;
       ONBOARDING.form.loginMethod='neowow';
       ONBOARDING.status.neowow=s;
       if(_onbLoginTimer){clearTimeout(_onbLoginTimer);_onbLoginTimer=null;}
-      _renderOnboardingBody();
+      await _activateOnboardingProvider();
       return;
     }
   }catch(e){}
   _onbLoginTimer=setTimeout(_pollOnboardingLogin,3000);
 }
+
+window.addEventListener('neoSessionUpdated',()=>{
+  if(ONBOARDING.active) void _pollOnboardingLogin();
+});
 
 async function _loadOnboardingPresets(){
   try{
@@ -339,21 +420,79 @@ function _renderOnboardingBody(){
   const setup=ONBOARDING.status.setup||{};
   const nextBtn=$('onboardingNextBtn');
   const backBtn=$('onboardingBackBtn');
+  const skipBtn=$('onboardingSkipBtn');
   if(backBtn) backBtn.style.display=ONBOARDING.step>0?'':'none';
-  if(nextBtn) nextBtn.textContent=key==='persona'?t('onboarding_open'):t('onboarding_continue');
+  if(nextBtn){nextBtn.textContent=key==='persona'?t('onboarding_open'):t('onboarding_continue');nextBtn.disabled=false;}
+  if(skipBtn){
+    const providers=_getOnboardingSetupProviders();
+    const managedOnly=providers.length===1&&providers[0].id==='neowow-coding-plan';
+    skipBtn.style.display=managedOnly?'none':'';
+  }
 
   if(key==='login'){
     const ns=ONBOARDING.status.neowow||{};
     const signedIn=!!ns.hasJwt;
     const m=ONBOARDING.form.loginMethod;
+    const exp=_onboardingExperience();
+    const localUnavailable=exp.stage==='auth_unavailable_local'||exp.neowow_oauth_supported===false;
+    const chatReady=!!(ONBOARDING.status.chat_ready||exp.chat_ready);
+    const activation=ONBOARDING.activation||{state:'idle'};
+    const otherProviders=_getOnboardingSetupProviders().filter(p=>p.id!=='neowow-coding-plan');
+    const canUseApiKey=otherProviders.length>0;
     // Distinguish "session expired" (had a JWT, it lapsed) from a first-run
     // "please log in". jwtExpired comes from /api/neowow/status (set at boot in
     // neowow.js → window._neowowJwtExpired) or directly on the status object.
     const expired = !signedIn && (ns.jwtExpired || window._neowowJwtExpired);
-    _setOnboardingNotice(
-      signedIn ? t('onboarding_login_done')
-               : (expired ? '登录已过期，请重新登录以继续使用 AI 对话' : t('onboarding_login_required')),
-      signedIn ? 'success' : 'info');
+    if(activation.state==='error'){
+      _setOnboardingNotice((activation.error&&activation.error.message)||'套餐或模型同步失败，请重试','warn');
+    }else if(activation.state==='syncing'){
+      _setOnboardingNotice('登录成功，正在同步套餐和模型…','info');
+    }else if(localUnavailable){
+      _setOnboardingNotice(exp.neowow_oauth_unavailable_reason||'Neowow 账号授权仅支持实际线上部署。','warn');
+    }else{
+      _setOnboardingNotice(
+        chatReady ? '✓ 套餐和模型已同步，可以继续'
+                  : (signedIn ? '登录成功，等待同步套餐和模型'
+                              : (expired ? '登录已过期，请重新登录以继续使用 AI 对话' : t('onboarding_login_required'))),
+        chatReady ? 'success' : 'info');
+    }
+    if(nextBtn) nextBtn.disabled=(activation.state==='syncing'||activation.state==='error'||(localUnavailable&&m!=='apikey')||(signedIn&&!chatReady));
+
+    if(localUnavailable&&m!=='apikey'){
+      body.innerHTML=`
+        <div class="onboarding-welcome">本地运行环境</div>
+        <h3 class="onboarding-h">Neowow 登录需要线上部署</h3>
+        <p class="onboarding-sub">Neowow 账号授权仅支持实际线上部署，本地环境无法完成此登录。</p>
+        <a class="onboarding-cta" href="https://app.neowow.studio/account" target="_blank" rel="noreferrer" style="display:block;text-align:center;text-decoration:none">查看线上部署</a>
+        ${canUseApiKey?`<button class="onboarding-alt" id="onboardingApiKeyToggle" onclick="toggleOnboardingApiKey()">${t('onboarding_login_apikey')}</button>`:''}
+        <button class="onboarding-alt" type="button" onclick="reportOnboardingIssue({error_code:'auth_unavailable_local'})">报告问题</button>
+        <p class="onboarding-foot">当前页面不会发起无法完成的本地 OAuth 授权。</p>`;
+      return;
+    }
+
+    if(activation.state==='syncing'){
+      body.innerHTML=`
+        <div class="onboarding-welcome">账号已连接</div>
+        <h3 class="onboarding-h">正在准备聊天能力</h3>
+        <p class="onboarding-sub">正在获取套餐、同步模型并激活聊天能力。完成前不会进入主页。</p>
+        <div class="onboarding-feat"><span class="of-ic">✓</span><span>账号验证完成</span></div>
+        <div class="onboarding-feat"><span class="of-ic">⏳</span><span>正在同步套餐和模型</span></div>
+        <button class="onboarding-alt" type="button" onclick="reportOnboardingIssue({error_code:'provider_syncing'})">等待太久？报告问题</button>`;
+      return;
+    }
+
+    if(activation.state==='error'){
+      const err=activation.error||{};
+      body.innerHTML=`
+        <div class="onboarding-welcome">账号已连接</div>
+        <h3 class="onboarding-h">套餐或模型同步失败</h3>
+        <p class="onboarding-sub">${esc(err.message||'暂时无法完成模型配置，请重试。')}</p>
+        <button class="onboarding-cta" type="button" onclick="_activateOnboardingProvider()">重试同步</button>
+        <button class="onboarding-alt" type="button" onclick="startOnboardingLogin()">重新登录</button>
+        <button class="onboarding-alt" type="button" onclick="reportOnboardingIssue()">报告问题</button>`;
+      return;
+    }
+
     body.innerHTML=`
       <div class="onboarding-welcome">${t('onboarding_title')}</div>
       <h3 class="onboarding-h">${t('onboarding_login_heading')}</h3>
@@ -361,9 +500,10 @@ function _renderOnboardingBody(){
       <div class="onboarding-feat"><span class="of-ic">🧩</span><span>${t('onboarding_login_feat_coding')}</span></div>
       <div class="onboarding-feat"><span class="of-ic">🎨</span><span>${t('onboarding_login_feat_media')}</span></div>
       <div class="onboarding-feat"><span class="of-ic">🛒</span><span>${t('onboarding_login_feat_market')}</span></div>
-      <button class="onboarding-cta ${signedIn?'is-done':''}" id="onboardingLoginBtn" onclick="startOnboardingLogin()" ${signedIn?'disabled':''}>${signedIn?'✓ '+t('onboarding_login_done'):t('onboarding_login_btn')}</button>
-      <button class="onboarding-alt" id="onboardingApiKeyToggle" onclick="toggleOnboardingApiKey()">${t('onboarding_login_apikey')}</button>
+      <button class="onboarding-cta ${chatReady?'is-done':''}" id="onboardingLoginBtn" onclick="${signedIn?'_activateOnboardingProvider()':'startOnboardingLogin()'}" ${chatReady?'disabled':''}>${chatReady?'✓ 已就绪':signedIn?'同步套餐和模型':t('onboarding_login_btn')}</button>
+      ${canUseApiKey?`<button class="onboarding-alt" id="onboardingApiKeyToggle" onclick="toggleOnboardingApiKey()">${t('onboarding_login_apikey')}</button>`:''}
       <div id="onboardingApiKeyForm" style="display:${m==='apikey'?'block':'none'}">${_renderOnboardingApiKeyForm()}</div>
+      <button class="onboarding-alt" type="button" onclick="reportOnboardingIssue({error_code:'auth_help'})">登录遇到问题</button>
       <p class="onboarding-foot">${t('onboarding_login_required')}</p>`;
     return;
   }
@@ -444,9 +584,17 @@ function syncOnboardingProvider(value){
 }
 
 async function loadOnboardingWizard(){
+  const options=arguments[0];
+  const force=!!(options&&options.force);
+  if(ONBOARDING.active&&!force)return true;
   try{
-    const status=await api('/api/onboarding/status');
+    if(!window._onboardingStatusPromise){
+      window._onboardingStatusPromise=api('/api/onboarding/status',{timeoutMs:30000})
+        .finally(()=>{window._onboardingStatusPromise=null;});
+    }
+    const status=await window._onboardingStatusPromise;
     ONBOARDING.status=status;
+    window._onboardingCapabilities=(status&&status.experience)||{};
     const current=((status.setup||{}).current)||{};
     ONBOARDING.form.provider=current.provider||'neowow-coding-plan';
     ONBOARDING.form.workspace=(status.workspaces&&status.workspaces.last)||status.settings.default_workspace||'';
@@ -455,11 +603,14 @@ async function loadOnboardingWizard(){
     ONBOARDING.form.apiKey='';
     ONBOARDING.form.baseUrl=current.base_url||'';
     ONBOARDING.form.loginMethod=((status.neowow||{}).hasJwt)?'neowow':'';
+    ONBOARDING.activation={state:status.chat_ready?'ready':'idle',error:null};
     ONBOARDING.form.persona='';
     ONBOARDING.form.personaContent='';
     ONBOARDING.presets=null;
-    ONBOARDING.active=!status.completed;
+    ONBOARDING.active=force||!status.completed;
     if(!ONBOARDING.active) return false;
+    if(!ONBOARDING.viewStartedAt)ONBOARDING.viewStartedAt=Date.now();
+    if(typeof recordProductEvent==='function')recordProductEvent('onboarding_view',{deployment_mode:status.deployment_mode||'unknown',stage:status.stage||'unknown'});
     $('onboardingOverlay').style.display='flex';
     _renderOnboardingSteps();
     _renderOnboardingBody();
@@ -469,6 +620,7 @@ async function loadOnboardingWizard(){
     return false;
   }
 }
+window.loadOnboardingWizard=loadOnboardingWizard;
 
 function prevOnboardingStep(){
   if(ONBOARDING.step===0)return;
@@ -519,6 +671,9 @@ async function _finishOnboarding(){
   // API-key path: persist the provider config the user entered on step 1.
   if(ONBOARDING.form.loginMethod==='apikey'){
     await _saveOnboardingProviderSetup();
+  }else if(ONBOARDING.form.loginMethod==='neowow'&&!((ONBOARDING.status||{}).chat_ready)){
+    const ready=await _activateOnboardingProvider();
+    if(!ready) throw new Error('套餐或模型尚未完成同步');
   }
   await _saveOnboardingDefaults();
   // Apply the chosen preset persona to ~/.hermes/SOUL.md (skip when none/blank).
@@ -530,6 +685,7 @@ async function _finishOnboarding(){
   ONBOARDING.status=done;
   ONBOARDING.active=false;
   $('onboardingOverlay').style.display='none';
+  try{localStorage.setItem('hermes-first-message-started-at',String(ONBOARDING.viewStartedAt||Date.now()));}catch(_){}
   showToast(t('onboarding_complete'));
   await loadWorkspaceList();
   if(typeof renderSessionList==='function') await renderSessionList();
@@ -566,6 +722,10 @@ async function nextOnboardingStep(){
         _renderOnboardingSteps(); _renderOnboardingBody(); return;
       }
       if(!signedIn) throw new Error(t('onboarding_login_required'));
+      if(!((ONBOARDING.status||{}).chat_ready)){
+        const ready=await _activateOnboardingProvider();
+        if(!ready)return;
+      }
     }
     if(ONBOARDING.step===ONBOARDING.steps.length-1){
       await _finishOnboarding();

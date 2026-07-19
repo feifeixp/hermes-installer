@@ -3,6 +3,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `kimi-k3` to the Neodomain (`ga.neodomain.cn`) and Neowow Coding Plan model pickers, including the offline/cold-cache fallback catalog.
+- Added structured recovery actions to chat errors, including retry, re-login, model settings, plan details, and one-click issue reporting.
+- Added privacy-bounded onboarding, authentication, provider activation, first-message, recovery, and issue-report funnel events using the existing client-event field whitelist.
+
+### Changed
+
+- First-run login now uses the existing three-step onboarding dialog as the only blocking container. Local installs explain that Neowow OAuth requires an online deployment, while managed online deployments wait for server-confirmed `chat_ready` before entering the app.
+- Issue reports now show the log file list and redaction notice before upload, require explicit confirmation, support removing log attachments, and use the active Hermes profile for offline pending reports.
+
+### Security
+
+- Expanded user-report redaction for emails, GitHub tokens, AWS access keys, cookies, client secrets, passwords, and sensitive URL query parameters. Login-page reports are same-origin checked and rate limited.
+
 ## [v0.51.137] — 2026-05-25 — Release DI (stage-batch19 — 6-PR medium-risk batch)
 
 ### Added

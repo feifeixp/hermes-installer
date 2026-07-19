@@ -1190,7 +1190,12 @@ document.addEventListener('keydown',async e=>{
     // Close onboarding overlay if open (skip/dismiss the wizard)
     const onboardingOverlay=$('onboardingOverlay');
     if(onboardingOverlay&&onboardingOverlay.style.display!=='none'){
-      if(typeof skipOnboarding==='function') skipOnboarding();
+      // Required/managed onboarding deliberately hides its Skip button. Do
+      // not leave an undocumented keyboard path that marks it complete.
+      const skipBtn=$('onboardingSkipBtn');
+      const canSkip=skipBtn&&!skipBtn.disabled&&getComputedStyle(skipBtn).display!=='none';
+      if(canSkip&&typeof skipOnboarding==='function') skipOnboarding();
+      else e.preventDefault();
       return;
     }
     // Close settings panel if active

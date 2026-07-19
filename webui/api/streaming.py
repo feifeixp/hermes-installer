@@ -483,7 +483,44 @@ def _provider_error_payload(message: str, err_type: str, hint: str = '') -> dict
     """Build a bounded, redacted apperror payload with provider details."""
     _message = str(message or '')
     _safe_message = _redact_text(_message).strip() if _message else ''
-    payload: dict = {'message': _safe_message or _message, 'type': err_type}
+    ux = {
+        'auth_mismatch': {
+            'user_message': '\u767b\u5f55\u6216\u6a21\u578b\u51ed\u8bc1\u5df2\u5931\u6548\u3002',
+            'user_hint': '\u8bf7\u91cd\u65b0\u767b\u5f55\uff1b\u5982\u679c\u4f7f\u7528\u81ea\u5df1\u7684 API Key\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u670d\u52a1\u914d\u7f6e\u3002',
+            'available_actions': ['relogin', 'configure_provider', 'report_issue'],
+        },
+        'model_not_found': {
+            'user_message': '\u5f53\u524d\u6a21\u578b\u6682\u65f6\u4e0d\u53ef\u7528\u3002',
+            'user_hint': '\u8bf7\u9009\u62e9\u5176\u4ed6\u53ef\u7528\u6a21\u578b\u540e\u91cd\u8bd5\u3002',
+            'available_actions': ['switch_model', 'retry', 'report_issue'],
+        },
+        'quota_exhausted': {
+            'user_message': '\u5f53\u524d\u5957\u9910\u989d\u5ea6\u4e0d\u8db3\u3002',
+            'user_hint': '\u53ef\u4ee5\u67e5\u770b\u5957\u9910\uff0c\u6216\u5207\u6362\u5230\u4ecd\u53ef\u7528\u7684\u6a21\u578b\u3002',
+            'available_actions': ['view_plan', 'switch_model', 'report_issue'],
+        },
+        'rate_limit': {
+            'user_message': '\u8bf7\u6c42\u8fc7\u4e8e\u9891\u7e41\uff0c\u6a21\u578b\u6682\u65f6\u65e0\u6cd5\u54cd\u5e94\u3002',
+            'user_hint': '\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002',
+            'available_actions': ['retry', 'report_issue'],
+        },
+        'no_response': {
+            'user_message': '\u6a21\u578b\u6ca1\u6709\u8fd4\u56de\u6709\u6548\u5185\u5bb9\u3002',
+            'user_hint': '\u53ef\u4ee5\u91cd\u8bd5\uff1b\u5982\u679c\u6301\u7eed\u53d1\u751f\uff0c\u8bf7\u62a5\u544a\u95ee\u9898\u3002',
+            'available_actions': ['retry', 'switch_model', 'report_issue'],
+        },
+        'error': {
+            'user_message': '\u6682\u65f6\u65e0\u6cd5\u5b8c\u6210\u8fd9\u6b21\u8bf7\u6c42\u3002',
+            'user_hint': '\u8bf7\u91cd\u8bd5\uff1b\u5982\u679c\u6301\u7eed\u53d1\u751f\uff0c\u8bf7\u62a5\u544a\u95ee\u9898\u3002',
+            'available_actions': ['retry', 'report_issue'],
+        },
+    }.get(err_type, {})
+    payload: dict = {
+        'message': _safe_message or _message,
+        'type': err_type,
+        'error_code': err_type,
+        **ux,
+    }
     if hint:
         payload['hint'] = hint
     if _safe_message:
@@ -4951,9 +4988,15 @@ def _run_agent_streaming(
                         s.pending_started_at = None
                         _error_message = {
                             'role': 'assistant',
-                            'content': f'**{_err_label}:** {_error_payload.get("message") or _err_label}\n\n*{_err_hint}*',
+                            'content': (
+                                f'**{_err_label}:** '
+                                f'{_error_payload.get("user_message") or _error_payload.get("message") or _err_label}'
+                                f'\n\n*{_error_payload.get("user_hint") or _err_hint}*'
+                            ),
                             'timestamp': int(time.time()),
                             '_error': True,
+                            'error_code': _error_payload.get('error_code') or _err_type,
+                            'available_actions': _error_payload.get('available_actions') or [],
                         }
                         if _error_payload.get('details'):
                             _error_message['provider_details'] = _error_payload['details']
@@ -5821,9 +5864,16 @@ def _run_agent_streaming(
                 s.pending_started_at = None
                 _error_message = {
                     'role': 'assistant',
-                    'content': f'**{_exc_label}:** {_error_payload.get("message") or err_str}' + (f'\n\n*{_exc_hint}*' if _exc_hint else ''),
+                    'content': (
+                        f'**{_exc_label}:** '
+                        f'{_error_payload.get("user_message") or _error_payload.get("message") or err_str}'
+                        + (f'\n\n*{_error_payload.get("user_hint") or _exc_hint}*'
+                           if (_error_payload.get("user_hint") or _exc_hint) else '')
+                    ),
                     'timestamp': int(time.time()),
                     '_error': True,
+                    'error_code': _error_payload.get('error_code') or _exc_type,
+                    'available_actions': _error_payload.get('available_actions') or [],
                 }
                 if _error_payload.get('details'):
                     _error_message['provider_details'] = _error_payload['details']

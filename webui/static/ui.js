@@ -6041,6 +6041,41 @@ function _scrollAfterMessageRender(preserveScroll, scrollSnapshot){
   scrollToBottom();
 }
 
+function handleMessageRecoveryAction(action,button){
+  const segment=button&&button.closest?button.closest('[data-msg-idx]'):null;
+  const rawIdx=segment?Number(segment.dataset.msgIdx):-1;
+  const message=(rawIdx>=0&&S.messages&&S.messages[rawIdx])||{};
+  if(typeof recordProductEvent==='function')recordProductEvent('recovery_action_click',{error_code:message.error_code||'unknown_error',action:action||'unknown'});
+  if(action==='retry'){
+    if(typeof regenerateResponse==='function') return regenerateResponse(button);
+  }else if(action==='relogin'){
+    if(typeof window.neowowStartOAuth==='function') return window.neowowStartOAuth();
+  }else if(action==='switch_model'||action==='configure_provider'){
+    if(typeof switchPanel==='function') return switchPanel('settings');
+  }else if(action==='view_plan'){
+    window.open('https://app.neowow.studio/account','_blank','noopener,noreferrer');
+    return;
+  }else if(action==='report_issue'){
+    if(typeof window.__reportIssue==='function'){
+      return window.__reportIssue({
+        source:'chat_error',
+        stage:'recoverable_error',
+        error_code:message.error_code||'unknown_error'
+      });
+    }
+  }
+  if(typeof showToast==='function') showToast('此恢复操作暂不可用',3000,'warning');
+}
+
+function _messageRecoveryActionsHtml(message){
+  if(!message||!message._error)return '';
+  const labels={retry:'重试',relogin:'重新登录',switch_model:'切换模型',configure_provider:'检查模型配置',view_plan:'查看套餐',report_issue:'报告问题'};
+  const requested=Array.isArray(message.available_actions)?message.available_actions:[];
+  const primary=requested.find(a=>a!=='report_issue'&&labels[a]);
+  const actions=primary?[primary,'report_issue']:['report_issue'];
+  return `<div class="message-recovery-actions" role="group" aria-label="错误恢复操作">${actions.map(action=>`<button type="button" class="sm-btn" onclick="handleMessageRecoveryAction('${action}',this)">${labels[action]}</button>`).join('')}</div>`;
+}
+
 function renderMessages(options){
   const preserveScroll=!!(options&&options.preserveScroll);
   const scrollSnapshot=preserveScroll?_captureMessageScrollSnapshot():null;
@@ -6268,6 +6303,7 @@ function renderMessages(options){
       const summary=m.provider_details_label||'Provider details';
       bodyHtml += `<details class="provider-error-details"><summary>${esc(String(summary))}</summary><pre><code>${esc(String(m.provider_details))}</code></pre></details>`;
     }
+    if(!isUser) bodyHtml += _messageRecoveryActionsHtml(m);
     const statusHtml = (!isUser&&m._statusCard) ? _statusCardHtml(m._statusCard) : '';
     const isEditableUser=isUser&&rawIdx===lastUserRawIdx;
     const editBtn  = isEditableUser ? `<button class="msg-action-btn" title="${t('edit_message')}" onclick="editMessage(this)">${li('pencil',13)}</button>` : '';

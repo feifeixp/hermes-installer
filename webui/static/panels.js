@@ -8057,45 +8057,120 @@ async function _restoreCheckpoint(workspace,checkpoint,message){
 // ── 报告问题 / 上传日志 ─────────────────────────────────────────────────────
 // Bundles the current logs + diagnostics server-side and returns a BR-XXXXXX
 // ticket id the user can send to support. See webui/api/report_bundle.py.
-window.__reportIssue = async function () {
+window.__reportIssue = async function (context) {
+  const existing=document.getElementById('__reportIssueOverlay');
+  if(existing){const first=existing.querySelector('textarea,button');if(first)first.focus();return;}
+  const returnFocus=document.activeElement;
+  const reportContext=(context&&typeof context==='object')?{
+    source:String(context.source||'manual').slice(0,80),
+    stage:String(context.stage||'').slice(0,80),
+    error_code:String(context.error_code||'').slice(0,80),
+    request_id:String(context.request_id||'').slice(0,160)
+  }:{source:'manual'};
+  if(typeof recordProductEvent==='function')recordProductEvent('report_open',{source:reportContext.source,error_code:reportContext.error_code||''});
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  overlay.id='__reportIssueOverlay';
+  overlay.className='app-dialog-overlay report-issue-overlay';
+  overlay.style.display='flex';
+  overlay.setAttribute('aria-hidden','false');
   const box = document.createElement('div');
-  box.style.cssText = 'background:#fff;color:#111;border-radius:12px;padding:20px;width:min(440px,92vw);box-shadow:0 8px 30px rgba(0,0,0,.25);font-size:14px;';
+  box.className='app-dialog report-issue-dialog';
+  box.setAttribute('role','dialog');
+  box.setAttribute('aria-modal','true');
+  box.setAttribute('aria-labelledby','__riTitle');
+  box.setAttribute('aria-describedby','__riHelp');
   box.innerHTML = `
-    <h3 style="margin:0 0 8px;">报告问题</h3>
-    <p style="margin:0 0 10px;color:#6b7280;">描述一下卡在哪里（可选）。点击上传后，我们会自动<strong>脱敏</strong>你的日志用于排查。</p>
-    <textarea id="__riDesc" rows="3" style="width:100%;box-sizing:border-box;" placeholder="例如：点了发送就一直转圈"></textarea>
-    <div id="__riResult" style="margin:10px 0;min-height:20px;"></div>
-    <div style="display:flex;gap:8px;justify-content:flex-end;">
-      <button id="__riCancel" type="button">取消</button>
-      <button id="__riSend" type="button">上传日志</button>
+    <div class="app-dialog-header"><div><div class="app-dialog-title" id="__riTitle">报告问题</div></div><button class="app-dialog-close" id="__riClose" type="button" aria-label="关闭">×</button></div>
+    <p class="app-dialog-desc" id="__riHelp">描述一下卡在哪里。我们会先展示拟上传的日志清单，只有确认后才会上传。</p>
+    <textarea id="__riDesc" class="app-dialog-input report-issue-desc" rows="4" placeholder="例如：登录成功后一直停在同步模型"></textarea>
+    <div class="report-issue-preview" id="__riPreview" aria-live="polite"></div>
+    <div class="report-issue-result" id="__riResult" aria-live="polite"></div>
+    <div class="app-dialog-actions">
+      <button class="app-dialog-btn" id="__riCancel" type="button">取消</button>
+      <button class="app-dialog-btn confirm" id="__riSend" type="button">预览上传内容</button>
     </div>`;
   overlay.appendChild(box);
   document.body.appendChild(overlay);
-  const close = () => overlay.remove();
+  let preview=null;
+  const close = () => {
+    document.removeEventListener('keydown',onKeydown,true);
+    overlay.remove();
+    if(returnFocus&&returnFocus.focus) returnFocus.focus();
+  };
   box.querySelector('#__riCancel').onclick = close;
+  box.querySelector('#__riClose').onclick = close;
   overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  const focusable=()=>Array.from(box.querySelectorAll('button:not([disabled]),textarea:not([disabled]),input:not([disabled])'));
+  const onKeydown=(e)=>{
+    if(e.key==='Escape'){
+      e.preventDefault();
+      e.stopPropagation();
+      // This listener runs in the capture phase. Without stopping the event
+      // here, boot.js also sees Escape and treats it as "skip onboarding".
+      if(typeof e.stopImmediatePropagation==='function')e.stopImmediatePropagation();
+      close();return;
+    }
+    if(e.key!=='Tab')return;
+    const items=focusable();if(!items.length)return;
+    const first=items[0],last=items[items.length-1];
+    if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+    else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+  };
+  document.addEventListener('keydown',onKeydown,true);
+  const descInput=box.querySelector('#__riDesc');
+  const previewEl=box.querySelector('#__riPreview');
+  const result=box.querySelector('#__riResult');
+  const send=box.querySelector('#__riSend');
+  descInput.addEventListener('input',()=>{
+    if(!preview)return;
+    preview=null;previewEl.innerHTML='';result.textContent='描述已修改，请重新预览。';send.textContent='重新预览';
+  });
 
-  box.querySelector('#__riSend').onclick = async () => {
-    const desc = box.querySelector('#__riDesc').value || '';
-    const result = box.querySelector('#__riResult');
-    const send = box.querySelector('#__riSend');
-    send.disabled = true; result.textContent = '正在上传…';
+  send.onclick = async () => {
+    const desc = descInput.value || '';
+    send.disabled = true;
     try {
-      const data = await api('/api/report-issue', { method: 'POST', body: JSON.stringify({ description: desc }) });
+      if(!preview){
+        result.textContent='正在生成预览…';
+        const data=await api('/api/report-issue',{method:'POST',body:JSON.stringify({description:desc,context:reportContext})});
+        if(!data||!data.preview)throw new Error('无法生成上传预览');
+        preview=data;
+        const files=Array.isArray(data.files)?data.files:[];
+        previewEl.innerHTML=`<div class="report-issue-notice">${esc(data.redactionNotice||'请确认以下上传内容。')}</div><div class="report-issue-files">${files.map(f=>`<label><input type="checkbox" data-log-id="${esc(f.id)}" checked> <span>${esc(f.name)}</span><small>${Number(f.lines||0)} 行 · ${Math.ceil(Number(f.bytes||0)/1024)} KB${f.truncated?' · 已截取尾部':''}</small></label>`).join('')||'<p>没有找到可上传的日志，仍可提交诊断摘要。</p>'}</div>`;
+        result.textContent='请检查日志清单，确认后再上传。';
+        send.textContent='确认并上传';
+        return;
+      }
+      result.textContent='正在上传…';
+      const includeLogs=Array.from(previewEl.querySelectorAll('input[data-log-id]:checked')).map(el=>el.dataset.logId);
+      const data = await api('/api/report-issue', { method: 'POST', body: JSON.stringify({ description: desc, context: reportContext, include_logs: includeLogs, confirm_upload: true }) });
       if (data && data.ok && data.reportId) {
-        result.innerHTML = '已上传，工单号 <strong style="font-family:monospace;">' + data.reportId +
-          '</strong>。把这个编号发给客服即可。';
+        result.innerHTML = '已上传，工单号 <strong class="report-issue-id">' + esc(data.reportId) + '</strong>。把这个编号发给客服即可。';
+        send.style.display='none';
+        box.querySelector('#__riCancel').textContent='完成';
+        if(typeof recordProductEvent==='function')recordProductEvent('report_result',{result:'success',bundle_size_bucket:_reportSizeBucket(preview&&preview.totalBytes)});
       } else if (data && data.saved) {
-        result.innerHTML = '上传失败，日志已保存到本地：<code>' + data.saved + '</code>，请把该文件发给客服。';
+        result.innerHTML = '上传失败，报告已保存到本地：<code>' + esc(data.saved) + '</code>，请把该文件发给客服。';
+        send.textContent='重试上传';
+        if(typeof recordProductEvent==='function')recordProductEvent('report_result',{result:'saved_local',error_code:data.error_code||'upload_failed',bundle_size_bucket:_reportSizeBucket(preview&&preview.totalBytes)});
       } else {
         result.textContent = '上传失败，请稍后重试。';
+        if(typeof recordProductEvent==='function')recordProductEvent('report_result',{result:'error',error_code:(data&&data.error_code)||'upload_failed',bundle_size_bucket:_reportSizeBucket(preview&&preview.totalBytes)});
       }
     } catch (e) {
       result.textContent = '上传失败：' + (e && e.message ? e.message : e);
+      if(preview&&typeof recordProductEvent==='function')recordProductEvent('report_result',{result:'error',error_code:'request_failed',bundle_size_bucket:_reportSizeBucket(preview.totalBytes)});
     } finally {
       send.disabled = false;
     }
   };
+  requestAnimationFrame(()=>descInput.focus());
 };
+
+function _reportSizeBucket(bytes){
+  const size=Number(bytes)||0;
+  if(size<10*1024)return '<10kb';
+  if(size<100*1024)return '10-100kb';
+  if(size<1024*1024)return '100kb-1mb';
+  return '>=1mb';
+}

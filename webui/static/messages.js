@@ -1710,6 +1710,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
       _terminalStateReached=true;
       if(_persistTimer){clearTimeout(_persistTimer);_persistTimer=null;}
       const _doneData=JSON.parse(e.data);
+      if(typeof window.recordFirstMessageResult==='function')window.recordFirstMessageResult('success','');
       const _finishDone=()=>{
         // Bug A fix: cancel any pending rAF and mark stream finalized before
         // the DOM is settled by renderMessages, so no trailing token/reasoning rAF
@@ -2043,6 +2044,10 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
       _clearOwnerInflightState();
       _clearApprovalForOwner();
       _clearClarifyForOwner('terminal');
+      try{
+        const firstError=JSON.parse(e.data||'{}');
+        if(typeof window.recordFirstMessageResult==='function')window.recordFirstMessageResult('error',firstError.error_code||firstError.type||'unknown_error');
+      }catch(_){}
       if(S.session&&S.session.session_id===activeSid){
         S.activeStreamId=null;
         clearLiveToolCards();if(!assistantText)removeThinking();
@@ -2056,12 +2061,14 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
           const isInterrupted=d.type==='interrupted';
           const isNoResponse=d.type==='no_response'||d.type==='silent_failure';
           const label=isCancelled?'Task cancelled':isInterrupted?'Response interrupted':isQuotaExhausted?'Out of credits':isRateLimit?'Rate limit reached':isAuthMismatch?(typeof t==='function'?t('provider_mismatch_label'):'Provider mismatch'):isModelNotFound?(typeof t==='function'?t('model_not_found_label'):'Model not found'):isNoResponse?'No response from provider':'Error';
-          const hint=d.hint?`\n\n*${d.hint}*`:'';
+          const userMessage=d.user_message||d.message;
+          const userHint=d.user_hint||d.hint||'';
+          const hint=userHint?`\n\n*${userHint}*`:'';
           const details=d.details?String(d.details).replace(/```/g,'`\u200b``'):'';
           const detailsLabel=isCancelled?'Cancellation details':isInterrupted?'Interruption details':undefined;
-          S.messages.push({role:'assistant',content:`**${label}:** ${d.message}${hint}`,provider_details:details,provider_details_label:detailsLabel});
+          S.messages.push({role:'assistant',content:`**${label}:** ${userMessage}${hint}`,provider_details:details,provider_details_label:detailsLabel,_error:!isCancelled,error_code:d.error_code||d.type||'error',available_actions:Array.isArray(d.available_actions)?d.available_actions:[]});
         }catch(_){
-          S.messages.push({role:'assistant',content:'**Error:** An error occurred. Check server logs.'});
+          S.messages.push({role:'assistant',content:'**请求失败：** 暂时无法完成这次请求。\n\n*请重试；如果持续发生，请报告问题。*',_error:true,error_code:'unknown_error',available_actions:['retry','report_issue']});
         }
         _markSessionViewed(activeSid, S.messages.length);
         renderMessages({preserveScroll:true});

@@ -129,12 +129,22 @@ _CLIENT_EVENT_MAX_BODY_BYTES = 4 * 1024
 _CLIENT_EVENT_ALLOWED_FIELDS = {
     "event": 64,
     "source": 80,
+    "deployment_mode": 32,
+    "stage": 64,
+    "result": 32,
+    "error_code": 80,
+    "action": 64,
+    "bundle_size_bucket": 32,
     "session_id": 128,
     "stream_id": 128,
     "visibility_state": 32,
     "url_path": 256,
     "reason": 160,
 }
+_REPORT_ISSUE_RATE_LIMIT: dict[str, list[float]] = {}
+_REPORT_ISSUE_RATE_LIMIT_LOCK = threading.Lock()
+_REPORT_ISSUE_RATE_LIMIT_WINDOW_SECONDS = 10 * 60
+_REPORT_ISSUE_RATE_LIMIT_MAX = 8
 
 
 def _session_field(session, field, default=None):
@@ -1396,7 +1406,12 @@ def _check_csrf(handler) -> bool:
     origin = handler.headers.get("Origin", "")
     referer = handler.headers.get("Referer", "")
     host = handler.headers.get("Host", "")
+    unauthenticated_report = bool(
+        getattr(handler, "_hermes_unauthenticated_report", False)
+    )
     if not _is_browser_unsafe_request(handler):
+        if unauthenticated_report:
+            return _set_csrf_failure_reason(handler, "origin_mismatch")
         return True  # non-browser clients (curl, MCP, agent) have no Origin
     target = origin or referer
     # Extract host:port from origin/referer
@@ -1496,6 +1511,20 @@ def _client_event_rate_limited(handler, *, now: float | None = None) -> bool:
     return False
 
 
+def _report_issue_rate_limited(handler, *, now: float | None = None) -> bool:
+    now = time.time() if now is None else now
+    key = _client_ip_for_rate_limit(handler)
+    cutoff = now - _REPORT_ISSUE_RATE_LIMIT_WINDOW_SECONDS
+    with _REPORT_ISSUE_RATE_LIMIT_LOCK:
+        timestamps = [ts for ts in _REPORT_ISSUE_RATE_LIMIT.get(key, []) if ts >= cutoff]
+        if len(timestamps) >= _REPORT_ISSUE_RATE_LIMIT_MAX:
+            _REPORT_ISSUE_RATE_LIMIT[key] = timestamps
+            return True
+        timestamps.append(now)
+        _REPORT_ISSUE_RATE_LIMIT[key] = timestamps
+    return False
+
+
 def _send_no_content(handler, status: int = 204) -> bool:
     handler.send_response(status)
     handler.send_header("Content-Length", "0")
@@ -1591,6 +1620,12 @@ def _sanitize_client_event_payload(payload: dict | None) -> dict:
             sanitized["online"] = False
     if "event" not in sanitized:
         sanitized["event"] = "unknown"
+    duration_ms = payload.get("duration_ms")
+    if isinstance(duration_ms, (int, float)) and not isinstance(duration_ms, bool):
+        sanitized["duration_ms"] = max(0, min(int(duration_ms), 24 * 60 * 60 * 1000))
+    used_cache = payload.get("used_cache")
+    if isinstance(used_cache, bool):
+        sanitized["used_cache"] = used_cache
     return sanitized
 
 
@@ -3621,10 +3656,32 @@ def _health_snapshot() -> dict:
 
 
 def _handle_report_issue(handler, body) -> bool:
-    """POST /api/report-issue — build + upload the user diagnostic bundle."""
+    """POST /api/report-issue — preview, then explicitly upload diagnostics."""
+    if _report_issue_rate_limited(handler):
+        return j(handler, {
+            "ok": False,
+            "error_code": "report_rate_limited",
+            "message": "问题报告请求过于频繁，请稍后再试。",
+        }, status=429)
     description = str((body or {}).get("description") or "")
-    from api.report_bundle import build_report_bundle, upload_report
-    bundle = build_report_bundle(description, health=_health_snapshot())
+    context = (body or {}).get("context")
+    include_logs = (body or {}).get("include_logs")
+    if not isinstance(include_logs, list):
+        include_logs = None
+    else:
+        include_logs = [str(item) for item in include_logs[:10]]
+    from api.report_bundle import build_report_bundle, preview_report_bundle, upload_report
+    bundle = build_report_bundle(
+        description,
+        health=_health_snapshot(),
+        context=context,
+        include_logs=include_logs,
+    )
+    # Consent is an exact JSON boolean contract.  Strings such as "true" or
+    # "false" must stay on the preview path rather than being treated as an
+    # upload authorization merely because they are non-empty.
+    if (body or {}).get("confirm_upload") is not True:
+        return j(handler, preview_report_bundle(bundle), status=200)
     result = upload_report(bundle)
     return j(handler, result, status=200)
 
@@ -5430,7 +5487,18 @@ def handle_post(handler, parsed) -> bool:
     # is intentionally unauthenticated for browser-generated violation reports.
     if diag:
         diag.stage("csrf")
-    if not _csrf_exempt_path(parsed.path) and not _check_csrf(handler):
+    csrf_ok = _csrf_exempt_path(parsed.path) or _check_csrf(handler)
+    if (
+        not csrf_ok
+        and parsed.path == "/api/report-issue"
+        and getattr(handler, _CSRF_FAILURE_ATTR, "") == "token_mismatch"
+    ):
+        # A login-page report has no authenticated session token yet. The
+        # preceding _check_csrf call already verified same-origin headers and
+        # failed only at the token step, so allow this one bounded endpoint.
+        from api.auth import get_auth_mode
+        csrf_ok = get_auth_mode() == "neodomain"
+    if not csrf_ok:
         try:
             return j(handler, {"error": _csrf_rejection_error(handler)}, status=403)
         finally:
@@ -6453,7 +6521,7 @@ def handle_post(handler, parsed) -> bool:
         if len(version) > 32 or not re.fullmatch(r"v\d+\.\d+\.\d+", version):
             bad(handler, "version must be in v<MAJOR>.<MINOR>.<PATCH> format", status=400)
             return True
-        from api.config import load_settings, save_settings
+        from api.config import load_settings
         try:
             settings = load_settings()
             settings["installer_skipped_version"] = version
@@ -7255,18 +7323,36 @@ def handle_post(handler, parsed) -> bool:
             from api.onboarding import (
                 _NEOWOW_CODING_PLAN_PROVIDER_ID,
                 _fetch_neowow_plan_models,
-                apply_onboarding_setup,
             )
             models, default_model = _fetch_neowow_plan_models()
             model = default_model or (models[0]["id"] if models else "deepseek-v4-flash")
-            apply_onboarding_setup({
+            status = apply_onboarding_setup({
                 "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
                 "model": model,
+                # This endpoint is the explicit managed-provider activation
+                # action after login.  A stale/non-canonical config must not
+                # trap the user in a permanent config_exists retry loop.
+                "confirm_overwrite": True,
             })
+            chat_ready = bool(
+                (status or {}).get("chat_ready")
+                or ((status or {}).get("system") or {}).get("chat_ready")
+            )
+            if not chat_ready:
+                return j(handler, {
+                    "ok": False,
+                    "error_code": "provider_activation_incomplete",
+                    "message": "登录成功，但套餐或模型尚未完成同步。请重试。",
+                    "chat_ready": False,
+                    "stage": (status or {}).get("stage") or "provider_error",
+                    "available_actions": ["retry", "relogin", "report_issue"],
+                }, status=409)
             return j(handler, {
                 "ok": True,
                 "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
                 "model": model,
+                "chat_ready": True,
+                "stage": "ready",
             })
         except ValueError as e:
             return bad(handler, str(e))
@@ -7280,6 +7366,16 @@ def handle_post(handler, parsed) -> bool:
     # default browser at the dashboard's /api/oauth/start URL.
     if parsed.path == "/api/neowow/oauth/launch":
         try:
+            from api.onboarding import get_onboarding_capabilities
+            capabilities = get_onboarding_capabilities()
+            if not capabilities["neowow_oauth_supported"]:
+                return j(handler, {
+                    "ok": False,
+                    "error_code": "auth_unavailable_local",
+                    "message": capabilities["neowow_oauth_unavailable_reason"],
+                    "deployment_mode": capabilities["deployment_mode"],
+                    "available_actions": ["deployment_help", "report_issue"],
+                }, status=409)
             from api.neowow import launch_oauth
             # Accept both camelCase (neowow.js) and snake_case (older onboarding)
             # so a key-casing mismatch can't silently send "" → "Invalid return URL".
@@ -9001,6 +9097,42 @@ def _handle_live_models(handler, parsed):
         def _finish(payload: dict):
             _set_cached_live_models(cache_key, payload)
             return j(handler, payload)
+
+        # ── neowow-coding-plan live plan fetch ─────────────────────────────
+        # The Coding Plan's model catalogue is decided remotely by the user's
+        # plan at app.neowow.studio/api/me/plan — NOT by any static list in
+        # hermes_cli or a local config file. provider_model_ids() has no entry
+        # for it, and the disk-cached picker path keys its fingerprint off local
+        # config.yaml / auth.json, so a model added to the plan on the server
+        # never invalidates that cache and never appears in the picker until a
+        # manual cache wipe. Route it through the live plan fetch here so it
+        # rides the existing 60s TTL cache (_LIVE_MODELS_CACHE): a plan change
+        # on the server surfaces in the picker within one TTL window, for every
+        # user, with no manual refresh. Failure falls back to the last-good /
+        # safe list inside _fetch_neowow_plan_models() — never raises.
+        if provider == "neowow-coding-plan":
+            try:
+                from api.onboarding import _fetch_neowow_plan_models
+                _plan_models, _plan_default = _fetch_neowow_plan_models()
+                _models = [
+                    {"id": m["id"], "label": m.get("label") or m["id"]}
+                    for m in (_plan_models or [])
+                    if isinstance(m, dict) and m.get("id")
+                ]
+                payload = {
+                    "provider": provider,
+                    "models": _models,
+                    "count": len(_models),
+                }
+                if _plan_default:
+                    payload["default"] = _plan_default
+                return _finish(payload)
+            except Exception as _plan_err:
+                logger.debug(
+                    "neowow-coding-plan live plan fetch failed; "
+                    "falling through to generic resolver: %s",
+                    _plan_err,
+                )
 
         # Delegate to the agent's live-fetch + fallback resolver.
         # provider_model_ids() tries live endpoints first and falls back to
