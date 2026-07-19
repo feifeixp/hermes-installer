@@ -655,6 +655,19 @@ def check_auth(handler, parsed) -> bool:
     if parsed.path in PUBLIC_PATHS or parsed.path.startswith('/static/') or parsed.path.startswith('/session/static/'):
         return True
 
+    # Login/onboarding must be able to open a bounded diagnostic report before
+    # a Neodomain cookie exists.  routes.py still requires a browser
+    # same-origin Origin/Referer and applies endpoint-specific rate limiting;
+    # marking the request here lets that stricter route-level gate distinguish
+    # it from authenticated reports and reject curl-style anonymous callers.
+    if (
+        mode == 'neodomain'
+        and parsed.path == '/api/report-issue'
+        and getattr(handler, 'command', '') == 'POST'
+    ):
+        setattr(handler, '_hermes_unauthenticated_report', True)
+        return True
+
     # ── Neodomain mode (chat.neowow.studio cloud deployment) ──────────
     if mode == 'neodomain':
         neo_jwt = parse_neo_cookie(handler)

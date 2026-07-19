@@ -1108,7 +1108,7 @@ _PROVIDER_MODELS = {
     # models under their canonical IDs (no provider/ prefix). New users
     # of neowow.studio should start here — their points / membership
     # already cover usage through this gateway.
-    # Mirror of the dashboard /api/me/plan catalog (snapshot 2026-06-12 —
+    # Mirror of the dashboard /api/me/plan catalog (snapshot 2026-07-19 —
     # taken from the auto-synced cfg_model_prices, which the dashboard now
     # refreshes hourly from ga.neodomain.cn /v1/models). ga REMOVED the whole
     # gpt-* family + gemini-3.5-flash / gemini-3-pro-preview, and added the
@@ -1137,8 +1137,10 @@ _PROVIDER_MODELS = {
         # ByteDance Doubao (chat — the seedance/seedream media families
         # live on story.neodomain.cn and must never appear here)
         {"id": "doubao-seed-2-0-pro-260215",      "label": "Doubao Seed 2.0 Pro"},
+        {"id": "doubao-seed-2-1-pro-260628",      "label": "Doubao Seed 2.1 Pro"},
         # Zhipu / Moonshot / MiniMax / Qwen
         {"id": "glm-5",                           "label": "GLM-5"},
+        {"id": "kimi-k3",                         "label": "Kimi K3"},
         {"id": "kimi-k2.6",                       "label": "Kimi K2.6"},
         {"id": "kimi-k2.5",                       "label": "Kimi K2.5"},
         {"id": "MiniMax-M2.7",                    "label": "MiniMax M2.7"},
@@ -2499,7 +2501,16 @@ def _current_webui_version() -> str | None:
 # gemini-3.5-flash / gemini-3-pro-preview); catalog re-snapshotted from the
 # auto-synced dashboard list. Old caches still show GPT for up to 24h — bump
 # forces an immediate rebuild on upgrade.
-_MODELS_CACHE_SCHEMA_VERSION = 5
+# Bumped 5→6 (2026-07-06): ga.neodomain.cn added doubao-seed-2-1-pro-260628
+# (Doubao Seed 2.1 Pro) to the coding-plan catalogue. The disk cache's
+# invalidation fingerprint only tracks LOCAL files (config.yaml / auth.json /
+# baked _PROVIDER_MODELS), so a server-side model addition never invalidates it
+# and the new model stays hidden for up to the 24h TTL. Bumping the schema
+# version forces every user's models_cache.json to rebuild on upgrade so 2.1
+# appears immediately instead of after 24h.
+# Bumped 6→7 (2026-07-19): ga.neodomain.cn added kimi-k3. Rebuild existing
+# model caches on upgrade so the new model appears immediately.
+_MODELS_CACHE_SCHEMA_VERSION = 7
 
 
 _models_cache_path = STATE_DIR / "models_cache.json"

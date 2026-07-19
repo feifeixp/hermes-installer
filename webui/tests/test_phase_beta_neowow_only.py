@@ -174,7 +174,7 @@ class TestNeowowAutoOnboard:
         monkeypatch.setattr(
             ob_mod,
             "_fetch_neowow_plan_models",
-            lambda: ([{"id": "deepseek-chat", "label": "DeepSeek Chat"}], "deepseek-chat"),
+            lambda **_kwargs: ([{"id": "deepseek-chat", "label": "DeepSeek Chat"}], "deepseek-chat"),
         )
         # Fresh in-memory settings store. save_settings writes back into
         # this dict so the test can still observe the side effect; the
@@ -188,23 +188,19 @@ class TestNeowowAutoOnboard:
         )
         return ob_mod
 
-    def test_flag_on_with_jwt_auto_completes(self, monkeypatch, tmp_path):
+    def test_flag_on_with_jwt_stays_in_canonical_wizard(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_NEOWOW_ONLY", "1")
         monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
         ob_mod = self._stub_writes(monkeypatch, tmp_path)
         import api.neowow as nw
         monkeypatch.setattr(nw, "get_jwt", lambda: "eyJfake.payload.sig")
+        monkeypatch.setattr(nw, "get_status", lambda: {"hasJwt": True, "points": None})
         status = ob_mod.get_onboarding_status()
-        assert status["completed"] is True
+        assert status["completed"] is False
+        assert status["stage"] == "provider_syncing"
 
-    def test_auto_onboard_writes_canonical_runtime_provider(self, monkeypatch, tmp_path):
-        """Phase ζ: auto-onboard writes provider='neowow-coding-plan' to
-        config.yaml. This name is now a real entry in hermes_cli's
-        PROVIDER_REGISTRY (injected at install time by
-        docker/patch_hermes_agent.py), so the agent CLI can dispatch it
-        natively without going through openai-compat aliases. Env var
-        is NEOWOW_CODING_PLAN_API_KEY (canonical), with OPENAI_API_KEY
-        accepted as a fallback for backward-compat with β.14/.16."""
+    def test_first_run_status_does_not_write_provider_config(self, monkeypatch, tmp_path):
+        """A JWT alone enters provider_syncing; explicit activation owns writes."""
         monkeypatch.setenv("HERMES_NEOWOW_ONLY", "1")
         monkeypatch.setenv("HERMES_WEBUI_STATE_DIR", str(tmp_path))
         ob_mod = self._stub_writes(monkeypatch, tmp_path)
@@ -216,16 +212,12 @@ class TestNeowowAutoOnboard:
         monkeypatch.setattr(ob_mod, "_save_yaml_config", lambda p, c: written_cfg.update(c))
         monkeypatch.setattr(ob_mod, "_write_env_file",   lambda p, d: written_env.update(d))
         monkeypatch.setattr(nw, "get_jwt", lambda: "eyJfake.payload.sig")
+        monkeypatch.setattr(nw, "get_status", lambda: {"hasJwt": True, "points": None})
 
         status = ob_mod.get_onboarding_status()
-        assert status["completed"] is True
-        # config.yaml has the canonical provider name + our proxy URL
-        assert written_cfg.get("model", {}).get("provider") == "neowow-coding-plan"
-        assert written_cfg.get("model", {}).get("base_url") == "https://app.neowow.studio/api/me"
-        # .env has the JWT under the canonical name
-        assert written_env.get("NEOWOW_CODING_PLAN_API_KEY") == "eyJfake.payload.sig"
-        # And NOT under either of the old broken names
-        assert "NEOWOW_TOKEN" not in written_env
+        assert status["completed"] is False
+        assert written_cfg == {}
+        assert written_env == {}
 
     def test_auto_fix_bogus_neowow_provider_in_existing_config(self, monkeypatch, tmp_path):
         """When config.yaml has a non-canonical provider value (e.g. the

@@ -30,7 +30,11 @@ hermes-webui:7891   (hermes-installer image — Hermes Agent + WebUI 同进程)
 2. WebUI 检测无 `neoToken` cookie → 302 跳到 `https://app.neowow.studio/api/oauth/start?return=...`
 3. Dashboard 完成 Neodomain OAuth 流程
 4. Dashboard 把 `neoToken` cookie 写到 `Domain=.neowow.studio`（**两个子域都能看见**）
-5. Dashboard 重定向回 `https://chat.neowow.studio` → 这次 cookie 已就位 → 进入 chat 界面
+5. Dashboard 重定向回 `https://chat.neowow.studio` → 统一引导页同步套餐和模型，并显式激活 Coding Plan
+6. 服务端确认 `chat_ready=true` 后才进入 chat；账号或套餐同步失败时，引导页保留并给出重试/报告问题入口
+
+> OAuth 授权只在真实的 `HERMES_WEBUI_AUTH_MODE=neodomain` 线上部署中开放。
+> 本地运行或仅设置通用 deployment mode 不会伪装成可登录环境。
 
 ---
 

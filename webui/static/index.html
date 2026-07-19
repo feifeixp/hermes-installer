@@ -429,6 +429,8 @@
         <label class="logs-check-row"><input id="logsAutoRefresh" type="checkbox" checked onchange="_syncLogsAutoRefresh()"><span data-i18n="logs_auto_refresh">Auto-refresh (5s)</span></label>
         <label class="logs-check-row"><input id="logsWrap" type="checkbox" onchange="_syncLogsWrap()"><span data-i18n="logs_wrap">Wrap lines</span></label>
         <button type="button" class="logs-copy" id="logsCopyAll" onclick="copyLogsAll()" data-i18n="logs_copy_all">Copy all</button>
+        <button id="reportIssueBtn" type="button" onclick="window.__reportIssue()"
+                style="margin-left:auto;">报告问题</button>
       </div>
     </div>
     <!-- Backup panel (content renders in .main via iframe) -->
@@ -2103,32 +2105,6 @@ function toggleNeuralOffice(){
     </div>
   </div>
 </div>
-<!-- ═══════════════════════════════════════════════════════════════════
-     First-launch onboarding overlay.
-     Shown (display:flex) by neowow.js when boot resolves with
-     hasJwt=false. Hidden again after login + provider activation.
-     z-index 99998 — sits below the boot overlay (99999) so the boot
-     overlay always wins during startup. Once the boot overlay clears
-     this takes over the screen if the user is not logged in.
-     ═══════════════════════════════════════════════════════════════ -->
-<div id="neoLoginOverlay" style="display:none;position:fixed;inset:0;z-index:99998;background:radial-gradient(ellipse at top,#1a1330 0%,#0a0a0f 60%);color:#cbd5e1;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,-apple-system,'PingFang SC',sans-serif;opacity:1;transition:opacity 0.45s ease-out;pointer-events:auto;padding:24px;box-sizing:border-box;">
-  <!-- Brain icon -->
-  <div style="font-size:48px;margin-bottom:16px;line-height:1;">🧠</div>
-  <div style="font-size:22px;font-weight:700;color:#e2e8f0;margin-bottom:10px;letter-spacing:0.2px;text-align:center;">欢迎使用 Hermes Agent</div>
-  <div style="font-size:14px;color:#94a3b8;line-height:1.65;max-width:360px;text-align:center;margin-bottom:32px;">登录 neowow.studio 账号，即可免费使用 AI 对话能力，无需配置任何 API 密钥。</div>
-  <!-- Login button — state machine:
-       default  → 登录 / 注册 neowow.studio  (clickable)
-       success  → ✓ 已就绪，正在启动...  (auto-dismissed 0.8s later)
-  -->
-  <button id="neoLoginBtn"
-          onclick="neowowAvatarClick(event)"
-          style="display:inline-flex;align-items:center;gap:8px;padding:12px 28px;font-size:15px;font-weight:600;color:#fff;background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);border:none;border-radius:10px;cursor:pointer;box-shadow:0 4px 24px rgba(99,102,241,0.35);transition:opacity 0.2s,transform 0.15s;outline:none;"
-          onmouseover="this.style.opacity='0.88'"
-          onmouseout="this.style.opacity='1'">
-    <span id="neoLoginBtnIcon"></span>
-    <span id="neoLoginBtnText">登录 / 注册 neowow.studio</span>
-  </button>
-  <div style="font-size:12px;color:#475569;margin-top:20px;text-align:center;">登录成功后自动配置，直接开始使用</div>
-</div>
+<!-- First-run login is rendered only inside #onboardingOverlay. -->
 </body>
 </html>

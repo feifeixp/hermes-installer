@@ -118,6 +118,40 @@ function recordClientSSEError(source, details={}){
   }catch(_){}
 }
 
+// Privacy-bounded product funnel events. The server applies a second strict
+// whitelist; prompts, replies, credentials, workspace names and full paths are
+// intentionally impossible to pass through this helper.
+const _PRODUCT_EVENT_FIELDS=new Set(['source','deployment_mode','stage','result','error_code','duration_ms','used_cache','action','bundle_size_bucket']);
+function recordProductEvent(event,details={}){
+  try{
+    if(localStorage.getItem('hermes-telemetry-opt-out')==='1')return;
+    const payload={event:String(event||'').slice(0,64)};
+    for(const [key,value] of Object.entries(details||{})){
+      if(!_PRODUCT_EVENT_FIELDS.has(key)||value===undefined||value===null)continue;
+      if(key==='duration_ms')payload[key]=Math.max(0,Math.round(Number(value)||0));
+      else if(key==='used_cache')payload[key]=!!value;
+      else payload[key]=String(value).slice(0,key==='error_code'?80:64);
+    }
+    void api('/api/client-events/log',{method:'POST',body:JSON.stringify(payload),timeoutMs:3000}).catch(()=>{});
+  }catch(_){}
+}
+window.recordProductEvent=recordProductEvent;
+
+function recordFirstMessageResult(result,errorCode){
+  try{
+    const key='hermes-first-message-started-at';
+    const started=Number(localStorage.getItem(key)||0);
+    if(!started)return;
+    recordProductEvent('first_message_result',{
+      result:result||'unknown',
+      error_code:errorCode||'',
+      duration_ms:Date.now()-started,
+    });
+    if(result==='success')localStorage.removeItem(key);
+  }catch(_){}
+}
+window.recordFirstMessageResult=recordFirstMessageResult;
+
 // Persist/restore expanded directory state per workspace in localStorage
 function _wsExpandKey(){
   const ws=S.session&&S.session.workspace;

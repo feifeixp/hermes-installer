@@ -26,8 +26,8 @@
   // Refreshes on `neoSessionUpdated` (fired by /api/neowow/jwt POST + by
   // logout) and on DOMContentLoaded.  Tolerates the API being briefly
   // unavailable — the avatar just stays in its current state until the
-  // next refresh.  The same event also triggers _neowowCompleteOnboarding
-  // to dismiss the first-launch login overlay when it is visible.
+  // next refresh. First-run login itself is owned by onboarding.js so the
+  // product has one readiness state machine and one blocking container.
 
   async function refreshRailAvatar() {
     const disc    = $('neowowAvatarDisc');
@@ -167,8 +167,15 @@
     }
 
     neowowHideBootOverlay({ success: hasJwt, networkOk, nickname });
-    if (!hasJwt && networkOk) {
-      _neowowShowOnboarding();
+    // An expired session may have onboarding_completed=true, which makes the
+    // ordinary boot path skip the wizard. Re-open the canonical onboarding
+    // container instead of maintaining a second login-only overlay.
+    if (!hasJwt && networkOk && window._neowowJwtExpired) {
+      setTimeout(() => {
+        if (typeof window.loadOnboardingWizard === 'function') {
+          void window.loadOnboardingWizard({ force: true });
+        }
+      }, 0);
     }
   }
 
@@ -213,7 +220,7 @@
           ? `欢迎回来，${opts.nickname}`
           : '登录成功';
       }
-      if (hint) hint.textContent = '即将进入对话…';
+      if (hint) hint.textContent = '账号已连接，正在检查模型配置…';
       // Linger for the checkmark animation, then fade
       setTimeout(function () {
         overlay.style.opacity = '0';
@@ -231,59 +238,6 @@
       }, 460);
     }
   };
-
-  // ── Neowow login onboarding overlay (first-launch, no JWT) ───────────────
-  //
-  // _neowowShowOnboarding()    — reveals #neoLoginOverlay after boot clears
-  // _neowowCompleteOnboarding() — called by neoSessionUpdated when user logs in
-  //
-  // Element IDs: #neoLoginOverlay, #neoLoginBtn, #neoLoginBtnIcon, #neoLoginBtnText
-
-  let _neoLoginOverlayShown = false;
-
-  function _neowowShowOnboarding() {
-    if (_neoLoginOverlayShown) return;
-    _neoLoginOverlayShown = true;
-    const overlay = document.getElementById('neoLoginOverlay');
-    if (!overlay) return;
-    overlay.style.display = 'flex';
-    overlay.style.opacity = '1';
-  }
-
-  function _neowowCompleteOnboarding() {
-    const overlay = document.getElementById('neoLoginOverlay');
-    if (!overlay || overlay.style.display === 'none') return;
-
-    // Immediately update button to success state
-    const btn = document.getElementById('neoLoginBtn');
-    const btnIcon = document.getElementById('neoLoginBtnIcon');
-    const btnText = document.getElementById('neoLoginBtnText');
-    if (btn) {
-      btn.style.pointerEvents = 'none';
-      btn.style.background = 'linear-gradient(135deg,#10b981 0%,#059669 100%)';
-      btn.style.boxShadow = '0 4px 24px rgba(16,185,129,0.35)';
-    }
-    if (btnIcon) btnIcon.textContent = '✓';
-    if (btnText) btnText.textContent = '已就绪，正在启动...';
-
-    // Fire-and-forget: activate the neowow-coding-plan provider
-    fetch('/api/neowow/activate-provider', { method: 'POST' })
-      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })
-      .catch(err => console.warn('[onboarding] activate-provider failed:', err));
-
-    // Fade out after 800ms regardless of API result
-    setTimeout(() => {
-      overlay.style.opacity = '0';
-      overlay.addEventListener('transitionend', () => {
-        overlay.style.display = 'none';
-      }, { once: true });
-      // Safety fallback: force hidden 550ms after transition starts
-      // in case transitionend never fires (e.g. no CSS transition in tests)
-      setTimeout(() => { overlay.style.display = 'none'; }, 550);
-    }, 800);
-  }
-
-  window._neowowCompleteOnboarding = _neowowCompleteOnboarding;
 
   window.neowowAvatarClick = async function (event) {
     if (event && event.preventDefault) event.preventDefault();
@@ -538,7 +492,6 @@
   window.addEventListener('neoSessionUpdated', () => {
     void refreshRailAvatar();
     void refreshAccountBlock();
-    _neowowCompleteOnboarding();
     // NOTE: don't re-trigger the boot overlay on session updates —
     // those happen mid-session (login from popover, JWT refresh, etc.)
     // and the user is already past boot at that point.
@@ -596,9 +549,17 @@
     try {
       const r = await fetch('/api/neowow/points', { cache: 'no-store' });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      if (!r.ok) {
+        const err = new Error(d.message || d.error || ('HTTP ' + r.status));
+        err.code = d.error_code || '';
+        throw err;
+      }
       points = d;
     } catch (e) {
+      if (e && e.code === 'auth_unavailable_local') {
+        if (typeof showToast === 'function') showToast(e.message, 6000, 'warning');
+        return;
+      }
       const msg = (e && e.message) || 'unknown';
       // We only get here when status.hasJwt was true — the user IS logged in.
       // A reachability / SSL / timeout error ("Cannot reach Neodomain") is a
@@ -1028,7 +989,11 @@
         body:    JSON.stringify({ returnUrl: ret }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      if (!r.ok) {
+        const err = new Error(d.message || d.error || ('HTTP ' + r.status));
+        err.code = d.error_code || '';
+        throw err;
+      }
 
       // Browser launched (or attempted) — show "等待登录中" + start
       // polling.  The avatar disc UI doesn't change yet; the inline
@@ -1036,6 +1001,13 @@
       showOAuthWaiting(d.url);
       startOAuthPolling();
     } catch (e) {
+      if (e && e.code === 'auth_unavailable_local') {
+        if (typeof showToast === 'function') showToast(e.message, 6000, 'warning');
+        if (typeof window.loadOnboardingWizard === 'function') {
+          void window.loadOnboardingWizard({ force: true });
+        }
+        return;
+      }
       // Fallback: surface the URL so the user can copy-paste into
       // their browser manually.  This usually means webbrowser.open()
       // returned False (no registered browser) or the launcher route

@@ -23,11 +23,19 @@ class TestActivateProvider(unittest.TestCase):
         models, default_model = _fetch_neowow_plan_models()
         model = default_model or (models[0]["id"] if models else "deepseek-v4-flash")
         apply_onboarding_setup(
-            {"provider": _NEOWOW_CODING_PLAN_PROVIDER_ID, "model": model}
+            {
+                "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
+                "model": model,
+                "confirm_overwrite": True,
+            }
         )
         self.assertEqual(model, "deepseek-v4-flash")
         mock_setup.assert_called_once_with(
-            {"provider": "neowow-coding-plan", "model": "deepseek-v4-flash"}
+            {
+                "provider": "neowow-coding-plan",
+                "model": "deepseek-v4-flash",
+                "confirm_overwrite": True,
+            }
         )
 
     @patch("api.onboarding._fetch_neowow_plan_models")
