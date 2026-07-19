@@ -112,6 +112,20 @@ aligned with these. Keep them in sync if you touch either side.
 **Default UI locale.** `_SETTINGS_DEFAULTS["language"]` is `"zh"` (upstream
 ships `"en"`). The audience is primarily zh-CN.
 
+**Managed auth and onboarding.** OAuth is a server-advertised capability, not
+a client-side deployment guess. Only `HERMES_WEBUI_AUTH_MODE=neodomain` may
+offer Neodomain login; local installs must show the environment constraint and
+use a locally valid provider path. Keep one onboarding overlay, require the
+server's `chat_ready` result before closing it, and activate Coding Plan through
+the explicit `/api/neowow/activate-provider` flow. Do not restore the removed
+duplicate login overlay or unconditional auto-activation behavior.
+
+**Issue recovery and diagnostics.** Structured chat failures expose only
+allowlisted recovery actions. The Report issue flow must preview redacted data,
+let the user choose log categories, and require the literal JSON boolean
+`confirm_upload: true` before uploading. Preserve same-origin managed-auth
+checks and private, uniquely named pending bundles when syncing upstream.
+
 **Bot identity / messaging copy.** Bot name comes from
 `HERMES_WEBUI_BOT_NAME` env, defaulting to `"Hermes"`. Don't hardcode the
 brand name into strings; check the env var.

@@ -16,9 +16,9 @@ This document is the recovery playbook.
 
 | Category | Files | Behaviour during subtree pull |
 |---|---|---|
-| **Self-contained add-ons** | `webui/api/neowow.py`<br>`webui/api/skills.py`<br>`webui/static/neowow.js` | ✅ **Always safe.** These files don't exist upstream, so subtree merge has nothing to merge. They survive every sync untouched. |
+| **Self-contained add-ons** | `webui/api/neowow.py`<br>`webui/api/report_bundle.py`<br>`webui/api/skills.py`<br>`webui/static/neowow.js` | ✅ **Always safe.** These files don't exist upstream, so subtree merge has nothing to merge. They survive every sync untouched. |
 | **Patched upstream files — marker-wrapped** | `webui/api/routes.py` (GET + POST routes blocks)<br>`webui/static/index.html` (6 blocks: boot overlay / auth avatar rail / auth popover / sidebar avatar / side-menu entry / settings pane) | ⚠️ **3-way merged.** Our edits are isolated to clearly-marked `BEGIN: Neowow integration …` blocks — most upstream changes won't conflict. When they do, follow the recovery flow. |
-| **Patched upstream files — unmarked (bare edits)** | `webui/api/auth.py`<br>`webui/api/config.py`<br>`webui/api/providers.py`<br>`webui/api/updates.py`<br>`webui/server.py`<br>`webui/static/boot.js`<br>`webui/static/i18n.js`<br>`webui/static/panels.js`<br>`webui/static/style.css`<br>`webui/static/workspace.js` | ⚠️⚠️ **3-way merged without markers.** These files have Neowow-distribution overrides spread inline (Marvis skin CSS, zh language defaults, neodomain auth mode, Skills 3-tab rewrite, 401-handler loginUrl awareness, etc.). Conflicts are common and require manual inspection. See `webui/AGENTS.md` "Neowow distribution overrides" for the canonical list of what must be preserved. Recovery checklist below. |
+| **Patched upstream files — unmarked (bare edits)** | `webui/api/auth.py`<br>`webui/api/config.py`<br>`webui/api/onboarding.py`<br>`webui/api/providers.py`<br>`webui/api/streaming.py`<br>`webui/api/updates.py`<br>`webui/server.py`<br>`webui/static/boot.js`<br>`webui/static/i18n.js`<br>`webui/static/messages.js`<br>`webui/static/onboarding.js`<br>`webui/static/panels.js`<br>`webui/static/style.css`<br>`webui/static/ui.js`<br>`webui/static/workspace.js` | ⚠️⚠️ **3-way merged without markers.** These files have Neowow-distribution overrides spread inline (Marvis skin CSS, zh language defaults, neodomain auth mode, managed onboarding/readiness, structured chat recovery, consent-based issue reports, Skills 3-tab rewrite, 401-handler loginUrl awareness, etc.). Conflicts are common and require manual inspection. See `webui/AGENTS.md` "Neowow distribution overrides" for the canonical list of what must be preserved. Recovery checklist below. |
 
 ### Why some files are marker-wrapped and others aren't
 
@@ -101,15 +101,20 @@ v0.51.137):
 
 - `webui/api/auth.py` (auth-mode dispatch + neodomain JWT helpers)
 - `webui/api/config.py` (`_SETTINGS_DEFAULTS` + `_SETTINGS_SKIN_VALUES`)
+- `webui/api/onboarding.py` (managed-environment detection + server-confirmed readiness)
 - `webui/api/providers.py` (`_is_neowow_only_mode` filter)
 - `webui/api/routes.py` (marker-wrapped Neowow GET/POST blocks)
+- `webui/api/streaming.py` (structured client error and recovery metadata)
 - `webui/api/updates.py` (`@{upstream}` compare-ref logic)
 - `webui/server.py` (neowow JWT request-scoping import)
 - `webui/static/boot.js` (Marvis skin in `_SKINS`)
 - `webui/static/i18n.js` (`cmd_theme` strings, one per locale)
 - `webui/static/index.html` (inline boot script + 6 marker-wrapped blocks)
+- `webui/static/messages.js` (structured chat failure rendering)
+- `webui/static/onboarding.js` (single managed onboarding flow + readiness gate)
 - `webui/static/panels.js` (Skills 3-tab rewrite vs upstream's Skills code)
 - `webui/static/style.css` (Marvis skin CSS + Skills 3-tab CSS)
+- `webui/static/ui.js` (recovery actions and report-issue entry point)
 - `webui/static/workspace.js` (401 neodomain `loginUrl` redirect)
 
 ### 2. Inspect the conflict locally

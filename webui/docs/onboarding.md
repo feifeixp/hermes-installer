@@ -13,6 +13,9 @@ a workspace, optionally set a password, then start a chat. If you are using a
 local model server from Docker, pay special attention to the Base URL section
 below.
 
+The wizard has one readiness rule: it closes only after the server reports
+`system.chat_ready=true`. A saved provider name alone is not considered ready.
+
 ## Before you start
 
 Hermes WebUI is only the browser interface. The actual agent runtime, memory,
@@ -70,6 +73,21 @@ entries there before using the isolated command above.
 
 For managed hosting or fully preconfigured images, set
 `HERMES_WEBUI_SKIP_ONBOARDING=1` to bypass the wizard.
+
+## Managed Neodomain sign-in
+
+Neodomain account sign-in is available only when the running server explicitly
+reports `HERMES_WEBUI_AUTH_MODE=neodomain`. This capability is intended for an
+actual online deployment where the OAuth callback and shared cookie domain are
+reachable. Local desktop, bootstrap, and Docker trials do not expose the OAuth
+action merely because a generic deployment flag is set; configure an API-key or
+local provider instead.
+
+After online OAuth completes, the wizard explicitly activates the Coding Plan,
+refreshes plan/model data, and waits for the server to report
+`system.chat_ready=true`. If account sync or activation fails, the wizard stays
+open and offers retry or a redacted issue report rather than sending the user
+into a chat that cannot run.
 
 ## What the wizard checks
 
@@ -172,6 +190,11 @@ isolated test install.
 
 File an issue when the diagnostics point to WebUI rather than local
 configuration. Include:
+
+The in-app **Report issue** action first shows a redacted preview and lets the
+user choose which log categories to include. Nothing is uploaded until the user
+gives explicit confirmation. If the upload endpoint is temporarily unavailable,
+the bundle is stored as a private pending report for a later retry.
 
 1. Install path: local bootstrap, Docker single-container, Docker
    two-container, Docker three-container, WSL2, or community native Windows.

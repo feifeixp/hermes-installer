@@ -93,7 +93,10 @@ clear "provider not registered" message instead of silently writing
 a broken config.yaml. Run the wizard once to verify the gate fires.
 
 **Scoping note**: The write-time gate enforces only against the
-`_NEOWOW_RUNTIME_PROVIDER` name (the auto-onboard managed write).
+`_NEOWOW_RUNTIME_PROVIDER` name used by the explicit
+`POST /api/neowow/activate-provider` flow. Automatic onboarding is limited to
+repairing already-complete legacy installs; it does not silently activate a
+new account.
 It does NOT block other curated providers like `openrouter` or
 `custom`, which hermes_cli handles via special-case logic in
 `resolve_provider()` rather than `PROVIDER_REGISTRY` (they're
@@ -102,6 +105,11 @@ intentionally excluded from the dict — see the comment around
 known-good aggregators. The runtime `startup_check.py` is the
 broader safety net — it logs ERROR for ANY config.yaml provider
 that isn't dispatchable, regardless of source.
+
+The first-run status endpoint reads the Coding Plan catalog from the static
+fallback or last-good disk cache so opening the wizard never waits on the
+network. Explicit provider activation and the live model endpoint refresh from
+`ga.neodomain.cn`; the current fallback catalog includes `kimi-k3`.
 
 ### 5. Verify CI
 

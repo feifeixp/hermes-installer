@@ -21,6 +21,7 @@
 - **首次运行向导**：12+ 提供商（OpenRouter / Anthropic / OpenAI / DeepSeek / Ollama ...），API Key 配置，模型选择
 - 流式响应，Markdown 渲染 + 代码高亮
 - 对话历史持久化，多会话管理
+- 失败时提供可执行的恢复建议，并可在用户确认后上传脱敏诊断日志报告问题
 - 设置面板：模型配置 / 多 Profile / 工具集 / 高级参数
 - Gateway 状态实时显示
 
@@ -28,7 +29,7 @@
 
 桌面端与 [app.neowow.studio](https://app.neowow.studio) 双向打通，云端是 SSOT：
 
-- **OAuth 登录** — 侧栏头像点击即可在系统浏览器完成授权；登录态自动回写桌面，无需粘贴 token
+- **OAuth 登录（仅线上部署）** — 只有实际以 `HERMES_WEBUI_AUTH_MODE=neodomain` 部署的站点提供账号授权；本地桌面端会说明限制，并继续使用 API Key 或本地模型配置
 - **积分 / 会员** — 头像 popover 实时显示余额（按消耗类型分项）、会员等级，点击"充值"直达微信扫码下单
 - **配置云同步** — 在 web 端编辑的 Hermes 配置一键拉到本地（`~/.hermes/config.yaml`），告别多机重新配
 - **技能订阅同步** — 商店订阅的 Hermes 技能拉到 `~/.hermes/skills/_neowow/<id>/SKILL.md`，取消订阅自动清理

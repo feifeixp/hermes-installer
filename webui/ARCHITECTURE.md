@@ -30,7 +30,7 @@ and `static/boot.js` keeps the dataset synchronized with the runtime panel state
 
 The design philosophy is deliberately minimal. There is no build step, no bundler, no
 frontend framework. The Python server is split into a routing shell (server.py) and
-business logic modules (api/). The frontend is seven vanilla JS modules loaded from static/.
+business logic modules (api/). The frontend is composed of vanilla JS modules loaded from static/.
 This makes the code easy to modify from a terminal or by an agent.
 
 Hermes-level chrome is intentionally consolidated: the sidebar has no dedicated brand header.
@@ -57,7 +57,8 @@ actions. The topbar remains focused on conversation context and the workspace/fi
       helpers.py           HTTP helpers: j(), bad(), require(), safe_resolve(), security headers (~302 lines)
       models.py            Session model + CRUD, per-session profile tracking (~1927 lines)
       profiles.py          Profile state management, hermes_cli wrapper (~1056 lines)
-      onboarding.py        First-run onboarding status, real provider config writes, OAuth linking, and readiness detection (~1002 lines)
+      onboarding.py        First-run status, managed-environment detection, explicit provider activation, and chat readiness.
+      report_bundle.py     Consent-based diagnostic preview, redaction, pending storage, and upload.
       routes.py            All GET + POST route handlers (~9772 lines)
       startup.py           Startup helpers: auto_install_agent_deps() (~128 lines)
       streaming.py         SSE engine, run_agent, cancel, HERMES_HOME save/restore (~4420 lines)
@@ -69,10 +70,10 @@ actions. The topbar remains focused on conversation context and the workspace/fi
       ui.js                DOM helpers, renderMd, tool cards, model dropdown, file tree (~7216 lines)
       workspace.js         File preview, file ops, loadDir, clearPreview (~369 lines)
       sessions.js          Session CRUD, list rendering, search, SVG icons, dropdown actions (~3517 lines)
-      messages.js          send(), SSE event handlers, approval, transcript (~2301 lines)
+      messages.js          send(), SSE event handlers, structured failure recovery, approval, transcript.
       panels.js            Cron, skills, memory, workspace, profiles, todo, settings (~6480 lines)
       commands.js          Slash command registry, parser, autocomplete dropdown (~1302 lines)
-      onboarding.js        First-run wizard overlay, provider setup flow, and settings/workspace orchestration.
+      onboarding.js        Single first-run wizard, managed OAuth capability checks, and server-confirmed readiness gate.
       boot.js              Event wiring, mobile sidebar/workspace nav, voice input, boot IIFE (~1607 lines)
     tests/
       conftest.py          Isolated test server/state fixtures (~644 lines)
@@ -121,6 +122,7 @@ Environment variables controlling behavior:
     HERMES_CONFIG_PATH             Path to ~/.hermes/config.yaml
     HERMES_WEBUI_DEFAULT_MODEL     Optional model override; unset means provider default
     HERMES_WEBUI_PASSWORD          Optional: enable password auth (off by default)
+    HERMES_WEBUI_AUTH_MODE         Auth boundary: none, password, or managed neodomain OAuth
     HERMES_WEBUI_SKIP_ONBOARDING   Optional: bypass the first-run onboarding wizard
     HERMES_HOME                    Base directory for Hermes state (~/.hermes by default)
 
