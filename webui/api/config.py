@@ -1108,11 +1108,14 @@ _PROVIDER_MODELS = {
     # models under their canonical IDs (no provider/ prefix). New users
     # of neowow.studio should start here — their points / membership
     # already cover usage through this gateway.
-    # Mirror of the dashboard /api/me/plan catalog (snapshot 2026-07-19 —
+    # Mirror of the dashboard /api/me/plan catalog (validated 2026-07-20 —
     # taken from the auto-synced cfg_model_prices, which the dashboard now
     # refreshes hourly from ga.neodomain.cn /v1/models). ga REMOVED the whole
-    # gpt-* family + gemini-3.5-flash / gemini-3-pro-preview, and added the
-    # Claude series, qwen3.7, MiniMax-M2.7 etc. — keep this fallback aligned
+    # catalog drift is accepted here only after a real 1-token chat probe.
+    # The dashboard currently advertises gpt-5.5 / gpt-5.6-sol /
+    # gpt-5.6-terra, but all three return HTTP 400 upstream_error and are
+    # intentionally excluded until the gateway serves them successfully.
+    # Keep this fallback aligned
     # or stale models reappear whenever the live overlay can't run (offline /
     # no JWT / cold cache). Chat models only (image/video/audio live on
     # story.neodomain.cn, never here).
@@ -1123,13 +1126,13 @@ _PROVIDER_MODELS = {
         {"id": "claude-opus-4-6",                 "label": "Claude Opus 4.6"},
         {"id": "claude-sonnet-4-6",               "label": "Claude Sonnet 4.6"},
         {"id": "claude-haiku-4-5-20251001",       "label": "Claude Haiku 4.5"},
-        {"id": "global.anthropic.claude-fable-5", "label": "Claude Fable 5 (Global)"},
         # Google Gemini
         {"id": "gemini-3.1-pro-preview",          "label": "Gemini 3.1 Pro (Preview)"},
+        {"id": "gemini-3.1-pro-preview-customtools", "label": "Gemini 3.1 Pro (Custom Tools)"},
+        {"id": "gemini-3.5-flash",               "label": "Gemini 3.5 Flash"},
         {"id": "gemini-3.1-flash-lite",           "label": "Gemini 3.1 Flash Lite"},
         {"id": "gemini-3.1-flash-lite-preview",   "label": "Gemini 3.1 Flash Lite (Preview)"},
         {"id": "gemini-3-flash-preview",          "label": "Gemini 3 Flash (Preview)"},
-        {"id": "gemini-2.5-flash",                "label": "Gemini 2.5 Flash"},
         {"id": "gemini-2.5-flash-lite",           "label": "Gemini 2.5 Flash Lite"},
         # DeepSeek
         {"id": "deepseek-v4-pro",                 "label": "DeepSeek V4 Pro"},
@@ -1138,7 +1141,9 @@ _PROVIDER_MODELS = {
         # live on story.neodomain.cn and must never appear here)
         {"id": "doubao-seed-2-0-pro-260215",      "label": "Doubao Seed 2.0 Pro"},
         {"id": "doubao-seed-2-1-pro-260628",      "label": "Doubao Seed 2.1 Pro"},
+        {"id": "doubao-seed-character-260628",    "label": "Doubao Seed Character"},
         # Zhipu / Moonshot / MiniMax / Qwen
+        {"id": "glm-5.2",                         "label": "GLM-5.2"},
         {"id": "glm-5",                           "label": "GLM-5"},
         {"id": "kimi-k3",                         "label": "Kimi K3"},
         {"id": "kimi-k2.6",                       "label": "Kimi K2.6"},
@@ -2510,7 +2515,10 @@ def _current_webui_version() -> str | None:
 # appears immediately instead of after 24h.
 # Bumped 6→7 (2026-07-19): ga.neodomain.cn added kimi-k3. Rebuild existing
 # model caches on upgrade so the new model appears immediately.
-_MODELS_CACHE_SCHEMA_VERSION = 7
+# Bumped 7→8 (2026-07-20): live probes confirmed four additions and two
+# removals. The three advertised GPT entries remain excluded because their
+# chat endpoints return HTTP 400 upstream_error.
+_MODELS_CACHE_SCHEMA_VERSION = 8
 
 
 _models_cache_path = STATE_DIR / "models_cache.json"

@@ -88,7 +88,10 @@ access.
 
 ## Operating schedule
 
-- Daily Feedback Triage: every day at 09:00 Asia/Shanghai.
+- Daily Feedback Triage and Model Audit: every day at 09:00 Asia/Shanghai.
+  The audit compares the live Neodomain model directory with the versioned
+  fallback catalog, performs one-token availability probes, and reports
+  additions, removals, failures, and transient rate limits separately.
 - PRD Drafter: periodic polling of `feedback:accepted` issues.
 - Implementation Runner: periodic polling of `ready-to-build` issues.
 - Release Verifier: runs after deployment or as a daily follow-up.
@@ -96,3 +99,9 @@ access.
 If `NEOWOW_ADMIN_JWT` is missing, daily triage must say that the production
 source is not authorized, continue with `feedback:incoming` GitHub issues, and
 never claim that there was no user feedback.
+
+Model auditing prefers `NEODOMAIN_API_KEY` for direct gateway checks. When it
+is absent, the audit uses `NEOWOW_ADMIN_JWT` against the dashboard-synchronized
+plan directory and the Neowow chat proxy. Confirmed catalog drift enters the
+same human-reviewed backlog; its implementation must update the static catalog,
+cache schema version, tests, changelog, and the next release version.

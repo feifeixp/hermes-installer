@@ -5,6 +5,7 @@
 
 ### Added
 
+- Added four models verified against the live Neodomain gateway: `doubao-seed-character-260628`, `gemini-3.1-pro-preview-customtools`, `gemini-3.5-flash`, and `glm-5.2`. Removed two stale fallback entries that no longer appear online and return 503. The three newly advertised GPT entries remain hidden because live calls currently return `upstream_error`.
 - Added `kimi-k3` to the Neodomain (`ga.neodomain.cn`) and Neowow Coding Plan model pickers, including the offline/cold-cache fallback catalog.
 - Added structured recovery actions to chat errors, including retry, re-login, model settings, plan details, and one-click issue reporting.
 - Added privacy-bounded onboarding, authentication, provider activation, first-message, recovery, and issue-report funnel events using the existing client-event field whitelist.

@@ -7,6 +7,8 @@ History:
 - 2026-06-11: ga REMOVED the whole gpt-* family (+ gemini-3.5-flash, and
   gemini-3-pro-preview — shut down by Google 2026-03-09, #669) and added
   qwen3.7 / MiniMax-M2.7 etc. A stale fallback kept showing GPT in pickers.
+- 2026-07-20: live probes confirmed four additions and two removals. Three
+  newly advertised GPT entries still return upstream_error and stay hidden.
 """
 
 from api.config import _PROVIDER_MODELS
@@ -36,12 +38,23 @@ def test_catalog_includes_kimi_k3():
     assert "kimi-k3" in _ids(), "static coding-plan catalog missing kimi-k3"
 
 
+def test_catalog_includes_2026_07_20_verified_additions():
+    ids = _ids()
+    for model_id in (
+        "doubao-seed-character-260628",
+        "gemini-3.1-pro-preview-customtools",
+        "gemini-3.5-flash",
+        "glm-5.2",
+    ):
+        assert model_id in ids, f"verified live model missing: {model_id}"
+
+
 def test_catalog_excludes_models_ga_removed():
-    # ga dropped these 2026-06-11; a fallback that still lists them produces
-    # picker entries that 502 on every call.
+    # A fallback that still lists removed or advertised-but-broken entries
+    # produces picker options that fail on every call.
     ids = _ids()
     assert not any(i.startswith("gpt-") for i in ids), f"gpt-* must be gone: {sorted(ids)}"
-    for gone in ("gemini-3.5-flash", "gemini-3-pro-preview"):
+    for gone in ("gemini-2.5-flash", "gemini-3-pro-preview", "global.anthropic.claude-fable-5"):
         assert gone not in ids, f"{gone} was removed upstream"
 
 

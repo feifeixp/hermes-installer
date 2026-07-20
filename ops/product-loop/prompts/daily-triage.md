@@ -10,6 +10,9 @@ owner.
    The command reads metadata only from the admin reports endpoint.
 2. Read open GitHub issues labelled `feedback:incoming`.
 3. Read existing open and closed product-loop issues to detect duplicates.
+4. Run `python3 ops/product-loop/scripts/audit_models.py --workers 3` and read
+   only its structured output. The script sends one-token health probes and
+   never returns completion content.
 
 If `NEOWOW_ADMIN_JWT` is missing or the API rejects it, state that the
 production source is unauthorized. Continue with GitHub input, but never report
@@ -37,6 +40,19 @@ routine triage.
    - `source_report_id: BR-XXXXXX` markers for idempotency.
 6. Never add `feedback:accepted`, `ready-to-build`, or release labels.
 7. Produce the final report using `templates/daily-review.md`.
+
+For model results:
+
+- Report catalog additions/removals and separate `unavailable` from
+  `inconclusive` (timeouts, 429, and 5xx).
+- A single transient result is not proof that a model is down. Require a later
+  confirmation before recommending removal.
+- Create or update one `product-loop` + `model:drift` issue when the catalog
+  changed or a failure is confirmed. Include model ids, status codes, and
+  timestamps only; never include response content or credentials.
+- The issue acceptance criteria must cover the static catalog, cache schema
+  version, tests, changelog, and next release version. Never add an approval
+  label, merge, tag a release, or deploy without human approval.
 
 Create no issue when the item is an exact duplicate. Link the existing issue in
 the report instead. Do not modify code or product documentation during triage.
