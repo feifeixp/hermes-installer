@@ -556,10 +556,6 @@
       }
       points = d;
     } catch (e) {
-      if (e && e.code === 'auth_unavailable_local') {
-        if (typeof showToast === 'function') showToast(e.message, 6000, 'warning');
-        return;
-      }
       const msg = (e && e.message) || 'unknown';
       // We only get here when status.hasJwt was true — the user IS logged in.
       // A reachability / SSL / timeout error ("Cannot reach Neodomain") is a
@@ -1001,13 +997,6 @@
       showOAuthWaiting(d.url);
       startOAuthPolling();
     } catch (e) {
-      if (e && e.code === 'auth_unavailable_local') {
-        if (typeof showToast === 'function') showToast(e.message, 6000, 'warning');
-        if (typeof window.loadOnboardingWizard === 'function') {
-          void window.loadOnboardingWizard({ force: true });
-        }
-        return;
-      }
       // Fallback: surface the URL so the user can copy-paste into
       // their browser manually.  This usually means webbrowser.open()
       // returned False (no registered browser) or the launcher route

@@ -11,7 +11,8 @@
 
 ### Changed
 
-- First-run login now uses the existing three-step onboarding dialog as the only blocking container. Local installs explain that Neowow OAuth requires an online deployment, while managed online deployments wait for server-confirmed `chat_ready` before entering the app.
+- Desktop onboarding now starts the existing Neodomain OAuth flow directly instead of blocking first-run users behind an online-deployment-only screen. OAuth callback validation remains limited to the running local Hermes server.
+- First-run login uses the existing three-step onboarding dialog as the only blocking container and waits for server-confirmed `chat_ready` before entering the app.
 - Issue reports now show the log file list and redaction notice before upload, require explicit confirmation, support removing log attachments, and use the active Hermes profile for offline pending reports.
 
 ### Security

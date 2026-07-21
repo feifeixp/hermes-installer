@@ -264,13 +264,9 @@ function toggleOnboardingApiKey(){
   _renderOnboardingBody();
 }
 async function startOnboardingLogin(){
-  const exp=_onboardingExperience();
-  if(exp.neowow_oauth_supported===false){
-    _setOnboardingNotice(exp.neowow_oauth_unavailable_reason||'Neowow 账号授权仅支持实际线上部署。','warn');
-    return;
-  }
   try{
     ONBOARDING.authStartedAt=Date.now();
+    const exp=_onboardingExperience();
     if(typeof recordProductEvent==='function')recordProductEvent('auth_start',{deployment_mode:exp.deployment_mode||'unknown'});
     const returnUrl=location.origin+'/api/neowow/oauth-callback';
     // Backend reads the camelCase `returnUrl` key (routes.py oauth/launch).
@@ -432,13 +428,9 @@ function _renderOnboardingBody(){
   if(key==='login'){
     const ns=ONBOARDING.status.neowow||{};
     const signedIn=!!ns.hasJwt;
-    const m=ONBOARDING.form.loginMethod;
     const exp=_onboardingExperience();
-    const localUnavailable=exp.stage==='auth_unavailable_local'||exp.neowow_oauth_supported===false;
     const chatReady=!!(ONBOARDING.status.chat_ready||exp.chat_ready);
     const activation=ONBOARDING.activation||{state:'idle'};
-    const otherProviders=_getOnboardingSetupProviders().filter(p=>p.id!=='neowow-coding-plan');
-    const canUseApiKey=otherProviders.length>0;
     // Distinguish "session expired" (had a JWT, it lapsed) from a first-run
     // "please log in". jwtExpired comes from /api/neowow/status (set at boot in
     // neowow.js → window._neowowJwtExpired) or directly on the status object.
@@ -447,8 +439,6 @@ function _renderOnboardingBody(){
       _setOnboardingNotice((activation.error&&activation.error.message)||'套餐或模型同步失败，请重试','warn');
     }else if(activation.state==='syncing'){
       _setOnboardingNotice('登录成功，正在同步套餐和模型…','info');
-    }else if(localUnavailable){
-      _setOnboardingNotice(exp.neowow_oauth_unavailable_reason||'Neowow 账号授权仅支持实际线上部署。','warn');
     }else{
       _setOnboardingNotice(
         chatReady ? '✓ 套餐和模型已同步，可以继续'
@@ -456,19 +446,7 @@ function _renderOnboardingBody(){
                               : (expired ? '登录已过期，请重新登录以继续使用 AI 对话' : t('onboarding_login_required'))),
         chatReady ? 'success' : 'info');
     }
-    if(nextBtn) nextBtn.disabled=(activation.state==='syncing'||activation.state==='error'||(localUnavailable&&m!=='apikey')||(signedIn&&!chatReady));
-
-    if(localUnavailable&&m!=='apikey'){
-      body.innerHTML=`
-        <div class="onboarding-welcome">本地运行环境</div>
-        <h3 class="onboarding-h">Neowow 登录需要线上部署</h3>
-        <p class="onboarding-sub">Neowow 账号授权仅支持实际线上部署，本地环境无法完成此登录。</p>
-        <a class="onboarding-cta" href="https://app.neowow.studio/account" target="_blank" rel="noreferrer" style="display:block;text-align:center;text-decoration:none">查看线上部署</a>
-        ${canUseApiKey?`<button class="onboarding-alt" id="onboardingApiKeyToggle" onclick="toggleOnboardingApiKey()">${t('onboarding_login_apikey')}</button>`:''}
-        <button class="onboarding-alt" type="button" onclick="reportOnboardingIssue({error_code:'auth_unavailable_local'})">报告问题</button>
-        <p class="onboarding-foot">当前页面不会发起无法完成的本地 OAuth 授权。</p>`;
-      return;
-    }
+    if(nextBtn) nextBtn.disabled=(activation.state==='syncing'||activation.state==='error'||(signedIn&&!chatReady));
 
     if(activation.state==='syncing'){
       body.innerHTML=`

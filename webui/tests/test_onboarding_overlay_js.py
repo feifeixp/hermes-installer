@@ -28,10 +28,10 @@ class TestOnboardingOverlayJs(unittest.TestCase):
         self.assertIn("activated.chat_ready!==true", self.onboarding)
         self.assertIn("status.chat_ready!==true", self.onboarding)
 
-    def test_local_auth_unavailable_copy_and_report_action_exist(self):
-        self.assertIn("auth_unavailable_local", self.onboarding)
-        self.assertIn("Neowow 账号授权仅支持实际线上部署", self.onboarding)
-        self.assertIn("reportOnboardingIssue", self.onboarding)
+    def test_local_login_has_no_online_deployment_gate(self):
+        self.assertIn("function startOnboardingLogin()", self.onboarding)
+        self.assertNotIn("auth_unavailable_local", self.onboarding)
+        self.assertNotIn("查看线上部署", self.onboarding)
 
     def test_activate_provider_fetch_is_in_canonical_onboarding(self):
         self.assertIn("/api/neowow/activate-provider", self.onboarding)
@@ -39,9 +39,8 @@ class TestOnboardingOverlayJs(unittest.TestCase):
     def test_expired_login_reopens_canonical_wizard(self):
         self.assertIn("window.loadOnboardingWizard({ force: true })", self.neowow)
 
-    def test_local_oauth_error_does_not_show_impossible_fallback(self):
-        self.assertIn("e.code === 'auth_unavailable_local'", self.neowow)
-        self.assertIn("void window.loadOnboardingWizard({ force: true })", self.neowow)
+    def test_neowow_login_has_no_local_unavailable_branch(self):
+        self.assertNotIn("auth_unavailable_local", self.neowow)
 
     def test_required_onboarding_cannot_be_skipped_with_escape(self):
         boot = (STATIC / "boot.js").read_text(encoding="utf-8")

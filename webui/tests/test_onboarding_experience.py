@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from api import onboarding as onboarding_module
 from api.onboarding import _experience_state, get_onboarding_capabilities
+from api.neowow import launch_oauth
 
 
 class TestOnboardingCapabilities(unittest.TestCase):
@@ -15,19 +16,19 @@ class TestOnboardingCapabilities(unittest.TestCase):
         self.assertEqual(caps["deployment_mode"], "online")
         self.assertTrue(caps["neowow_oauth_supported"])
 
-    def test_local_server_does_not_advertise_oauth(self):
+    def test_local_server_allows_oauth(self):
         with patch.dict(os.environ, {}, clear=True):
             caps = get_onboarding_capabilities()
         self.assertEqual(caps["deployment_mode"], "local_server")
-        self.assertFalse(caps["neowow_oauth_supported"])
+        self.assertTrue(caps["neowow_oauth_supported"])
 
-    def test_online_label_alone_cannot_enable_oauth_locally(self):
+    def test_online_label_does_not_change_local_classification(self):
         with patch.dict(os.environ, {"HERMES_DEPLOYMENT_MODE": "online"}, clear=True):
             caps = get_onboarding_capabilities()
         self.assertEqual(caps["deployment_mode"], "local_server")
-        self.assertFalse(caps["neowow_oauth_supported"])
+        self.assertTrue(caps["neowow_oauth_supported"])
 
-    def test_local_managed_build_reports_auth_unavailable(self):
+    def test_local_managed_build_requires_login(self):
         env = {"HERMES_NEOWOW_ONLY": "1", "HERMES_DEPLOYMENT_MODE": "local_desktop"}
         with patch.dict(os.environ, env, clear=True):
             state = _experience_state(
@@ -35,8 +36,18 @@ class TestOnboardingCapabilities(unittest.TestCase):
                 {"hasJwt": False},
                 False,
             )
-        self.assertEqual(state["stage"], "auth_unavailable_local")
-        self.assertIn("deployment_help", state["available_actions"])
+        self.assertEqual(state["stage"], "auth_required")
+        self.assertIn("login", state["available_actions"])
+
+    def test_desktop_oauth_keeps_local_callback_allowlist(self):
+        callback = "http://127.0.0.1:8789/api/neowow/oauth-callback"
+        with patch("webbrowser.open", return_value=True):
+            result = launch_oauth(callback)
+        self.assertTrue(result["ok"])
+        self.assertIn("return=http%3A%2F%2F127.0.0.1%3A8789", result["url"])
+
+        with self.assertRaises(ValueError):
+            launch_oauth("https://example.invalid/api/neowow/oauth-callback")
 
     def test_ready_requires_runtime_chat_ready(self):
         env = {"HERMES_NEOWOW_ONLY": "1", "HERMES_DEPLOYMENT_MODE": "online"}

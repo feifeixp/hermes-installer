@@ -112,10 +112,10 @@ aligned with these. Keep them in sync if you touch either side.
 **Default UI locale.** `_SETTINGS_DEFAULTS["language"]` is `"zh"` (upstream
 ships `"en"`). The audience is primarily zh-CN.
 
-**Managed auth and onboarding.** OAuth is a server-advertised capability, not
-a client-side deployment guess. Only `HERMES_WEBUI_AUTH_MODE=neodomain` may
-offer Neodomain login; local installs must show the environment constraint and
-use a locally valid provider path. Keep one onboarding overlay, require the
+**Managed auth and onboarding.** OAuth is a server-mediated capability, not a
+client-side deployment guess. Desktop OAuth callbacks must remain restricted to
+the running local Hermes server; managed online deployments use
+`HERMES_WEBUI_AUTH_MODE=neodomain`. Keep one onboarding overlay, require the
 server's `chat_ready` result before closing it, and activate Coding Plan through
 the explicit `/api/neowow/activate-provider` flow. Do not restore the removed
 duplicate login overlay or unconditional auto-activation behavior.
