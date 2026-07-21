@@ -88,10 +88,10 @@ def _safe_neowow_status() -> dict:
 def get_onboarding_capabilities() -> dict:
     """Return deployment capabilities that affect first-run authentication.
 
-    Neowow OAuth is completed by the managed online deployment.  Native/local
-    WebUI processes must not advertise a login flow that cannot finish.  An
-    HERMES_DEPLOYMENT_MODE may distinguish local desktop/server builds, while
-    online OAuth requires the managed HERMES_WEBUI_AUTH_MODE=neodomain marker.
+    Deployment mode remains useful diagnostic context, but the Neowow OAuth
+    callback is explicitly restricted to this local Hermes server.  Desktop
+    installs may therefore use the same account-login flow as managed online
+    deployments instead of presenting an unreachable deployment-only gate.
     """
     explicit = os.getenv("HERMES_DEPLOYMENT_MODE", "").strip().lower()
     auth_mode = os.getenv("HERMES_WEBUI_AUTH_MODE", "").strip().lower()
@@ -103,14 +103,10 @@ def get_onboarding_capabilities() -> dict:
         deployment_mode = "local_desktop"
     else:
         deployment_mode = "local_server"
-    oauth_supported = deployment_mode == "online"
     return {
         "deployment_mode": deployment_mode,
-        "neowow_oauth_supported": oauth_supported,
-        "neowow_oauth_unavailable_reason": (
-            "Neowow 账号授权仅支持实际线上部署。"
-            if not oauth_supported else ""
-        ),
+        "neowow_oauth_supported": True,
+        "neowow_oauth_unavailable_reason": "",
     }
 
 
@@ -126,14 +122,9 @@ def _experience_state(runtime: dict, neowow: dict, completed: bool) -> dict:
         message = "聊天能力已就绪"
         actions: list[str] = []
     elif _neowow_only_enabled() and not has_jwt:
-        if capabilities["neowow_oauth_supported"]:
-            stage = "auth_required"
-            message = "登录 Neowow 后将自动同步套餐和模型"
-            actions = ["login", "report_issue"]
-        else:
-            stage = "auth_unavailable_local"
-            message = capabilities["neowow_oauth_unavailable_reason"]
-            actions = ["deployment_help", "report_issue"]
+        stage = "auth_required"
+        message = "登录 Neowow 后将自动同步套餐和模型"
+        actions = ["login", "report_issue"]
     elif _neowow_only_enabled() and has_jwt:
         stage = "provider_syncing"
         message = "登录成功，正在同步套餐和模型"

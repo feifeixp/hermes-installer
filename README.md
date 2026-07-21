@@ -29,7 +29,7 @@
 
 桌面端与 [app.neowow.studio](https://app.neowow.studio) 双向打通，云端是 SSOT：
 
-- **OAuth 登录（仅线上部署）** — 只有实际以 `HERMES_WEBUI_AUTH_MODE=neodomain` 部署的站点提供账号授权；本地桌面端会说明限制，并继续使用 API Key 或本地模型配置
+- **OAuth 登录** — 桌面端和线上部署均可完成 Neodomain 账号授权；本地回调仅接受当前 Hermes 服务器的 `localhost` / `127.0.0.1` 地址
 - **积分 / 会员** — 头像 popover 实时显示余额（按消耗类型分项）、会员等级，点击"充值"直达微信扫码下单
 - **配置云同步** — 在 web 端编辑的 Hermes 配置一键拉到本地（`~/.hermes/config.yaml`），告别多机重新配
 - **技能订阅同步** — 商店订阅的 Hermes 技能拉到 `~/.hermes/skills/_neowow/<id>/SKILL.md`，取消订阅自动清理

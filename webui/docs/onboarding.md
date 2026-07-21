@@ -74,16 +74,14 @@ entries there before using the isolated command above.
 For managed hosting or fully preconfigured images, set
 `HERMES_WEBUI_SKIP_ONBOARDING=1` to bypass the wizard.
 
-## Managed Neodomain sign-in
+## Neodomain sign-in
 
-Neodomain account sign-in is available only when the running server explicitly
-reports `HERMES_WEBUI_AUTH_MODE=neodomain`. This capability is intended for an
-actual online deployment where the OAuth callback and shared cookie domain are
-reachable. Local desktop, bootstrap, and Docker trials do not expose the OAuth
-action merely because a generic deployment flag is set; configure an API-key or
-local provider instead.
+Neodomain account sign-in is available in both desktop and managed online
+deployments. Desktop OAuth returns only to the running Hermes server on
+`localhost` or `127.0.0.1`; other callback targets are rejected. Managed online
+deployments continue to use their configured Neodomain authentication mode.
 
-After online OAuth completes, the wizard explicitly activates the Coding Plan,
+After OAuth completes, the wizard explicitly activates the Coding Plan,
 refreshes plan/model data, and waits for the server to report
 `system.chat_ready=true`. If account sync or activation fails, the wizard stays
 open and offers retry or a redacted issue report rather than sending the user

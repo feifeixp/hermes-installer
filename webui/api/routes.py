@@ -7366,16 +7366,6 @@ def handle_post(handler, parsed) -> bool:
     # default browser at the dashboard's /api/oauth/start URL.
     if parsed.path == "/api/neowow/oauth/launch":
         try:
-            from api.onboarding import get_onboarding_capabilities
-            capabilities = get_onboarding_capabilities()
-            if not capabilities["neowow_oauth_supported"]:
-                return j(handler, {
-                    "ok": False,
-                    "error_code": "auth_unavailable_local",
-                    "message": capabilities["neowow_oauth_unavailable_reason"],
-                    "deployment_mode": capabilities["deployment_mode"],
-                    "available_actions": ["deployment_help", "report_issue"],
-                }, status=409)
             from api.neowow import launch_oauth
             # Accept both camelCase (neowow.js) and snake_case (older onboarding)
             # so a key-casing mismatch can't silently send "" → "Invalid return URL".
