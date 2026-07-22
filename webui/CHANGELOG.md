@@ -12,7 +12,7 @@
 
 ### Changed
 
-- Desktop onboarding now starts the existing Neodomain OAuth flow directly instead of blocking first-run users behind an online-deployment-only screen. OAuth callback validation remains limited to the running local Hermes server.
+- Desktop Neodomain OAuth no longer has an online-deployment gate; callback validation remains limited to the running local Hermes server.
 - Removed the retired three-step first-run page. The workspace now opens immediately; an explicit Neodomain sign-in from the account avatar prepares Coding Plan in the background and reports any retryable activation failure without blocking the app.
 - Issue reports now show the log file list and redaction notice before upload, require explicit confirmation, support removing log attachments, and use the active Hermes profile for offline pending reports.
 
