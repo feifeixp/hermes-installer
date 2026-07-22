@@ -6033,6 +6033,11 @@ function _rememberPreferencesSaved(payload){
 
 function _schedulePreferencesAutosave(){
   const payload=_preferencesPayloadFromUi();
+  // The composer reads window._sendKey for every keydown. Keep the runtime
+  // value in sync immediately instead of waiting for debounced persistence.
+  if(payload.send_key==='enter'||payload.send_key==='ctrl+enter'){
+    window._sendKey=payload.send_key;
+  }
   _rememberPreferencesSaved(payload);
   _settingsPreferencesAutosaveRetryPayload=payload;
   _setPreferencesAutosaveStatus('saving');
@@ -6043,6 +6048,10 @@ function _schedulePreferencesAutosave(){
 async function _autosavePreferencesSettings(payload){
   try{
     const saved=await api('/api/settings',{method:'POST',body:JSON.stringify(payload)});
+    // Reconcile with the server's validated value after persistence completes.
+    if(saved&&(saved.send_key==='enter'||saved.send_key==='ctrl+enter')){
+      window._sendKey=saved.send_key;
+    }
     if(payload&&payload.simplified_tool_calling!==undefined){
       window._simplifiedToolCalling=(saved&&saved.simplified_tool_calling!==false);
       if(typeof clearMessageRenderCache==='function') clearMessageRenderCache();

@@ -26,8 +26,9 @@
   // Refreshes on `neoSessionUpdated` (fired by /api/neowow/jwt POST + by
   // logout) and on DOMContentLoaded.  Tolerates the API being briefly
   // unavailable — the avatar just stays in its current state until the
-  // next refresh. First-run login itself is owned by onboarding.js so the
-  // product has one readiness state machine and one blocking container.
+  // next refresh. The main workspace is always available; account login is
+  // intentionally a lightweight action from this avatar rather than a
+  // first-run screen.
 
   async function refreshRailAvatar() {
     const disc    = $('neowowAvatarDisc');
@@ -139,10 +140,9 @@
       if (r.ok) {
         const j = await r.json();
         hasJwt = !!(j && j.hasJwt);
-        // A present-but-EXPIRED JWT comes back hasJwt=false + jwtExpired=true.
-        // Flag it so the onboarding login step says "登录已过期，请重新登录"
-        // instead of the first-run greeting — the user had a session, it just
-        // lapsed (the desktop can't silently refresh: no platform refresh API).
+        // A present-but-expired JWT comes back hasJwt=false + jwtExpired=true.
+        // Keep that signal for the account avatar's re-login affordance; the
+        // main workspace must remain usable while the user signs in again.
         window._neowowJwtExpired = !!(j && j.jwtExpired);
       }
     } catch (_) {
@@ -167,16 +167,6 @@
     }
 
     neowowHideBootOverlay({ success: hasJwt, networkOk, nickname });
-    // An expired session may have onboarding_completed=true, which makes the
-    // ordinary boot path skip the wizard. Re-open the canonical onboarding
-    // container instead of maintaining a second login-only overlay.
-    if (!hasJwt && networkOk && window._neowowJwtExpired) {
-      setTimeout(() => {
-        if (typeof window.loadOnboardingWizard === 'function') {
-          void window.loadOnboardingWizard({ force: true });
-        }
-      }, 0);
-    }
   }
 
   /**
@@ -556,10 +546,6 @@
       }
       points = d;
     } catch (e) {
-      if (e && e.code === 'auth_unavailable_local') {
-        if (typeof showToast === 'function') showToast(e.message, 6000, 'warning');
-        return;
-      }
       const msg = (e && e.message) || 'unknown';
       // We only get here when status.hasJwt was true — the user IS logged in.
       // A reachability / SSL / timeout error ("Cannot reach Neodomain") is a
@@ -1001,13 +987,6 @@
       showOAuthWaiting(d.url);
       startOAuthPolling();
     } catch (e) {
-      if (e && e.code === 'auth_unavailable_local') {
-        if (typeof showToast === 'function') showToast(e.message, 6000, 'warning');
-        if (typeof window.loadOnboardingWizard === 'function') {
-          void window.loadOnboardingWizard({ force: true });
-        }
-        return;
-      }
       // Fallback: surface the URL so the user can copy-paste into
       // their browser manually.  This usually means webbrowser.open()
       // returned False (no registered browser) or the launcher route
@@ -1020,6 +999,47 @@
   // Tight cadence (1 s) so a fast user typing in the browser sees the
   // avatar update within ~1 s of finishing.
   let _oauthPollHandle = null;
+  let _codingPlanActivation = null;
+
+  // OAuth is an explicit user action. Once it has succeeded, initialize the
+  // Coding Plan in the background so the current chat can use the plan without
+  // sending the user through a separate setup flow. This is deliberately not
+  // run on ordinary app boot for existing sessions.
+  async function activateCodingPlanAfterLogin(neowowOnly) {
+    if (!neowowOnly) return true;
+    if (_codingPlanActivation) return _codingPlanActivation;
+    _codingPlanActivation = (async () => {
+      try {
+        if (typeof showToast === 'function') showToast('登录成功，正在准备 Coding Plan…', 2500, 'info');
+        const r = await fetch('/api/neowow/activate-provider', {
+          cache: 'no-store',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok || data.chat_ready !== true) {
+          throw new Error(data.message || data.error || 'Coding Plan 尚未准备完成');
+        }
+        window._neowowJwtExpired = false;
+        if (typeof populateModelDropdown === 'function') {
+          await populateModelDropdown({ force: true });
+        }
+        if (typeof syncModelChip === 'function') syncModelChip();
+        if (typeof refreshProviderQuotaIndicator === 'function') refreshProviderQuotaIndicator();
+        if (typeof showToast === 'function') showToast('Coding Plan 已就绪', 3000, 'success');
+        return true;
+      } catch (e) {
+        if (typeof showToast === 'function') {
+          showToast(`登录成功，但 Coding Plan 准备失败：${(e && e.message) || '请稍后重试'}`, 6000, 'warning');
+        }
+        return false;
+      } finally {
+        _codingPlanActivation = null;
+      }
+    })();
+    return _codingPlanActivation;
+  }
   function startOAuthPolling() {
     stopOAuthPolling();
     const start = Date.now();
@@ -1042,6 +1062,7 @@
           // listener (rail avatar, account block, settings panes)
           // refreshes itself.
           try { window.dispatchEvent(new Event('neoSessionUpdated')); } catch (_) {}
+          void activateCodingPlanAfterLogin(!!d.neowowOnly);
         }
       } catch (e) { try { console.warn('[neowow] poll failed:', e); } catch (_) {} }
     }, 1000);

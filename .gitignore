@@ -54,3 +54,4 @@ tools/
 
 # preview/smoke runtime state
 .smoke-hermes-home/
+.gstack/

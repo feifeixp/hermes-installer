@@ -18,7 +18,7 @@
 ### AI 对话界面（WebUI）
 
 - 所有消息经 Hermes Agent Gateway（port 8642）处理，具备工具调用、记忆、多轮会话能力
-- **首次运行向导**：12+ 提供商（OpenRouter / Anthropic / OpenAI / DeepSeek / Ollama ...），API Key 配置，模型选择
+- **直达工作区**：不再显示首次运行引导；Neowow 账号从侧边账号入口登录，Coding Plan 登录后自动准备
 - 流式响应，Markdown 渲染 + 代码高亮
 - 对话历史持久化，多会话管理
 - 失败时提供可执行的恢复建议，并可在用户确认后上传脱敏诊断日志报告问题
@@ -29,7 +29,7 @@
 
 桌面端与 [app.neowow.studio](https://app.neowow.studio) 双向打通，云端是 SSOT：
 
-- **OAuth 登录（仅线上部署）** — 只有实际以 `HERMES_WEBUI_AUTH_MODE=neodomain` 部署的站点提供账号授权；本地桌面端会说明限制，并继续使用 API Key 或本地模型配置
+- **OAuth 登录** — 桌面端和线上部署均可完成 Neodomain 账号授权；本地回调仅接受当前 Hermes 服务器的 `localhost` / `127.0.0.1` 地址
 - **积分 / 会员** — 头像 popover 实时显示余额（按消耗类型分项）、会员等级，点击"充值"直达微信扫码下单
 - **配置云同步** — 在 web 端编辑的 Hermes 配置一键拉到本地（`~/.hermes/config.yaml`），告别多机重新配
 - **技能订阅同步** — 商店订阅的 Hermes 技能拉到 `~/.hermes/skills/_neowow/<id>/SKILL.md`，取消订阅自动清理
@@ -58,7 +58,7 @@
 │  │  · 环境检测 & 自动安装 Hermes Agent                     │  │
 │  │  · Python venv 创建 & 依赖安装                         │  │
 │  │  · 启动 server.py（动态端口）                           │  │
-│  │  · 首次运行 onboarding 向导                            │  │
+│  │  · 启动环境准备与账号会话恢复                          │  │
 │  └────────────────────┬─────────────────────────────────┘  │
 │                       │                                     │
 │  ┌────────────────────▼─────────────────────────────────┐  │
@@ -191,7 +191,7 @@ platforms:
 | **NVIDIA NIM** | OpenAI Chat | NVIDIA 推理服务 |
 | 自定义 | OpenAI Chat | 兼容 OpenAI API 格式 |
 
-> **WebUI 首次运行引导**支持以上所有提供商的一键配置。
+> WebUI 直接进入工作区；Neowow Coding Plan 在账号登录后自动配置。其他提供商仍可在设置中配置。
 
 ---
 
@@ -203,7 +203,7 @@ platforms:
 - [x] Hermes Agent 一键安装 + 国内镜像加速
 - [x] pywebview 原生桌面应用
 - [x] WebUI 现代对话界面
-- [x] 首次运行 onboarding 向导（12 提供商）
+- [x] 直达工作区与 Neowow Coding Plan 登录后自动配置
 - [x] **Neowow Studio 集成** — OAuth 登录 / 积分余额 / 微信充值 / 配置云同步 / 应用一键发布
 - [x] **Hermes 技能订阅同步** — `app.neowow.studio` 商店订阅 → `~/.hermes/skills/_neowow/`
 - [x] **应用自动更新** — 带 auto-rebase，本地有 commit 也能干净更新

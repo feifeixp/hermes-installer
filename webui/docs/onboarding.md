@@ -1,20 +1,19 @@
-# First-run onboarding guide
+# Setup and account guide
 
-This guide explains what happens the first time Hermes WebUI starts, which
-setup path to choose, and how to recover when the wizard cannot finish.
+This guide explains account sign-in, provider setup, and recovery paths in
+Hermes WebUI. There is no first-run blocking wizard: the workspace always opens
+directly.
 
 If an AI assistant is helping with install, reinstall, bootstrap, provider
 setup, or first-run support, read
 [`docs/onboarding-agent-checklist.md`](onboarding-agent-checklist.md) before
 running commands or inspecting logs.
 
-The short version: run the bootstrap, open the WebUI, choose a provider, choose
-a workspace, optionally set a password, then start a chat. If you are using a
-local model server from Docker, pay special attention to the Base URL section
-below.
-
-The wizard has one readiness rule: it closes only after the server reports
-`system.chat_ready=true`. A saved provider name alone is not considered ready.
+The short version: run the bootstrap, open the WebUI, then start a chat. The
+main workspace is available immediately. Sign in from the account avatar when
+you want to use Neowow Coding Plan; after the explicit sign-in succeeds, the
+app prepares the plan in the background. If you are using a local model server
+from Docker, pay special attention to the Base URL section below.
 
 ## Before you start
 
@@ -45,9 +44,9 @@ If a Docker install gets confusing, start again with the single-container setup.
 It avoids most UID/GID, source-volume, and tool-location surprises. See
 [Docker setup guide](docker.md) for the full container reference.
 
-## Re-running onboarding safely
+## Testing setup safely
 
-Do not delete `~/.hermes` just to see the wizard again. That directory can hold
+Do not delete `~/.hermes` just to test account or provider setup. That directory can hold
 your real Hermes config, credentials, memory, skills, profiles, sessions, and
 cron state.
 
@@ -71,27 +70,20 @@ If your repo has a `.env` file, remember that the bootstrap loads it. Remove or
 adjust any `HERMES_HOME`, `HERMES_WEBUI_STATE_DIR`, or `HERMES_WEBUI_PORT`
 entries there before using the isolated command above.
 
-For managed hosting or fully preconfigured images, set
-`HERMES_WEBUI_SKIP_ONBOARDING=1` to bypass the wizard.
+## Neodomain sign-in
 
-## Managed Neodomain sign-in
+Neodomain account sign-in is available in both desktop and managed online
+deployments. Desktop OAuth returns only to the running Hermes server on
+`localhost` or `127.0.0.1`; other callback targets are rejected. Managed online
+deployments continue to use their configured Neodomain authentication mode.
 
-Neodomain account sign-in is available only when the running server explicitly
-reports `HERMES_WEBUI_AUTH_MODE=neodomain`. This capability is intended for an
-actual online deployment where the OAuth callback and shared cookie domain are
-reachable. Local desktop, bootstrap, and Docker trials do not expose the OAuth
-action merely because a generic deployment flag is set; configure an API-key or
-local provider instead.
+After OAuth completes, the app explicitly activates the Coding Plan and refreshes
+the plan/model data in the background. The main workspace stays available;
+failure is shown as a retryable notification instead of a blocking setup page.
 
-After online OAuth completes, the wizard explicitly activates the Coding Plan,
-refreshes plan/model data, and waits for the server to report
-`system.chat_ready=true`. If account sync or activation fails, the wizard stays
-open and offers retry or a redacted issue report rather than sending the user
-into a chat that cannot run.
+## What the app checks
 
-## What the wizard checks
-
-The first screen reports the runtime state WebUI can see:
+The account and provider surfaces report the runtime state WebUI can see:
 
 - Hermes Agent importability: whether WebUI can import and run `AIAgent`.
 - Provider status: whether `config.yaml` and credential state are enough for a
@@ -100,11 +92,11 @@ The first screen reports the runtime state WebUI can see:
 - Config paths: the active `config.yaml` and `.env` locations for this profile.
 
 If the agent check fails, use [Troubleshooting](troubleshooting.md), especially
-the `AIAgent not available` section. If provider setup is incomplete, continue
-through the wizard or run `hermes model` in the same machine environment that
-will run WebUI.
+the `AIAgent not available` section. If provider setup is incomplete, configure
+it in Settings or run `hermes model` in the same machine environment that will
+run WebUI.
 
-## Choosing a provider
+## Configuring a provider
 
 The setup step groups providers by how much information they usually need.
 
@@ -114,19 +106,17 @@ The setup step groups providers by how much information they usually need.
 | Open / self-hosted | Ollama, LM Studio, custom OpenAI-compatible | Base URL, model, optional API key. |
 | Specialized | Gemini, DeepSeek, Xiaomi MiMo, Z.AI / GLM, NVIDIA NIM, Mistral, xAI | Provider API key and default model. |
 
-For API-key providers, the wizard writes the key to the active Hermes `.env`
-file and writes the default model/provider to `config.yaml`.
+For API-key providers, Settings writes the key to the active Hermes `.env` file
+and writes the default model/provider to `config.yaml`.
 
 For local providers, the API key field can be blank when the server is keyless.
 Most LM Studio, Ollama, vLLM, llama-server, and TabbyAPI installs run this way.
-Use **Test connection** to verify the Base URL and populate the model list
-before continuing.
+Use the provider connection check in Settings to verify the Base URL and
+populate the model list before saving.
 
 Advanced provider flows such as Nous Portal and GitHub Copilot are still
-terminal-first. OpenAI Codex and Anthropic Claude Code OAuth can be started in
-the onboarding flow when your Hermes config selects the corresponding provider.
-If the wizard points you back to `hermes model`, use that CLI flow first, then
-refresh WebUI.
+terminal-first. If Settings points you back to `hermes model`, use that CLI
+flow first, then refresh WebUI.
 
 ## Base URL rules for local model servers
 
@@ -146,10 +136,9 @@ Windows host, or another machine on your LAN. If LM Studio or Ollama is running
 outside the container, use `host.docker.internal` on Docker Desktop or the
 server's LAN IP address.
 
-The wizard probes `<base-url>/models` before saving. A successful probe fills
-the model dropdown. A failed probe blocks the setup step and shows an inline
-error such as DNS failure, connection refused, timeout, HTTP error, or
-unexpected response shape.
+The provider connection check probes `<base-url>/models` before saving. A
+successful probe fills the model dropdown. A failed check reports DNS failure,
+connection refused, timeout, HTTP error, or an unexpected response shape.
 
 ## Workspace step
 
@@ -208,6 +197,6 @@ the bundle is stored as a private pending report for a later retry.
 docker exec hermes-webui sh -c 'curl -sS -w "\nHTTP %{http_code}\n" http://host.docker.internal:1234/v1/models | head -50'
 ```
 
-5. Any inline wizard error text and relevant logs.
+5. Any account or provider error text and relevant logs.
 
 Never paste API keys, OAuth tokens, or full `.env` contents into an issue.

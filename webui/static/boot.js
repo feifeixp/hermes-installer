@@ -1187,17 +1187,6 @@ document.addEventListener('keydown',async e=>{
     await newSession();await renderSessionList();closeMobileSidebar();$('msg').focus();
   }
   if(e.key==='Escape'){
-    // Close onboarding overlay if open (skip/dismiss the wizard)
-    const onboardingOverlay=$('onboardingOverlay');
-    if(onboardingOverlay&&onboardingOverlay.style.display!=='none'){
-      // Required/managed onboarding deliberately hides its Skip button. Do
-      // not leave an undocumented keyboard path that marks it complete.
-      const skipBtn=$('onboardingSkipBtn');
-      const canSkip=skipBtn&&!skipBtn.disabled&&getComputedStyle(skipBtn).display!=='none';
-      if(canSkip&&typeof skipOnboarding==='function') skipOnboarding();
-      else e.preventDefault();
-      return;
-    }
     // Close settings panel if active
     if(_currentPanel==='settings'){_closeSettingsPanel();return;}
     // Close workspace dropdown
@@ -1726,15 +1715,13 @@ function applyBotName(){
     try{Promise.resolve(_startBootModelDropdown()).catch(()=>{});}catch(_){}
   },0);
   // Start independent boot fetches without holding the conversation list behind
-  // them. The sidebar can render from /api/sessions while workspace/onboarding
-  // metadata settles in parallel.
+  // them. Account login is available from the avatar and must never gate the
+  // conversation list or main workspace.
   const _workspaceListReady=loadWorkspaceList();
-  const _onboardingReady=_bootSettings.onboarding_completed?Promise.resolve(false):loadOnboardingWizard();
   // Render the session list before restoring the saved conversation so a stale
   // saved-session/client-side boot error cannot leave the sidebar empty forever.
   await renderSessionList();
   await _workspaceListReady;
-  await _onboardingReady;
   _initResizePanels();
   // Workspace panel restore happens AFTER loadSession so we know if
   // the session has a workspace — prevents the snap-open-then-closed flash (#576).

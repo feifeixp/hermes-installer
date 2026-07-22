@@ -139,14 +139,11 @@ def test_settings_exposes_default_model_provider_for_lazy_boot_catalog():
     assert 'model_cfg = get_config().get("model", {})' in src
 
 
-def test_boot_renders_session_list_before_workspace_and_onboarding_settle():
+def test_boot_renders_session_list_without_waiting_for_onboarding():
     src = (ROOT / "static" / "boot.js").read_text(encoding="utf-8")
     workspace_start = src.index("const _workspaceListReady=loadWorkspaceList();")
-    onboarding_start = src.index("const _onboardingReady=_bootSettings.onboarding_completed?Promise.resolve(false):loadOnboardingWizard();")
-    render_pos = src.index("await renderSessionList();", onboarding_start)
+    render_pos = src.index("await renderSessionList();", workspace_start)
     workspace_await = src.index("await _workspaceListReady;", render_pos)
-    onboarding_await = src.index("await _onboardingReady;", render_pos)
 
     assert workspace_start < render_pos < workspace_await
-    assert onboarding_start < render_pos < onboarding_await
-    assert "_bootSettings.onboarding_completed" in src
+    assert "loadOnboardingWizard()" not in src

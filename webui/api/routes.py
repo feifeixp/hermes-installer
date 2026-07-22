@@ -7315,9 +7315,10 @@ def handle_post(handler, parsed) -> bool:
             logger.exception("neowow jwt save failed")
             return bad(handler, str(e), status=500)
 
-    # One-shot provider activation — called by the onboarding overlay after
-    # first login.  Reads the JWT from neowow.json automatically (via
-    # apply_onboarding_setup), writes neowow-coding-plan to config.yaml.
+    # One-shot provider activation after an explicit Neowow login. Reads the
+    # JWT from neowow.json automatically (via apply_onboarding_setup), writes
+    # neowow-coding-plan to config.yaml, and marks the retired onboarding flow
+    # complete so a returning user is never sent back to it.
     if parsed.path == "/api/neowow/activate-provider":
         try:
             from api.onboarding import (
@@ -7347,6 +7348,8 @@ def handle_post(handler, parsed) -> bool:
                     "stage": (status or {}).get("stage") or "provider_error",
                     "available_actions": ["retry", "relogin", "report_issue"],
                 }, status=409)
+            from api.onboarding import complete_onboarding
+            complete_onboarding()
             return j(handler, {
                 "ok": True,
                 "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
@@ -7366,16 +7369,6 @@ def handle_post(handler, parsed) -> bool:
     # default browser at the dashboard's /api/oauth/start URL.
     if parsed.path == "/api/neowow/oauth/launch":
         try:
-            from api.onboarding import get_onboarding_capabilities
-            capabilities = get_onboarding_capabilities()
-            if not capabilities["neowow_oauth_supported"]:
-                return j(handler, {
-                    "ok": False,
-                    "error_code": "auth_unavailable_local",
-                    "message": capabilities["neowow_oauth_unavailable_reason"],
-                    "deployment_mode": capabilities["deployment_mode"],
-                    "available_actions": ["deployment_help", "report_issue"],
-                }, status=409)
             from api.neowow import launch_oauth
             # Accept both camelCase (neowow.js) and snake_case (older onboarding)
             # so a key-casing mismatch can't silently send "" → "Invalid return URL".

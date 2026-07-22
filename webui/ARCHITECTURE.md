@@ -73,7 +73,7 @@ actions. The topbar remains focused on conversation context and the workspace/fi
       messages.js          send(), SSE event handlers, structured failure recovery, approval, transcript.
       panels.js            Cron, skills, memory, workspace, profiles, todo, settings (~6480 lines)
       commands.js          Slash command registry, parser, autocomplete dropdown (~1302 lines)
-      onboarding.js        Single first-run wizard, managed OAuth capability checks, and server-confirmed readiness gate.
+      onboarding.js        Single first-run wizard, Neowow OAuth launch flow, and server-confirmed readiness gate.
       boot.js              Event wiring, mobile sidebar/workspace nav, voice input, boot IIFE (~1607 lines)
     tests/
       conftest.py          Isolated test server/state fixtures (~644 lines)

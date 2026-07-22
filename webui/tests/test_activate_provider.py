@@ -1,5 +1,6 @@
 """Tests for POST /api/neowow/activate-provider."""
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -63,6 +64,16 @@ class TestActivateProvider(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             _fetch_neowow_plan_models()
         self.assertIn("network timeout", str(ctx.exception))
+
+    def test_success_route_marks_retired_onboarding_complete(self):
+        routes = (Path(__file__).parent.parent / "api" / "routes.py").read_text(
+            encoding="utf-8"
+        )
+        start = routes.index('if parsed.path == "/api/neowow/activate-provider":')
+        end = routes.index('if parsed.path == "/api/neowow/oauth/launch":', start)
+        activation = routes[start:end]
+        self.assertIn("from api.onboarding import complete_onboarding", activation)
+        self.assertIn("complete_onboarding()", activation)
 
 
 if __name__ == "__main__":

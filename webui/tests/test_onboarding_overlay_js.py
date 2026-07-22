@@ -1,4 +1,4 @@
-"""Regression checks for the single-container onboarding readiness flow."""
+"""Regression checks for direct entry and explicit Coding Plan login."""
 
 import unittest
 from pathlib import Path
@@ -13,40 +13,29 @@ class TestOnboardingOverlayJs(unittest.TestCase):
     def setUpClass(cls):
         cls.neowow = (STATIC / "neowow.js").read_text(encoding="utf-8")
         cls.onboarding = (STATIC / "onboarding.js").read_text(encoding="utf-8")
+        cls.boot = (STATIC / "boot.js").read_text(encoding="utf-8")
         cls.index = (STATIC / "index.html").read_text(encoding="utf-8")
 
-    def test_only_canonical_onboarding_overlay_exists(self):
-        self.assertIn('id="onboardingOverlay"', self.index)
+    def test_no_blocking_onboarding_overlay_exists(self):
+        self.assertNotIn('id="onboardingOverlay"', self.index)
         self.assertNotIn('id="neoLoginOverlay"', self.index)
 
-    def test_neowow_does_not_auto_dismiss_on_login(self):
-        self.assertNotIn("_neowowCompleteOnboarding", self.neowow)
-        self.assertNotIn("_neowowShowOnboarding", self.neowow)
+    def test_boot_does_not_load_onboarding_before_rendering_sessions(self):
+        self.assertNotIn("loadOnboardingWizard()", self.boot)
+        self.assertIn("await renderSessionList();", self.boot)
 
-    def test_provider_activation_waits_for_chat_ready(self):
-        self.assertIn("async function _activateOnboardingProvider()", self.onboarding)
-        self.assertIn("activated.chat_ready!==true", self.onboarding)
-        self.assertIn("status.chat_ready!==true", self.onboarding)
+    def test_explicit_login_prepares_coding_plan_without_blocking_workspace(self):
+        self.assertIn("async function activateCodingPlanAfterLogin(neowowOnly)", self.neowow)
+        self.assertIn("if (!neowowOnly) return true;", self.neowow)
+        self.assertIn("/api/neowow/activate-provider", self.neowow)
+        self.assertIn("data.chat_ready !== true", self.neowow)
 
-    def test_local_auth_unavailable_copy_and_report_action_exist(self):
-        self.assertIn("auth_unavailable_local", self.onboarding)
-        self.assertIn("Neowow 账号授权仅支持实际线上部署", self.onboarding)
-        self.assertIn("reportOnboardingIssue", self.onboarding)
+    def test_neowow_login_has_no_online_deployment_gate(self):
+        self.assertNotIn("auth_unavailable_local", self.onboarding)
+        self.assertNotIn("查看线上部署", self.onboarding)
 
-    def test_activate_provider_fetch_is_in_canonical_onboarding(self):
-        self.assertIn("/api/neowow/activate-provider", self.onboarding)
-
-    def test_expired_login_reopens_canonical_wizard(self):
-        self.assertIn("window.loadOnboardingWizard({ force: true })", self.neowow)
-
-    def test_local_oauth_error_does_not_show_impossible_fallback(self):
-        self.assertIn("e.code === 'auth_unavailable_local'", self.neowow)
-        self.assertIn("void window.loadOnboardingWizard({ force: true })", self.neowow)
-
-    def test_required_onboarding_cannot_be_skipped_with_escape(self):
-        boot = (STATIC / "boot.js").read_text(encoding="utf-8")
-        self.assertIn("const canSkip=skipBtn&&!skipBtn.disabled", boot)
-        self.assertIn("if(canSkip&&typeof skipOnboarding==='function')", boot)
+    def test_expired_login_does_not_reopen_a_wizard(self):
+        self.assertNotIn("window.loadOnboardingWizard({ force: true })", self.neowow)
 
 
 if __name__ == "__main__":

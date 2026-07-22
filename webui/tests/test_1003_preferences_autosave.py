@@ -93,6 +93,21 @@ def test_preference_fields_use_schedule_autosave_not_mark_dirty():
             f"{dom_id} should not call _markSettingsDirty (Phase 2 autosaves it)"
 
 
+def test_send_key_updates_the_running_composer_before_autosave_completes():
+    """Changing the selector must affect the next keydown without a reload."""
+    schedule = _function_block(PANELS_JS, "_schedulePreferencesAutosave")
+    compact = schedule.replace(" ", "").replace("\n", "")
+    assert "window._sendKey=payload.send_key" in compact, (
+        "send_key changes must update the runtime composer preference immediately"
+    )
+
+    autosave = _function_block(PANELS_JS, "_autosavePreferencesSettings")
+    compact = autosave.replace(" ", "").replace("\n", "")
+    assert "window._sendKey=saved.send_key" in compact, (
+        "the runtime composer preference must reconcile with the saved value"
+    )
+
+
 def test_password_still_uses_mark_dirty():
     """SECURITY INVARIANT: password field must NEVER autosave; it must still
     call _markSettingsDirty so user explicitly clicks Save Settings."""
