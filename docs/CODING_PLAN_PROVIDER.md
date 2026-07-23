@@ -111,6 +111,19 @@ fallback or last-good disk cache so opening the wizard never waits on the
 network. Explicit provider activation and the live model endpoint refresh from
 `ga.neodomain.cn`; the current fallback catalog includes `kimi-k3`.
 
+Managed builds keep the workspace blocked until both login and runtime
+readiness are confirmed. `/api/chat/start` and `/api/chat` also reject requests
+without a Neowow JWT, so bypassing the browser gate cannot start the Agent.
+Existing logged-in installs that are not yet ready must use the explicit
+`POST /api/neowow/activate-provider` action; normal boot never activates the
+provider silently.
+
+Saving or clearing the JWT and completing provider activation invalidate both
+the configured-model cache and the live-model cache. The browser then forces a
+fresh `/api/models/live` request, preventing the logged-out
+`deepseek-v4-flash` fallback from hiding Kimi, Gemini, or other models included
+in the user's current plan.
+
 ### 5. Verify CI
 
 `docker/patch_hermes_agent.py` now:

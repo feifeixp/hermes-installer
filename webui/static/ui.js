@@ -1142,7 +1142,7 @@ async function populateModelDropdown(opts={}){
     }
     // Kick off a background live-model fetch for the active provider.
     // This runs after the static list is already shown (no blocking flicker).
-    if(data.active_provider) _fetchLiveModels(data.active_provider, sel);
+    if(data.active_provider) _fetchLiveModels(data.active_provider, sel, !!opts.force);
   }catch(e){
     // API unavailable -- keep the hardcoded HTML options as fallback
     console.warn('Failed to load models from server:',e.message);
@@ -1217,8 +1217,9 @@ function _addLiveModelsToSelect(provider, models, sel){
   return added;
 }
 
-async function _fetchLiveModels(provider, sel){
+async function _fetchLiveModels(provider, sel, force=false){
   if(!provider||!sel) return;
+  if(force) delete _liveModelCache[provider];
   // Already fetched — apply cached models to this select element (#872)
   if(_liveModelCache[provider]){
     const added=_addLiveModelsToSelect(provider,_liveModelCache[provider],sel);

@@ -107,32 +107,85 @@
   // script even loads. We're responsible for HIDING it once we know what
   // state the user is in.
   //
-  // States we resolve:
-  //   • Logged-in (cookie JWT validates, /api/neowow/status hasJwt=true)
-  //     → swap spinner → green checkmark + "登录成功" → fade out
-  //   • Logged-out / no cookie
-  //     → quickly fade out (no success animation — user sees the rail
-  //       avatar in its "click to login" state, which IS the expected UX
-  //       on desktop Hermes / fresh cloud session)
-  //   • Network error / API unreachable
-  //     → fade out anyway (don't trap user); console.warn for debugging
-  //
-  // Sequencing relative to refreshRailAvatar(): we run BOTH calls in
-  // parallel. The boot overlay shows for at least 600ms even on
-  // logged-in users so the success animation reads as deliberate (not
-  // a "flash and gone"). The avatar refresh happens in the background
-  // so it's ready when the overlay clears.
+  // Managed Neowow builds use this as their single login gate. The workspace
+  // is unlocked only after both a JWT and a chat-ready Coding Plan exist.
+  // Ordinary upstream builds still fade the overlay when Neowow is not
+  // required. A status failure stays recoverable instead of failing open.
   let _bootOverlayHidden = false;
-  async function neowowResolveBootOverlay() {
-    if (_bootOverlayHidden) return;
+  let _bootOverlayResolving = false;
+
+  function _setWorkspaceInert(enabled) {
     const overlay = document.getElementById('neowowBootOverlay');
-    if (!overlay) return; // already cleaned up
+    if (!document.body || (enabled && !overlay)) return;
+    document.documentElement.classList.toggle('neo-login-required', !!enabled);
+    document.body.classList.toggle('neo-login-required', !!enabled);
+    for (const node of document.body.children) {
+      if (node === overlay || node.tagName === 'SCRIPT' || node.tagName === 'STYLE') continue;
+      node.inert = !!enabled;
+    }
+  }
+
+  window.neowowShowLoginRequired = function (opts) {
+    opts = opts || {};
+    const overlay = document.getElementById('neowowBootOverlay');
+    if (!overlay || _bootOverlayHidden) return;
+    const spinner = document.getElementById('neowowBootSpinner');
+    const success = document.getElementById('neowowBootSuccess');
+    const title = document.getElementById('neowowBootTitle');
+    const hint = document.getElementById('neowowBootHint');
+    const actions = document.getElementById('neowowBootActions');
+    const login = document.getElementById('neowowBootLoginBtn');
+    const activate = document.getElementById('neowowBootActivateBtn');
+    const retry = document.getElementById('neowowBootRetryBtn');
+    const manualLink = document.getElementById('neowowBootManualLink');
+
+    overlay.dataset.statusResolved = '1';
+    _setWorkspaceInert(true);
+    if (success) success.style.display = 'none';
+    if (opts.waiting) {
+      if (spinner) spinner.style.display = 'block';
+      if (title) title.textContent = '等待登录完成';
+      if (hint) hint.textContent = '请在浏览器中完成 Neowow Studio 登录，完成后会自动继续。';
+      if (actions) actions.style.display = 'none';
+      return;
+    }
+
+    if (spinner) spinner.style.display = 'none';
+    if (title) title.textContent = opts.title || '请先登录 Neowow Studio';
+    if (hint) {
+      hint.textContent = opts.message
+        || '登录后才能使用 Coding Plan。我们会自动同步你的套餐和可用模型。';
+    }
+    if (actions) actions.style.display = 'flex';
+    if (login) {
+      login.style.display = (opts.hideLogin || opts.activate) ? 'none' : 'inline-block';
+      login.textContent = opts.loginLabel || '登录 Neowow Studio';
+      if (!opts.hideLogin && !opts.activate) setTimeout(() => login.focus(), 0);
+    }
+    if (activate) {
+      activate.style.display = opts.activate ? 'inline-block' : 'none';
+      if (opts.activate) setTimeout(() => activate.focus(), 0);
+    }
+    if (retry) retry.style.display = opts.retry ? 'inline-block' : 'none';
+    if (manualLink) {
+      manualLink.style.display = opts.fallbackUrl ? 'inline-block' : 'none';
+      if (opts.fallbackUrl) manualLink.href = opts.fallbackUrl;
+    }
+  };
+
+  window.neowowResolveBootOverlay = async function () {
+    if (_bootOverlayHidden || _bootOverlayResolving) return;
+    const overlay = document.getElementById('neowowBootOverlay');
+    if (!overlay) return;
+    _setWorkspaceInert(true);
+    _bootOverlayResolving = true;
 
     // Run status check + minimum-display-time in parallel.
     const minDisplayMs = 600;
     const t0 = Date.now();
 
     let hasJwt = false;
+    let neowowOnly = false;
     let nickname = '';
     let networkOk = true;
     try {
@@ -140,45 +193,92 @@
       if (r.ok) {
         const j = await r.json();
         hasJwt = !!(j && j.hasJwt);
-        // A present-but-expired JWT comes back hasJwt=false + jwtExpired=true.
-        // Keep that signal for the account avatar's re-login affordance; the
-        // main workspace must remain usable while the user signs in again.
+        neowowOnly = !!(j && j.neowowOnly);
         window._neowowJwtExpired = !!(j && j.jwtExpired);
+      } else {
+        networkOk = false;
       }
     } catch (_) {
       networkOk = false;
     }
 
-    // If logged-in, try fetching nickname for the success message.
-    if (hasJwt) {
-      try {
-        const r = await fetch('/api/neowow/whoami', { cache: 'no-store' });
-        if (r.ok) {
-          const j = await r.json();
-          nickname = (j && (j.nickname || j.contact || j.email)) || '';
+    try {
+      if (!networkOk) {
+        window.neowowShowLoginRequired({
+          title: '无法验证登录状态',
+          message: '请检查网络后重试。登录状态确认前无法使用 Coding Plan。',
+          retry: true,
+        });
+        return;
+      }
+      if (neowowOnly && !hasJwt) {
+        window.neowowShowLoginRequired();
+        return;
+      }
+      if (neowowOnly && hasJwt) {
+        let ready = false;
+        try {
+          const r = await fetch('/api/onboarding/status', { cache: 'no-store' });
+          if (r.ok) {
+            const data = await r.json();
+            ready = !!(data && data.chat_ready);
+          }
+        } catch (_) { /* handled as not ready below */ }
+        if (!ready) {
+          window.neowowShowLoginRequired({
+            title: 'Coding Plan 尚未就绪',
+            message: '账号已登录。继续后会同步你的套餐和可用模型，再进入工作区。',
+            activate: true,
+          });
+          return;
         }
-      } catch (_) { /* fall through with empty nickname */ }
-    }
+        if (typeof populateModelDropdown === 'function') {
+          await populateModelDropdown({ force: true });
+        }
+      }
 
-    // Pad to minimum display time
-    const elapsed = Date.now() - t0;
-    if (elapsed < minDisplayMs) {
-      await new Promise(r => setTimeout(r, minDisplayMs - elapsed));
-    }
+      if (hasJwt) {
+        try {
+          const r = await fetch('/api/neowow/whoami', { cache: 'no-store' });
+          if (r.ok) {
+            const j = await r.json();
+            nickname = (j && (j.nickname || j.contact || j.email)) || '';
+          }
+        } catch (_) { /* fall through with empty nickname */ }
+      }
 
-    neowowHideBootOverlay({ success: hasJwt, networkOk, nickname });
-  }
+      const elapsed = Date.now() - t0;
+      if (elapsed < minDisplayMs) {
+        await new Promise(r => setTimeout(r, minDisplayMs - elapsed));
+      }
+      window.neowowHideBootOverlay({ success: hasJwt, networkOk: true, nickname });
+    } finally {
+      _bootOverlayResolving = false;
+    }
+  };
+
+  window.neowowActivateCodingPlanFromGate = async function () {
+    window.neowowShowLoginRequired({ waiting: true });
+    const ready = await activateCodingPlanAfterLogin(true);
+    if (ready) {
+      window.neowowHideBootOverlay({ success: true, networkOk: true });
+      return;
+    }
+    window.neowowShowLoginRequired({
+      title: 'Coding Plan 尚未就绪',
+      message: '套餐或模型同步失败。请重试；仍失败时可退出后重新登录。',
+      activate: true,
+    });
+  };
 
   /**
-   * Hide the boot overlay. Exposed as window.neowowHideBootOverlay so
-   * the inline timeout-fallback script in index.html can also call it.
+   * Hide the boot overlay after the login/readiness invariant is satisfied.
    *
    * @param {Object} opts
    * @param {boolean} opts.success  — true → green checkmark animation,
    *                                  false → straight fade-out
    * @param {boolean} opts.networkOk — false → log a console.warn
    * @param {string}  opts.nickname  — used in success title if present
-   * @param {string}  opts.reason   — used by the safety-timeout caller
    */
   window.neowowHideBootOverlay = function (opts) {
     if (_bootOverlayHidden) return;
@@ -194,11 +294,8 @@
     const title   = document.getElementById('neowowBootTitle');
     const hint    = document.getElementById('neowowBootHint');
 
-    if (opts.reason === 'timeout') {
-      console.warn('[neowow-boot] safety timeout fired — overlay hidden without status resolution');
-    }
     if (!opts.networkOk) {
-      console.warn('[neowow-boot] /api/neowow/status unreachable; proceeding without login confirmation');
+      console.warn('[neowow-boot] /api/neowow/status unreachable');
     }
 
     if (opts.success) {
@@ -217,6 +314,7 @@
         setTimeout(function () {
           overlay.remove();
           document.body.classList.remove('neo-boot-pending');
+          _setWorkspaceInert(false);
         }, 460);
       }, 700);
     } else {
@@ -225,6 +323,7 @@
       setTimeout(function () {
         overlay.remove();
         document.body.classList.remove('neo-boot-pending');
+        _setWorkspaceInert(false);
       }, 460);
     }
   };
@@ -469,22 +568,21 @@
   // Refresh on session change + first paint.
   // Boot overlay sequencing: neowowResolveBootOverlay() runs alongside
   // the avatar/account refresh — it does its own /api/neowow/status call
-  // (independent of refreshRailAvatar's) and enforces a minimum display
-  // time so the success animation actually reads. The two avatar/status
-  // calls hitting the same endpoint twice is wasteful but trivially
-  // cheap (~5ms server-side) and keeps the overlay's lifecycle
-  // self-contained.
+  // and owns the managed-build login/Coding Plan readiness gate.
   document.addEventListener('DOMContentLoaded', () => {
     void refreshRailAvatar();
     void refreshAccountBlock();
-    void neowowResolveBootOverlay();
+    void window.neowowResolveBootOverlay();
   });
   window.addEventListener('neoSessionUpdated', () => {
     void refreshRailAvatar();
     void refreshAccountBlock();
-    // NOTE: don't re-trigger the boot overlay on session updates —
-    // those happen mid-session (login from popover, JWT refresh, etc.)
-    // and the user is already past boot at that point.
+    // When the managed login gate is still present, a JWT written by the
+    // callback/background poll must re-evaluate readiness. Once the overlay
+    // is gone this is a no-op and ordinary mid-session refreshes stay quiet.
+    if (document.getElementById('neowowBootOverlay')) {
+      void window.neowowResolveBootOverlay();
+    }
   });
   // First-render fallback if DOMContentLoaded already fired before this
   // script registered its listener (script lives inside an IIFE that
@@ -492,7 +590,7 @@
   if (document.readyState !== 'loading') {
     void refreshRailAvatar();
     void refreshAccountBlock();
-    void neowowResolveBootOverlay();
+    void window.neowowResolveBootOverlay();
   }
 
   // ── Account block in Settings → Neowow Studio ─────────────────────────
@@ -985,6 +1083,7 @@
       // polling.  The avatar disc UI doesn't change yet; the inline
       // popover / account block does.
       showOAuthWaiting(d.url);
+      window.neowowShowLoginRequired({ waiting: true });
       startOAuthPolling();
     } catch (e) {
       // Fallback: surface the URL so the user can copy-paste into
@@ -1062,7 +1161,17 @@
           // listener (rail avatar, account block, settings panes)
           // refreshes itself.
           try { window.dispatchEvent(new Event('neoSessionUpdated')); } catch (_) {}
-          void activateCodingPlanAfterLogin(!!d.neowowOnly);
+          const ready = await activateCodingPlanAfterLogin(!!d.neowowOnly);
+          if (ready) {
+            window.neowowHideBootOverlay({ success: true, networkOk: true });
+          } else {
+            window.neowowShowLoginRequired({
+              title: 'Coding Plan 尚未就绪',
+              message: '已登录，但套餐或模型同步失败。请重试；仍失败时可重新登录。',
+              retry: true,
+              loginLabel: '重新登录',
+            });
+          }
         }
       } catch (e) { try { console.warn('[neowow] poll failed:', e); } catch (_) {} }
     }, 1000);
@@ -1097,6 +1206,12 @@
 
   function showOAuthFallback(returnUrl, errMsg) {
     const authUrl = 'https://app.neowow.studio/api/oauth/start?return=' + encodeURIComponent(returnUrl);
+    window.neowowShowLoginRequired({
+      title: '无法自动打开浏览器',
+      message: '请手动打开登录页面；完成登录后这里会自动继续。',
+      loginLabel: '重试自动打开',
+      fallbackUrl: authUrl,
+    });
     const html = `
       <div style="padding:10px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.35);border-radius:8px;font-size:12px;line-height:1.6">
         <div style="font-weight:600;color:#e8a030">⚠️ 无法自动打开浏览器：${escapeHtml(errMsg)}</div>
@@ -1177,9 +1292,14 @@
         const j = await r.json().catch(() => ({}));
         throw new Error(j.error || ('HTTP '+r.status));
       }
+      const d = await r.json().catch(() => ({}));
       // Close the popover + refresh visible state.
       const popover = $('neowowAuthPopover');
       if (popover) popover.style.display = 'none';
+      if (d.neowowOnly) {
+        window.location.reload();
+        return;
+      }
       void refreshRailAvatar();
       void loadJwtBlock();
     } catch (e) {
