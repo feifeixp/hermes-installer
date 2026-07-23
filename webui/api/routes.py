@@ -2629,6 +2629,30 @@ from api.oauth import (
     start_onboarding_oauth_flow,
 )
 
+
+def _reject_neowow_chat_without_login(handler) -> bool:
+    """Keep the managed Coding Plan inaccessible until Neowow login exists."""
+    try:
+        from api.neowow import _neowow_only, get_jwt
+
+        if not _neowow_only() or get_jwt():
+            return False
+    except Exception:
+        logger.exception("failed to verify Neowow Coding Plan login")
+        j(handler, {
+            "error": "暂时无法验证登录状态，请稍后重试。",
+            "code": "neowow_login_check_failed",
+        }, status=503)
+        return True
+
+    j(handler, {
+        "error": "请先登录 Neowow Studio，再使用 Coding Plan。",
+        "code": "neowow_login_required",
+        "available_actions": ["login"],
+    }, status=428)
+    return True
+
+
 # Approval system (optional -- graceful fallback if agent not available)
 try:
     from tools.approval import (
@@ -6258,9 +6282,13 @@ def handle_post(handler, parsed) -> bool:
         return _handle_goal_command(handler, body)
 
     if parsed.path == "/api/chat/start":
+        if _reject_neowow_chat_without_login(handler):
+            return
         return _handle_chat_start(handler, body, diag=diag)
 
     if parsed.path == "/api/chat":
+        if _reject_neowow_chat_without_login(handler):
+            return
         return _handle_chat_sync(handler, body)
 
     if parsed.path == "/api/chat/steer":
@@ -7306,9 +7334,14 @@ def handle_post(handler, parsed) -> bool:
         try:
             from api.neowow import save_jwt, clear_jwt
             if body and body.get("clear"):
-                return j(handler, clear_jwt())
-            jwt = (body or {}).get("jwt", "")
-            return j(handler, save_jwt(jwt))
+                result = clear_jwt()
+            else:
+                jwt = (body or {}).get("jwt", "")
+                result = save_jwt(jwt)
+            from api.config import invalidate_models_cache
+            invalidate_models_cache()
+            _clear_live_models_cache()
+            return j(handler, result)
         except ValueError as e:
             return bad(handler, str(e))
         except Exception as e:
@@ -7350,6 +7383,9 @@ def handle_post(handler, parsed) -> bool:
                 }, status=409)
             from api.onboarding import complete_onboarding
             complete_onboarding()
+            from api.config import invalidate_models_cache
+            invalidate_models_cache()
+            _clear_live_models_cache()
             return j(handler, {
                 "ok": True,
                 "provider": _NEOWOW_CODING_PLAN_PROVIDER_ID,
