@@ -1130,10 +1130,13 @@ _PROVIDER_MODELS = {
         {"id": "gemini-3.1-pro-preview",          "label": "Gemini 3.1 Pro (Preview)"},
         {"id": "gemini-3.1-pro-preview-customtools", "label": "Gemini 3.1 Pro (Custom Tools)"},
         {"id": "gemini-3.5-flash",               "label": "Gemini 3.5 Flash"},
+        {"id": "gemini-3.5-flash-lite",          "label": "Gemini 3.5 Flash Lite"},
+        {"id": "gemini-3.6-flash",               "label": "Gemini 3.6 Flash"},
         {"id": "gemini-3.1-flash-lite",           "label": "Gemini 3.1 Flash Lite"},
         {"id": "gemini-3.1-flash-lite-preview",   "label": "Gemini 3.1 Flash Lite (Preview)"},
         {"id": "gemini-3-flash-preview",          "label": "Gemini 3 Flash (Preview)"},
         {"id": "gemini-2.5-flash-lite",           "label": "Gemini 2.5 Flash Lite"},
+        {"id": "gemini-2.5-flash",                "label": "Gemini 2.5 Flash"},
         # DeepSeek
         {"id": "deepseek-v4-pro",                 "label": "DeepSeek V4 Pro"},
         {"id": "deepseek-v4-flash",               "label": "DeepSeek V4 Flash"},
@@ -2518,7 +2521,10 @@ def _current_webui_version() -> str | None:
 # Bumped 7→8 (2026-07-20): live probes confirmed four additions and two
 # removals. The three advertised GPT entries remain excluded because their
 # chat endpoints return HTTP 400 upstream_error.
-_MODELS_CACHE_SCHEMA_VERSION = 8
+# Bumped 8→9 (2026-07-25): added the three confirmed-available Gemini models
+# from the 2026-07-23 directory drift. Rebuild existing caches immediately so
+# the fallback picker does not hide them until its 24-hour TTL expires.
+_MODELS_CACHE_SCHEMA_VERSION = 9
 
 
 _models_cache_path = STATE_DIR / "models_cache.json"
