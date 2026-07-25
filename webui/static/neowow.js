@@ -138,11 +138,15 @@
     const activate = document.getElementById('neowowBootActivateBtn');
     const retry = document.getElementById('neowowBootRetryBtn');
     const manualLink = document.getElementById('neowowBootManualLink');
+    const pathChooser = document.getElementById('neowowBootPathChooser');
+    const pathButton = document.getElementById('neowowBootPathBtn');
 
     overlay.dataset.statusResolved = '1';
     _setWorkspaceInert(true);
     if (success) success.style.display = 'none';
     if (opts.waiting) {
+      if (pathChooser) { pathChooser.hidden = true; pathChooser.style.display = 'none'; }
+      if (pathButton) pathButton.setAttribute('aria-expanded', 'false');
       if (spinner) spinner.style.display = 'block';
       if (title) title.textContent = '等待登录完成';
       if (hint) hint.textContent = '请在浏览器中完成 Neowow Studio 登录，完成后会自动继续。';
@@ -170,6 +174,29 @@
     if (manualLink) {
       manualLink.style.display = opts.fallbackUrl ? 'inline-block' : 'none';
       if (opts.fallbackUrl) manualLink.href = opts.fallbackUrl;
+    }
+  };
+
+  // This chooser is informational only. It helps users choose a supported
+  // entry path without mutating auth, deployment_mode, or chat readiness.
+  window.neowowToggleDeploymentPaths = function () {
+    const chooser = document.getElementById('neowowBootPathChooser');
+    const button = document.getElementById('neowowBootPathBtn');
+    if (!chooser || !button) return;
+    const open = chooser.hidden;
+    chooser.hidden = !open;
+    chooser.style.display = open ? 'grid' : 'none';
+    button.setAttribute('aria-expanded', String(open));
+    if (open && typeof recordProductEvent === 'function') {
+      recordProductEvent('deployment_path_view', { source: 'boot_gate' });
+    }
+  };
+
+  window.neowowSelectDeploymentPath = function (path) {
+    const allowed = new Set(['online', 'local', 'remote', 'operator_docs']);
+    if (!allowed.has(path)) return;
+    if (typeof recordProductEvent === 'function') {
+      recordProductEvent('deployment_path_selected', { source: path });
     }
   };
 

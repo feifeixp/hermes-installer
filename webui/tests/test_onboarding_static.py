@@ -41,6 +41,24 @@ def test_neowow_login_gate_waits_for_coding_plan_and_refreshes_models():
     assert "populateModelDropdown({ force: true })" in js
 
 
+def test_neowow_login_gate_exposes_informational_deployment_path_chooser():
+    html = read("static/index.html")
+    js = read("static/neowow.js")
+
+    assert 'id="neowowBootPathBtn"' in html
+    assert 'id="neowowBootPathChooser"' in html
+    assert 'https://chat.neowow.studio' in html
+    assert 'docs/REMOTE_DEPLOY.md' in html
+    assert 'docs/CLOUD_DEPLOY.md' in html
+    assert 'window.neowowToggleDeploymentPaths' in js
+    assert 'window.neowowSelectDeploymentPath' in js
+    chooser_start = js.index('window.neowowToggleDeploymentPaths')
+    chooser = js[chooser_start:chooser_start + 1200]
+    assert "recordProductEvent('deployment_path_view'" in chooser
+    assert "chat_ready" not in chooser
+    assert "deployment_mode" not in chooser
+
+
 def test_chat_routes_enforce_login_and_activation_invalidates_model_caches():
     routes = read("api/routes.py")
     guard_start = routes.index("def _reject_neowow_chat_without_login(handler)")
