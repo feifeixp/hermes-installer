@@ -11,7 +11,7 @@ History:
   newly advertised GPT entries still return upstream_error and stay hidden.
 """
 
-from api.config import _PROVIDER_MODELS
+from api.config import _MODELS_CACHE_SCHEMA_VERSION, _PROVIDER_MODELS
 
 
 def _ids():
@@ -49,12 +49,27 @@ def test_catalog_includes_2026_07_20_verified_additions():
         assert model_id in ids, f"verified live model missing: {model_id}"
 
 
+def test_catalog_includes_2026_07_23_confirmed_additions_and_bumps_cache_schema():
+    """#55: confirmed live additions must appear after an immediate cache rebuild."""
+    ids = _ids()
+    for model_id in (
+        "gemini-2.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+    ):
+        assert model_id in ids, f"confirmed live model missing: {model_id}"
+    # The directory no longer lists this preview model, but its only probe was
+    # a transient 503. Keep the fallback until a later audit confirms removal.
+    assert "gemini-3.1-flash-lite-preview" in ids
+    assert _MODELS_CACHE_SCHEMA_VERSION == 9
+
+
 def test_catalog_excludes_models_ga_removed():
     # A fallback that still lists removed or advertised-but-broken entries
     # produces picker options that fail on every call.
     ids = _ids()
     assert not any(i.startswith("gpt-") for i in ids), f"gpt-* must be gone: {sorted(ids)}"
-    for gone in ("gemini-2.5-flash", "gemini-3-pro-preview", "global.anthropic.claude-fable-5"):
+    for gone in ("gemini-3-pro-preview", "global.anthropic.claude-fable-5"):
         assert gone not in ids, f"{gone} was removed upstream"
 
 

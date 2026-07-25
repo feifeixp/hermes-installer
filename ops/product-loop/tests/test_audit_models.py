@@ -52,6 +52,14 @@ class AuditModelsTests(unittest.TestCase):
         self.assertEqual(result["state"], "unavailable")
         self.assertEqual(result["error_code"], "model_not_found")
 
+    @patch("urllib.request.urlopen")
+    def test_http_503_is_inconclusive_not_a_removal_signal(self, urlopen):
+        body = io.BytesIO(json.dumps({"error": {"code": "upstream_error"}}).encode())
+        urlopen.side_effect = urllib.error.HTTPError("https://example.test", 503, "unavailable", {}, body)
+        result = audit_models.probe_model("preview", chat_url="https://example.test/chat", token="secret", timeout=1)
+        self.assertEqual(result["state"], "inconclusive")
+        self.assertEqual(result["http_status"], 503)
+
     def test_string_error_is_kept_as_bounded_code(self):
         self.assertEqual(audit_models._error_metadata({"error": "upstream_error"}), ("upstream_error", None))
 
