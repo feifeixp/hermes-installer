@@ -44,6 +44,21 @@ If a Docker install gets confusing, start again with the single-container setup.
 It avoids most UID/GID, source-volume, and tool-location surprises. See
 [Docker setup guide](docker.md) for the full container reference.
 
+## Choose how to use Neowow Studio
+
+The managed sign-in gate includes **Choose how to use it** so users can choose
+an appropriate path before they sign in:
+
+| Path | Best for | Important limit |
+|---|---|---|
+| Use online | Starting immediately without an installation | The cloud service cannot access files on the local computer. |
+| Run locally | Working with a local workspace or files | Initial setup runs on the user's computer. |
+| Connect an existing cloud service | Desktop users who already have a cloud URL | Cloud and local workspaces remain separate. |
+
+The chooser is informational: it does not change authentication, deployment
+mode, provider configuration, or `chat_ready`. Operators who need to run their
+own cloud service should follow the repository's `docs/CLOUD_DEPLOY.md` guide.
+
 ## Testing setup safely
 
 Do not delete `~/.hermes` just to test account or provider setup. That directory can hold

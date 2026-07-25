@@ -5,6 +5,9 @@
 
 ### Added
 
+- Added a deployment-path chooser to the managed Neowow login gate. Users can
+  choose online use, local execution, or an existing cloud connection before
+  sign-in; self-hosting remains an operator-only documentation path.
 - Added the confirmed-available `gemini-2.5-flash`, `gemini-3.5-flash-lite`,
   and `gemini-3.6-flash` models to the Neodomain and Neowow Coding Plan
   fallback catalog. The model-cache schema is now version 9 so the next
