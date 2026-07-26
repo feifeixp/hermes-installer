@@ -7,8 +7,9 @@ History:
 - 2026-06-11: ga REMOVED the whole gpt-* family (+ gemini-3.5-flash, and
   gemini-3-pro-preview — shut down by Google 2026-03-09, #669) and added
   qwen3.7 / MiniMax-M2.7 etc. A stale fallback kept showing GPT in pickers.
-- 2026-07-20: live probes confirmed four additions and two removals. Three
-  newly advertised GPT entries still return upstream_error and stay hidden.
+- 2026-07-20: live probes confirmed four additions and two removals.
+- 2026-07-26: product approval added three advertised GPT entries and removed
+  the retired Gemini 3.1 Flash Lite Preview entry.
 """
 
 from api.config import _MODELS_CACHE_SCHEMA_VERSION, _PROVIDER_MODELS
@@ -49,8 +50,8 @@ def test_catalog_includes_2026_07_20_verified_additions():
         assert model_id in ids, f"verified live model missing: {model_id}"
 
 
-def test_catalog_includes_2026_07_23_confirmed_additions_and_bumps_cache_schema():
-    """#55: confirmed live additions must appear after an immediate cache rebuild."""
+def test_catalog_applies_2026_07_26_model_decision_and_bumps_cache_schema():
+    """The approved catalog change must force existing picker caches to rebuild."""
     ids = _ids()
     for model_id in (
         "gemini-2.5-flash",
@@ -58,17 +59,18 @@ def test_catalog_includes_2026_07_23_confirmed_additions_and_bumps_cache_schema(
         "gemini-3.6-flash",
     ):
         assert model_id in ids, f"confirmed live model missing: {model_id}"
-    # The directory no longer lists this preview model, but its only probe was
-    # a transient 503. Keep the fallback until a later audit confirms removal.
-    assert "gemini-3.1-flash-lite-preview" in ids
-    assert _MODELS_CACHE_SCHEMA_VERSION == 9
+    for model_id in ("gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra"):
+        assert model_id in ids, f"approved model missing: {model_id}"
+    assert "gemini-3.1-flash-lite-preview" not in ids
+    assert _MODELS_CACHE_SCHEMA_VERSION == 10
 
 
 def test_catalog_excludes_models_ga_removed():
-    # A fallback that still lists removed or advertised-but-broken entries
-    # produces picker options that fail on every call.
+    # A fallback must not resurrect models that the gateway has removed.
     ids = _ids()
-    assert not any(i.startswith("gpt-") for i in ids), f"gpt-* must be gone: {sorted(ids)}"
+    assert {i for i in ids if i.startswith("gpt-")} == {
+        "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra"
+    }
     for gone in ("gemini-3-pro-preview", "global.anthropic.claude-fable-5"):
         assert gone not in ids, f"{gone} was removed upstream"
 

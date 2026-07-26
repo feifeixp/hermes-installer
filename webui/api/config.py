@@ -1108,13 +1108,15 @@ _PROVIDER_MODELS = {
     # models under their canonical IDs (no provider/ prefix). New users
     # of neowow.studio should start here — their points / membership
     # already cover usage through this gateway.
-    # Mirror of the dashboard /api/me/plan catalog (validated 2026-07-20 —
+    # Mirror of the dashboard /api/me/plan catalog (validated 2026-07-26 —
     # taken from the auto-synced cfg_model_prices, which the dashboard now
     # refreshes hourly from ga.neodomain.cn /v1/models). ga REMOVED the whole
-    # catalog drift is accepted here only after a real 1-token chat probe.
-    # The dashboard currently advertises gpt-5.5 / gpt-5.6-sol /
-    # gpt-5.6-terra, but all three return HTTP 400 upstream_error and are
-    # intentionally excluded until the gateway serves them successfully.
+    # catalog drift normally enters here only after a real 1-token chat probe;
+    # an explicit product-owner decision is recorded below when it overrides
+    # that routine audit gate.
+    # The product owner approved the currently advertised GPT entries for the
+    # fallback catalog on 2026-07-26. Keep this list in sync with that decision
+    # until a later audited directory change supersedes it.
     # Keep this fallback aligned
     # or stale models reappear whenever the live overlay can't run (offline /
     # no JWT / cold cache). Chat models only (image/video/audio live on
@@ -1133,10 +1135,13 @@ _PROVIDER_MODELS = {
         {"id": "gemini-3.5-flash-lite",          "label": "Gemini 3.5 Flash Lite"},
         {"id": "gemini-3.6-flash",               "label": "Gemini 3.6 Flash"},
         {"id": "gemini-3.1-flash-lite",           "label": "Gemini 3.1 Flash Lite"},
-        {"id": "gemini-3.1-flash-lite-preview",   "label": "Gemini 3.1 Flash Lite (Preview)"},
         {"id": "gemini-3-flash-preview",          "label": "Gemini 3 Flash (Preview)"},
         {"id": "gemini-2.5-flash-lite",           "label": "Gemini 2.5 Flash Lite"},
         {"id": "gemini-2.5-flash",                "label": "Gemini 2.5 Flash"},
+        # OpenAI GPT via the Neodomain gateway
+        {"id": "gpt-5.5",                         "label": "GPT-5.5"},
+        {"id": "gpt-5.6-sol",                     "label": "GPT-5.6 Sol"},
+        {"id": "gpt-5.6-terra",                   "label": "GPT-5.6 Terra"},
         # DeepSeek
         {"id": "deepseek-v4-pro",                 "label": "DeepSeek V4 Pro"},
         {"id": "deepseek-v4-flash",               "label": "DeepSeek V4 Flash"},
@@ -2524,7 +2529,9 @@ def _current_webui_version() -> str | None:
 # Bumped 8→9 (2026-07-25): added the three confirmed-available Gemini models
 # from the 2026-07-23 directory drift. Rebuild existing caches immediately so
 # the fallback picker does not hide them until its 24-hour TTL expires.
-_MODELS_CACHE_SCHEMA_VERSION = 9
+# Bumped 9→10 (2026-07-26): added the product-approved GPT entries and
+# removed the retired Gemini preview. Rebuild existing caches immediately.
+_MODELS_CACHE_SCHEMA_VERSION = 10
 
 
 _models_cache_path = STATE_DIR / "models_cache.json"
