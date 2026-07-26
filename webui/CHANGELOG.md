@@ -11,8 +11,11 @@
 - Added the confirmed-available `gemini-2.5-flash`, `gemini-3.5-flash-lite`,
   and `gemini-3.6-flash` models to the Neodomain and Neowow Coding Plan
   fallback catalog. The model-cache schema is now version 9 so the next
-  release rebuilds existing picker caches immediately. The advertised GPT
-  entries remain excluded because their live probes are confirmed unavailable.
+  release rebuilds existing picker caches immediately.
+- Added the product-approved `gpt-5.5`, `gpt-5.6-sol`, and `gpt-5.6-terra`
+  models to the Neodomain and Neowow Coding Plan fallback catalog, and removed
+  `gemini-3.1-flash-lite-preview`. The model-cache schema is now version 10,
+  so the next release rebuilds existing picker caches immediately.
 - Added four models verified against the live Neodomain gateway: `doubao-seed-character-260628`, `gemini-3.1-pro-preview-customtools`, `gemini-3.5-flash`, and `glm-5.2`. Removed two stale fallback entries that no longer appear online and return 503. The three newly advertised GPT entries remain hidden because live calls currently return `upstream_error`.
 - Added `kimi-k3` to the Neodomain (`ga.neodomain.cn`) and Neowow Coding Plan model pickers, including the offline/cold-cache fallback catalog.
 - Added structured recovery actions to chat errors, including retry, re-login, model settings, plan details, and one-click issue reporting.
