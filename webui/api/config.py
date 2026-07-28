@@ -1108,24 +1108,27 @@ _PROVIDER_MODELS = {
     # models under their canonical IDs (no provider/ prefix). New users
     # of neowow.studio should start here — their points / membership
     # already cover usage through this gateway.
-    # Mirror of the dashboard /api/me/plan catalog (validated 2026-07-26 —
+    # Mirror of the dashboard /api/me/plan catalog (validated 2026-07-28 —
     # taken from the auto-synced cfg_model_prices, which the dashboard now
     # refreshes hourly from ga.neodomain.cn /v1/models). ga REMOVED the whole
     # catalog drift normally enters here only after a real 1-token chat probe;
     # an explicit product-owner decision is recorded below when it overrides
     # that routine audit gate.
-    # The product owner approved the currently advertised GPT entries for the
-    # fallback catalog on 2026-07-26. Keep this list in sync with that decision
-    # until a later audited directory change supersedes it.
+    # The product owner approved the currently advertised GPT entries and the
+    # 2026-07-28 Claude 5 additions for the fallback catalog. Keep this list
+    # in sync with those decisions until a later audited directory change
+    # supersedes them.
     # Keep this fallback aligned
     # or stale models reappear whenever the live overlay can't run (offline /
     # no JWT / cold cache). Chat models only (image/video/audio live on
     # story.neodomain.cn, never here).
     "neodomain": [
         # Anthropic Claude
+        {"id": "claude-opus-5",                   "label": "Claude Opus 5"},
         {"id": "claude-opus-4-8",                 "label": "Claude Opus 4.8"},
         {"id": "claude-opus-4-7",                 "label": "Claude Opus 4.7"},
         {"id": "claude-opus-4-6",                 "label": "Claude Opus 4.6"},
+        {"id": "claude-sonnet-5",                 "label": "Claude Sonnet 5"},
         {"id": "claude-sonnet-4-6",               "label": "Claude Sonnet 4.6"},
         {"id": "claude-haiku-4-5-20251001",       "label": "Claude Haiku 4.5"},
         # Google Gemini
@@ -2531,7 +2534,9 @@ def _current_webui_version() -> str | None:
 # the fallback picker does not hide them until its 24-hour TTL expires.
 # Bumped 9→10 (2026-07-26): added the product-approved GPT entries and
 # removed the retired Gemini preview. Rebuild existing caches immediately.
-_MODELS_CACHE_SCHEMA_VERSION = 10
+# Bumped 10→11 (2026-07-28): added the product-approved Claude Opus 5 and
+# Claude Sonnet 5 catalog entries. Rebuild existing caches immediately.
+_MODELS_CACHE_SCHEMA_VERSION = 11
 
 
 _models_cache_path = STATE_DIR / "models_cache.json"
