@@ -10,6 +10,7 @@ History:
 - 2026-07-20: live probes confirmed four additions and two removals.
 - 2026-07-26: product approval added three advertised GPT entries and removed
   the retired Gemini 3.1 Flash Lite Preview entry.
+- 2026-07-28: product approval added Claude Opus 5 and Claude Sonnet 5.
 """
 
 from api.config import _MODELS_CACHE_SCHEMA_VERSION, _PROVIDER_MODELS
@@ -50,8 +51,8 @@ def test_catalog_includes_2026_07_20_verified_additions():
         assert model_id in ids, f"verified live model missing: {model_id}"
 
 
-def test_catalog_applies_2026_07_26_model_decision_and_bumps_cache_schema():
-    """The approved catalog change must force existing picker caches to rebuild."""
+def test_catalog_applies_2026_07_26_model_decision():
+    """The July 26 model decision must remain present in the fallback catalog."""
     ids = _ids()
     for model_id in (
         "gemini-2.5-flash",
@@ -62,7 +63,11 @@ def test_catalog_applies_2026_07_26_model_decision_and_bumps_cache_schema():
     for model_id in ("gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra"):
         assert model_id in ids, f"approved model missing: {model_id}"
     assert "gemini-3.1-flash-lite-preview" not in ids
-    assert _MODELS_CACHE_SCHEMA_VERSION == 10
+def test_catalog_applies_2026_07_28_claude_5_decision():
+    """The approved Claude 5 additions must be available after cache rebuild."""
+    ids = _ids()
+    assert {"claude-opus-5", "claude-sonnet-5"} <= ids
+    assert _MODELS_CACHE_SCHEMA_VERSION == 11
 
 
 def test_catalog_excludes_models_ga_removed():
