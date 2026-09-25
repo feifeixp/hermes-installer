@@ -5,6 +5,11 @@
 
 ### Added
 
+- Added an optional Laya decision settings panel with off, observation, and
+  advisory routing modes, connection and sample tests, and recent decision
+  metadata. Disabled by default; service failures and low-confidence results
+  preserve the existing agent flow. See [setup and behavior](docs/laya.md).
+
 - Added a deployment-path chooser to the managed Neowow login gate. Users can
   choose online use, local execution, or an existing cloud connection before
   sign-in; self-hosting remains an operator-only documentation path.

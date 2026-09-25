@@ -93,6 +93,13 @@ ecosystem. See [docs/why-hermes.md](docs/why-hermes.md) for the full side-by-sid
 
 ---
 
+## Optional Laya decision assistant
+
+The **Settings → Laya decision assistant** panel connects a separately managed
+[Laya](https://github.com/NandhaKishorM/laya) inference service. It is disabled by
+default and supports observation and advisory workflow suggestions. See
+[configuration, testing, and runtime behavior](docs/laya.md).
+
 ## Quick start
 
 Run the repo bootstrap:

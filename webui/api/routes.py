@@ -4157,6 +4157,10 @@ def handle_get(handler, parsed) -> bool:
             days = 7
         return j(handler, get_provider_cost_history(provider_id, days))
 
+    if parsed.path == "/api/laya":
+        from api import laya
+        return j(handler, {"settings": laya.public_settings(), "recent": laya.recent_results()})
+
     if parsed.path == "/api/settings":
         settings = load_settings()
         # Never expose the stored password hash to clients
@@ -5553,6 +5557,14 @@ def handle_post(handler, parsed) -> bool:
         if diag:
             diag.finish()
         raise
+
+    if parsed.path in ("/api/laya", "/api/laya/test"):
+        from api import laya
+        try:
+            result = laya.save_settings(body) if parsed.path == "/api/laya" else laya.probe(body)
+        except (ValueError, TypeError):
+            return bad(handler, "Invalid Laya settings or test input", 400)
+        return j(handler, result)
 
     if parsed.path == "/api/report-issue":
         return _handle_report_issue(handler, body)
