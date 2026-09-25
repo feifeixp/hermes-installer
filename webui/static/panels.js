@@ -163,7 +163,7 @@ function _beginSettingsPanelSession() {
 
 function _beforePanelSwitch(nextPanel) {
   if (_currentPanel !== 'settings' || nextPanel === 'settings') return true;
-  if (_settingsDirty) {
+  if (_settingsDirty || window._layaDirty) {
     _pendingSettingsTargetPanel = nextPanel || 'chat';
     _showSettingsUnsavedBar();
     return false;
@@ -5828,7 +5828,7 @@ function _hideSettingsPanel(){
 
 // Close with unsaved-changes check. If dirty, show a confirm dialog.
 function _closeSettingsPanel(){
-  if(!_settingsDirty){
+  if(!_settingsDirty && !window._layaDirty){
     _revertSettingsPreview();
     _hideSettingsPanel();
     return;
@@ -5862,6 +5862,7 @@ function _showSettingsUnsavedBar(){
 }
 
 function _discardSettings(){
+  window._layaDirty = false;
   _revertSettingsPreview();
   _settingsDirty = false;
   _hideSettingsPanel();
@@ -7493,6 +7494,13 @@ async function _applyAuxModels(){
 }
 
 async function saveSettings(andClose){
+  if(window._layaDirty){
+    if(!await saveLayaSettings()) return;
+    if(!_settingsDirty){
+      if(andClose) _hideSettingsPanel();
+      return;
+    }
+  }
   const model=($('settingsModel')||{}).value;
   const modelChanged=(model||'')!==(_settingsHermesDefaultModelOnOpen||'');
   const sendKey=($('settingsSendKey')||{}).value;

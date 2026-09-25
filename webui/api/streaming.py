@@ -4670,6 +4670,15 @@ def _run_agent_streaming(
             if _process_notifications:
                 _agent_msg_text = "\n\n".join([*_process_notifications, msg_text]).strip()
             user_message = _build_native_multimodal_message(workspace_ctx, _agent_msg_text, attachments, workspace, cfg=_cfg)
+            # Only the per-turn system supplement may change. Keep visible/persisted
+            # user text, history, tools, model choice, and session metadata untouched.
+            try:
+                from api.laya import hint_for_turn
+                _laya_hint = hint_for_turn(msg_text, _previous_context_messages, attachments, cancel_event)
+                if _laya_hint:
+                    workspace_system_msg = "\n\n".join(filter(None, [workspace_system_msg, _laya_hint]))
+            except Exception:
+                logger.debug("Laya advisor unavailable; retaining the original agent flow")
             result = agent.run_conversation(
                 user_message=user_message,
                 system_message=workspace_system_msg,

@@ -496,6 +496,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
           <span data-i18n="providers_tab_title">Providers</span>
         </button>
+        <button type="button" class="side-menu-item" data-settings-section="laya" onclick="switchSettingsSection('laya')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 3v6m0 6v6M3 12h6m6 0h6"/><circle cx="12" cy="12" r="3"/><circle cx="12" cy="3" r="1"/><circle cx="21" cy="12" r="1"/><circle cx="12" cy="21" r="1"/><circle cx="3" cy="12" r="1"/></svg>
+          <span data-i18n="laya_title">Laya decision assistant</span>
+        </button>
         <!-- BEGIN: Neowow integration — side-menu entry  (custom; not from upstream) -->
         <button type="button" class="side-menu-item" data-settings-section="neowow" onclick="switchSettingsSection('neowow')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,2 22,8.5 22,15.5 12,22 2,15.5 2,8.5"/><line x1="12" y1="22" x2="12" y2="12"/><polyline points="2,8.5 12,12 22,8.5"/></svg>
@@ -1425,6 +1429,55 @@
             <button class="sm-btn" onclick="saveSettings()" style="margin-top:12px;width:100%;padding:8px;font-weight:600" data-i18n="settings_save_btn">Save Settings</button>
             <div id="settingsPreferencesAutosaveStatus" class="settings-autosave-status" aria-live="polite"></div>
           </div>
+          <div class="settings-pane" id="settingsPaneLaya">
+            <div class="settings-section-head"><div>
+              <div class="settings-section-title" data-i18n="laya_title">Laya decision assistant</div>
+              <p class="settings-section-meta" data-i18n="laya_intro">Suggest a workflow before each chat turn.</p>
+            </div></div>
+            <p id="layaLoadStatus" class="laya-status" role="status" aria-live="polite"></p>
+            <button type="button" id="layaRetry" class="sm-btn" onclick="loadLayaSettings(true)" hidden data-i18n="laya_retry">Retry</button>
+            <form id="layaForm" onsubmit="event.preventDefault();saveLayaSettings()">
+              <fieldset id="layaFields" disabled>
+                <div class="settings-field">
+                  <label for="layaMode" data-i18n="laya_mode">Mode</label>
+                  <select id="layaMode" onchange="layaChanged()"><option value="off" data-i18n="laya_off">Off</option><option value="observe" data-i18n="laya_observe">Observe only</option><option value="assist" data-i18n="laya_assist">Assist routing</option></select>
+                  <p id="layaModeHelp" class="laya-help"></p>
+                </div>
+                <div class="settings-field">
+                  <h3 class="laya-subtitle" data-i18n="laya_connection">Service connection</h3>
+                  <label for="layaEndpoint" data-i18n="laya_endpoint">Service base URL</label>
+                  <input id="layaEndpoint" type="url" required maxlength="2048" placeholder="http://127.0.0.1:8082" oninput="layaChanged()" aria-describedby="layaEndpointHelp">
+                  <p id="layaEndpointHelp" class="laya-help" data-i18n="laya_endpoint_help"></p>
+                  <label for="layaModel" data-i18n="laya_model">Checkpoint</label>
+                  <select id="layaModel" onchange="layaChanged()"><option value="multilingual" data-i18n="laya_multilingual">Multilingual</option><option value="english" data-i18n="laya_english">English</option><option value="typed-decisions" data-i18n="laya_typed">Typed decisions</option></select>
+                  <label for="layaKey" data-i18n="laya_key">API key (optional)</label>
+                  <input id="layaKey" type="password" autocomplete="new-password" maxlength="4096" oninput="layaChanged()">
+                  <label class="laya-checkbox"><input id="layaClearKey" type="checkbox" onchange="layaChanged()"><span data-i18n="laya_clear_key">Remove saved key on save</span></label>
+                  <div class="laya-columns">
+                    <div><label for="layaThreshold" data-i18n="laya_threshold">Suggestion threshold</label><input id="layaThreshold" type="number" min="0.5" max="1" step="0.01" required oninput="layaChanged()"></div>
+                    <div><label for="layaTimeout" data-i18n="laya_timeout">Timeout (ms)</label><input id="layaTimeout" type="number" min="100" max="5000" step="1" required oninput="layaChanged()"></div>
+                  </div>
+                  <p class="laya-help" data-i18n="laya_fallback"></p>
+                  <div class="laya-actions"><button type="submit" id="layaSave" class="sm-btn" data-i18n="laya_save">Save settings</button><button type="button" id="layaConnect" class="sm-btn" onclick="testLaya('connection')" data-i18n="laya_test_connection">Test connection</button></div>
+                  <p id="layaSaveStatus" class="laya-status" role="status" aria-live="polite"></p>
+                  <p id="layaConnectionStatus" class="laya-status" role="status" aria-live="polite"></p>
+                </div>
+              </fieldset>
+            </form>
+            <div class="settings-field">
+              <h3 class="laya-subtitle" data-i18n="laya_playground">Try a request</h3>
+              <p class="laya-help" data-i18n="laya_playground_help"></p>
+              <label for="layaSample" data-i18n="laya_sample">Request to classify</label>
+              <textarea id="layaSample" rows="3" maxlength="6000" data-i18n-placeholder="laya_sample_placeholder"></textarea>
+              <button type="button" id="layaRun" class="sm-btn" onclick="testLaya('sample')" disabled data-i18n="laya_run">Classify request</button>
+              <p id="layaSampleStatus" class="laya-status" role="status" aria-live="polite"></p>
+            </div>
+            <div class="settings-field">
+              <div class="laya-actions"><h3 class="laya-subtitle" data-i18n="laya_recent">Recent decisions</h3><button type="button" class="sm-btn" onclick="refreshLayaRecent()" data-i18n="laya_refresh">Refresh</button></div>
+              <p class="laya-help" data-i18n="laya_recent_help"></p>
+              <div id="layaRecent" class="laya-recent" aria-live="polite"></div>
+            </div>
+          </div>
           <div class="settings-pane" id="settingsPaneProviders">
             <div class="settings-section-head">
               <div>
@@ -2013,6 +2066,7 @@
 <script src="static/vendor/qrcode.min.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/messaging.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/gateway.js?v=__WEBUI_VERSION__" defer></script>
+<script src="static/laya.js?v=__WEBUI_VERSION__" defer></script>
 <!-- Phase 2 M3: instance keep-alive. Skips itself on non-Phase 2 hosts. -->
 <script src="static/heartbeat.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/boot.js?v=__WEBUI_VERSION__" defer></script>
