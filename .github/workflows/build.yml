@@ -311,6 +311,17 @@ jobs:
     # binary-collection hooks for older C extension wheels until they
     # catch up. Bump to windows-2025-vs2026 after testing once it stabilizes.
     runs-on: windows-2022
+    # Windows code-signing secrets — ALL empty until a cert is set up, so the
+    # sign steps below cleanly no-op (build stays unsigned, zero risk). Driven
+    # by jsign, so switching CA/service later = changing these secrets only.
+    env:
+      WINDOWS_SIGN_STORETYPE:    ${{ secrets.WINDOWS_SIGN_STORETYPE }}
+      WINDOWS_SIGN_KEYSTORE:     ${{ secrets.WINDOWS_SIGN_KEYSTORE }}
+      WINDOWS_SIGN_STOREPASS:    ${{ secrets.WINDOWS_SIGN_STOREPASS }}
+      WINDOWS_SIGN_ALIAS:        ${{ secrets.WINDOWS_SIGN_ALIAS }}
+      WINDOWS_SIGN_KEYPASS:      ${{ secrets.WINDOWS_SIGN_KEYPASS }}
+      WINDOWS_SIGN_CERTFILE_B64: ${{ secrets.WINDOWS_SIGN_CERTFILE_B64 }}
+      WINDOWS_SIGN_TSA:          ${{ secrets.WINDOWS_SIGN_TSA }}
     steps:
       # v5 is current as of mid-2026; ships with Node 22 (post-deprecation
       # of Node 20). v4 still works but emits the deprecation warning the
@@ -361,6 +372,13 @@ jobs:
           }
           Write-Host "✓ .exe found"
 
+      # Sign the app .exe BEFORE it's bundled into the installer + zipped, so
+      # BOTH the installed app and the portable copy carry the signature.
+      # No-op until signing secrets are set (installer/windows/sign.ps1).
+      - name: Sign app exe (skipped if unconfigured)
+        shell: pwsh
+        run: pwsh -ExecutionPolicy Bypass -File installer\windows\sign.ps1 -Target 'dist\Hermes Installer.exe'
+
       # Wrap the portable .exe into a real setup.exe (Start Menu + Desktop
       # shortcuts, per-user install, uninstaller) — Windows users expect an
       # installer, not a bare .exe. See installer/windows/hermes.iss.
@@ -381,6 +399,11 @@ jobs:
           if (-not $setup) { Write-Error "installer not produced"; exit 1 }
           $size = [math]::Round($setup.Length / 1MB, 1)
           Write-Host "✓ installer: $($setup.Name) ($size MB)"
+
+      # Sign the finished installer too (no-op until secrets are set).
+      - name: Sign installer (skipped if unconfigured)
+        shell: pwsh
+        run: pwsh -ExecutionPolicy Bypass -File installer\windows\sign.ps1 -Target 'dist\Neowow-Studio-Setup.exe'
 
       - name: Create portable .zip
         shell: pwsh
