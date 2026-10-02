@@ -33,6 +33,14 @@ os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 REPO_PATH = "NousResearch/hermes-agent"
 
+# Pinned, verified agent ref (was: floating to main HEAD, which auto-pulled
+# bleeding-edge code on every build and risked silently breaking our
+# neowow-coding-plan patch). v2026.4.23 was verified on 2026-06-10:
+# docker/patch_hermes_agent.py applies cleanly + the provider registers.
+# To bump: clone the new tag, run the patch against it, and only then change
+# this constant. See docs note in the pin PR.
+PINNED_REF = "v2026.4.23"
+
 # Mirror list — tried in order until one succeeds
 CLONE_URLS = [
     f"https://github.com/{REPO_PATH}",                          # original
@@ -75,8 +83,10 @@ def _try_clone() -> bool:
         label = "GitHub" if i == 0 else f"镜像 {i}"
         print(f"  → 尝试 {label}: {url} ...")
         _rmtree(CLONE_DIR)   # clean before each attempt
+        # --branch works for tags too; pins the bundle to the verified ref
+        # instead of floating to the default branch HEAD.
         result = subprocess.run(
-            ["git", "clone", "--depth=1", url, str(CLONE_DIR)],
+            ["git", "clone", "--depth=1", "--branch", PINNED_REF, url, str(CLONE_DIR)],
             check=False,
             timeout=120,
         )
