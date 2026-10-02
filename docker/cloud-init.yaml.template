@@ -1,47 +1,31 @@
 #cloud-config
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 2 per-user Hermes ECS cloud-init.
+# Phase 2 per-user Hermes ECS cloud-init — MINIMAL bootstrap.
 #
-# The dashboard broker (app.neowow.studio/api/me/instance/start)
-# substitutes the placeholders below before passing this as
-# UserData to the cloud SDK's RunInstances call:
+# The dashboard broker (app.neowow.studio/api/me/instance/start) substitutes
+# the placeholders below before passing this as UserData to RunInstances.
+# Aliyun caps UserData at 16 KB once Base64-encoded (~12 KB raw), so this file
+# is deliberately tiny: it only writes the per-spawn secrets, then fetches and
+# runs docker/provision.sh from main, which does all the real work (write the
+# compose stack / Caddyfile / crons / systemd units, install Docker, sync OSS
+# state, pull images, bring the stack up).
+#
+# Keep this file SMALL. Anything new belongs in provision.sh, not here.
+# Run `scripts/check-cloud-init-size.sh` before changing it.
 #
 #   %USER_ID%               user's stable Neodomain userId (e.g. 31046663)
 #   %DOMAIN%                full subdomain (e.g. chat-31046663.neowow.studio)
 #   %ACME_EMAIL%            email for LetsEncrypt registration
 #   %IMAGE%                 Docker image ref (resolved per registry availability)
-#   %ACR_PULL_REGISTRY%     Docker registry hostname for login (e.g.
-#                           zlxj-registry-vpc.cn-shanghai.cr.aliyuncs.com).
-#                           Empty string = skip docker login (anonymous /
-#                           public image — Hermes' image is private, so
-#                           this should usually be set).
+#   %ACR_PULL_REGISTRY%     ACR hostname for docker login ("" = skip / public)
 #   %ACR_PULL_USERNAME%     ACR sub-account with read-only pull permission
 #   %ACR_PULL_PASSWORD%     companion password
 #   %OSS_ACCESS_KEY_ID%     Aliyun OSS AK for state sync (M2)
 #   %OSS_ACCESS_KEY_SECRET% companion secret (M2)
-#   %OSS_ENDPOINT%          e.g. oss-cn-hangzhou.aliyuncs.com (M2)
+#   %OSS_ENDPOINT%          e.g. oss-cn-hangzhou-internal.aliyuncs.com (M2)
 #   %OSS_BUCKET%            usually neowow-hermes-state (M2)
-#   %CLOUDFLARE_API_TOKEN%  Caddy uses this for DNS-01 challenge to
-#                           bypass HTTP-01 (which gets intercepted by
-#                           the *.neowow.studio wildcard CNAME proxied
-#                           through cf-proxy worker, returning 503).
-#
-# Boot timeline (first run):
-#   00:00  Cloud-init starts (after kernel + cloud-init framework)
-#   00:05  apt update (cached locally on Ubuntu image — ~10 s)
-#   00:30  docker.io install (~50 s)
-#   01:30  install ossutil + pull sessions from OSS (~30 s)
-#   02:00  docker pull <IMAGE> (~1-3 min depending on image size + bandwidth)
-#   03:30  docker compose up — Caddy starts requesting LE cert
-#   04:00  LetsEncrypt challenge round-trip (HTTP-01 on :80)
-#   04:30  hermes-webui health check passes — instance ready
-#
-# Total ~4-5 min from RunInstances to "serving traffic".
-#
-# Subsequent boots (after stop/start) skip the install steps because
-# everything's already on disk; total ~30 s to ready. OSS pull still
-# runs to catch up any state pushed from another instance (e.g. user
-# spawned, stopped, then spawned again on a different ECS).
+#   %CLOUDFLARE_API_TOKEN%  Caddy DNS-01 challenge token
+#   %HEARTBEAT_TOKEN%       server-side keep-alive token for the WebUI
 # ─────────────────────────────────────────────────────────────────────────────
 
 package_update: true
@@ -50,300 +34,29 @@ package_upgrade: false
 packages:
   - ca-certificates
   - curl
-  - gnupg
 
 write_files:
-  # /opt/hermes-docker/docker-compose.yml — same shape as Phase 1's
-  # chat.neowow.studio. Per-user changes: HERMES_INSTANCE_OWNER_USERID
-  # env var (so WebUI rejects requests from other users' JWTs) +
-  # this instance's subdomain in the Caddyfile.
-  - path: /opt/hermes-docker/docker-compose.yml
-    permissions: '0644'
-    content: |
-      services:
-        caddy:
-          image: slothcroissant/caddy-cloudflaredns:latest
-          container_name: hermes-caddy
-          restart: unless-stopped
-          environment:
-            CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN}"
-          ports:
-            - "80:80"
-            - "443:443"
-            - "443:443/udp"
-          volumes:
-            - ./Caddyfile:/etc/caddy/Caddyfile:ro
-            - caddy_data:/data
-            - caddy_config:/config
-          networks: [hermes]
-          depends_on:
-            hermes-webui:
-              condition: service_healthy
-
-        hermes-webui:
-          image: %IMAGE%
-          container_name: hermes-webui
-          restart: unless-stopped
-          environment:
-            HERMES_WEBUI_AUTH_MODE: neodomain
-            HERMES_WEBUI_HOST: 0.0.0.0
-            HERMES_WEBUI_PORT: 7891
-            HERMES_WEBUI_FOREGROUND: "1"
-            HERMES_WEBUI_STATE_DIR: /opt/hermes/.hermes/webui
-            HERMES_INSTANCE_OWNER_USERID: "%USER_ID%"
-            HERMES_NEOWOW_ONLY: "1"
-            NEOWOW_HEARTBEAT_TOKEN: "%HEARTBEAT_TOKEN%"
-            UV_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/"
-            UV_EXTRA_INDEX_URL: "https://pypi.org/simple/"
-            UV_CACHE_DIR: /uv_cache
-          volumes:
-            - /var/lib/hermes-state:/opt/hermes/.hermes
-            - hermes_venv:/app/venv
-            - hermes_uv_cache:/uv_cache
-            - /opt/hermes-docker/control:/opt/hermes/control
-          expose: ["7891"]
-          networks: [hermes]
-          healthcheck:
-            test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7891/health"]
-            interval: 10s
-            timeout: 3s
-            start_period: 30s
-            retries: 5
-
-      volumes:
-        caddy_data:      {}
-        caddy_config:    {}
-        hermes_venv:     {}   # Python venv — survives hourly docker compose up -d
-        hermes_uv_cache: {}   # uv wheel cache — speeds up reinstalls
-
-      networks:
-        hermes:
-          driver: bridge
-
-  - path: /opt/hermes-docker/Caddyfile
-    permissions: '0644'
-    content: |
-      {
-          email %ACME_EMAIL%
-      }
-
-      %DOMAIN% {
-          tls {
-              dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-              resolvers 1.1.1.1
-          }
-          reverse_proxy hermes-webui:7891 {
-              header_up X-Forwarded-Proto {scheme}
-              header_up X-Forwarded-Host  {host}
-              flush_interval -1
-          }
-          request_body {
-              max_size 50MB
-          }
-          log {
-              output stdout
-              format console
-          }
-      }
-
-  # ── docker compose .env — interpolated into both services ───────────
-  # docker-compose.yml above uses ${CLOUDFLARE_API_TOKEN} interpolation.
-  # Compose reads this file from the same directory as the YAML, so a
-  # plain KEY=value line is enough — no docker/quotes/escaping shenanigans.
-  - path: /opt/hermes-docker/.env
+  # Per-spawn secrets/config. provision.sh sources this. 0600 root-only.
+  - path: /etc/hermes/spawn.env
     permissions: '0600'
     owner: root:root
     content: |
-      CLOUDFLARE_API_TOKEN=%CLOUDFLARE_API_TOKEN%
-
-  # Hourly cron — STAGE new images only (pull). The actual recreate is done
-  # by the apply-watcher below, only when it's safe (user-confirmed or idle),
-  # so a new image never hard-restarts an active user mid-session.
-  - path: /etc/cron.d/hermes-auto-update
-    permissions: '0644'
-    content: |
-      SHELL=/bin/bash
-      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-      0 * * * * root cd /opt/hermes-docker && echo "=== $(date -Iseconds) pull ===" >> /var/log/hermes-update.log && /usr/bin/docker compose pull >> /var/log/hermes-update.log 2>&1
-
-  # Apply-watcher cron — every 2 min, recreate to a staged image ONLY when
-  # safe. See /opt/hermes-docker/apply-update.sh (curl'd in runcmd).
-  - path: /etc/cron.d/hermes-apply-update
-    permissions: '0644'
-    content: |
-      SHELL=/bin/bash
-      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-      */2 * * * * root /opt/hermes-docker/apply-update.sh >> /var/log/hermes-update.log 2>&1
-
-  # ── M2: OSS state sync configuration ─────────────────────────────────
-  # Read by /opt/hermes-docker/oss-sync.sh. Cred values substituted by
-  # the broker so they never live in any source tree. Permissions 0600
-  # so even other users on the same VM (if any) can't read.
-  - path: /etc/default/hermes-oss-sync
-    permissions: '0600'
-    owner: root:root
-    content: |
+      USER_ID="%USER_ID%"
+      DOMAIN="%DOMAIN%"
+      ACME_EMAIL="%ACME_EMAIL%"
+      IMAGE="%IMAGE%"
+      ACR_PULL_REGISTRY="%ACR_PULL_REGISTRY%"
+      ACR_PULL_USERNAME="%ACR_PULL_USERNAME%"
+      ACR_PULL_PASSWORD="%ACR_PULL_PASSWORD%"
       OSS_ACCESS_KEY_ID="%OSS_ACCESS_KEY_ID%"
       OSS_ACCESS_KEY_SECRET="%OSS_ACCESS_KEY_SECRET%"
       OSS_ENDPOINT="%OSS_ENDPOINT%"
       OSS_BUCKET="%OSS_BUCKET%"
-      OSS_PREFIX="users/%USER_ID%/hermes"
-      LOCAL_PATH="/var/lib/hermes-state"
-      OSSUTIL="/usr/local/bin/ossutil"
-
-  # ── M2: 5-minute push cron ──────────────────────────────────────────
-  # Every 5 min, push any new chat-session writes to OSS. Failures are
-  # tolerated (next cron tick retries); we don't want the sync to take
-  # the instance down.
-  - path: /etc/cron.d/hermes-oss-sync
-    permissions: '0644'
-    content: |
-      SHELL=/bin/bash
-      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-      */5 * * * * root /opt/hermes-docker/oss-sync.sh push > /dev/null 2>&1 || true
-
-  # ── M2: shutdown hook — push state one last time before halt ─────────
-  # ExecStop runs synchronously during shutdown. We give it 60s; the
-  # rsync of a typical sessions DB (few hundred KB) takes < 2s, so this
-  # is just paranoia.
-  - path: /etc/systemd/system/hermes-oss-shutdown.service
-    permissions: '0644'
-    content: |
-      [Unit]
-      Description=Push Hermes state to OSS before shutdown
-      DefaultDependencies=no
-      Before=shutdown.target poweroff.target halt.target reboot.target
-      RequiresMountsFor=/var/lib/hermes-state
-
-      [Service]
-      Type=oneshot
-      RemainAfterExit=true
-      ExecStart=/bin/true
-      ExecStop=/opt/hermes-docker/oss-sync.sh push
-      TimeoutStopSec=60s
-
-      [Install]
-      WantedBy=shutdown.target
+      CLOUDFLARE_API_TOKEN="%CLOUDFLARE_API_TOKEN%"
+      HEARTBEAT_TOKEN="%HEARTBEAT_TOKEN%"
 
 runcmd:
-  # ── Install Docker via APT (Aliyun's mirror, ECS already configured
-  # ── to use it). We previously used `curl get.docker.com | sh` which
-  # ── is the Docker docs-recommended method but Aliyun's 云安全中心
-  # ── (Cloud Security Center) flags it as a worm/intrusion pattern —
-  # ── "curl remote + pipe to shell" matches generic worm signatures
-  # ── even though our use is the legitimate Docker install path. Every
-  # ── new broker spawn was triggering a security alert on the operator's
-  # ── dashboard. Switching to APT eliminates the false-positive at the
-  # ── cost of ~30 seconds more install time (downloading the GPG key +
-  # ── adding the repo + apt update). Net total: still ~90 seconds.
-  - [bash, -c, "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg lsb-release"]
-  - [bash, -c, "install -m 0755 -d /etc/apt/keyrings && curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc && echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://mirrors.aliyun.com/docker-ce/linux/ubuntu jammy stable' > /etc/apt/sources.list.d/docker.list"]
-  - [bash, -c, "_docker_ok=false; for _try in 1 2 3; do apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && _docker_ok=true && break; echo \"Docker install attempt ${_try}/3 failed, waiting 15s...\"; sleep 15; done; $_docker_ok || { echo 'FATAL: Docker CE install failed after 3 attempts'; exit 1; }"]
-  - systemctl enable --now docker
-  - [bash, -c, "docker --version || { echo 'FATAL: docker binary not found after install'; exit 1; }"]
+  # Fetch + run the real provisioner. Hard retry — this is the critical path.
+  - [bash, -c, "curl -fsSL --retry 5 --retry-delay 3 https://raw.githubusercontent.com/feifeixp/hermes-installer/main/docker/provision.sh -o /opt/hermes-provision.sh && bash /opt/hermes-provision.sh 2>&1 | tee /var/log/hermes-provision.log"]
 
-  # ── M2: download ossutil + the oss-sync.sh script.
-  # ── ossutil is a single Go binary; ~20 MB; we host on Aliyun CDN.
-  - [bash, -c, "curl -fsSL --retry 3 https://gosspublic.alicdn.com/ossutil/v2/2.1.1/ossutil-2.1.1-linux-amd64.zip -o /tmp/ossutil.zip && cd /tmp && unzip -o ossutil.zip && cp -f ossutil-2.1.1-linux-amd64/ossutil /usr/local/bin/ossutil && chmod +x /usr/local/bin/ossutil"]
-  - [bash, -c, "curl -fsSL --retry 3 https://raw.githubusercontent.com/feifeixp/hermes-installer/main/docker/oss-sync.sh -o /opt/hermes-docker/oss-sync.sh && chmod +x /opt/hermes-docker/oss-sync.sh"]
-
-  # ── M2: probe OSS access (fail-fast if creds wrong) + pull existing state.
-  # ── If verify fails we still proceed — better to run with no remote
-  # ── backup than to fail the entire spawn. Logs go to journal.
-  - [bash, -c, "/opt/hermes-docker/oss-sync.sh verify || echo 'WARNING: OSS not accessible; sessions WILL NOT persist across destroy'"]
-
-  # ── The hermes_state docker volume mounts at a host path; we point
-  # ── oss-sync at that path so sync targets the live data, not container
-  # ── ephemeral storage. Volume bind: /var/lib/hermes-state → container
-  # ── /opt/hermes/.hermes
-  - [bash, -c, "mkdir -p /var/lib/hermes-state"]
-  - [bash, -c, "/opt/hermes-docker/oss-sync.sh pull"]
-
-  # ── Docker login to private registry (Aliyun ACR Enterprise edition).
-  # ── Conditional: only run when ACR_PULL_* placeholders are filled in.
-  # ── Empty string means "image is anonymous / public", skip the login.
-  # ── Uses --password-stdin so the password never appears in process
-  # ── list / cloud-init log file (cloud-init logs full runcmd output
-  # ── otherwise — that's the kind of leak we want to avoid).
-  #
-  # NOTE: we use `printf '%s'` NOT `printf '%%s'` here. Earlier version
-  # used the latter thinking sed would unescape the double-% — sed doesn't,
-  # and printf interprets %% as an escape for literal `%`, so the actual
-  # value piped to docker login was the two-char string "%s" instead of
-  # the password. Caused 401 unauthorized + spent 3 spawn cycles debugging.
-  # Passwords containing literal single quotes still break this — none of
-  # ours do today, so deferred. Switch to write_files-based approach
-  # if a user's password ever contains '.
-  - [bash, -c, "if [ -n '%ACR_PULL_REGISTRY%' ] && [ -n '%ACR_PULL_USERNAME%' ]; then printf '%s' '%ACR_PULL_PASSWORD%' | docker login '%ACR_PULL_REGISTRY%' -u '%ACR_PULL_USERNAME%' --password-stdin; fi"]
-
-  # ── Pull the Hermes image upfront (faster + clearer error than
-  # ── waiting for compose to do it implicitly). ~1-3 min.
-  - [bash, -c, "docker pull %IMAGE%"]
-
-  # ── Pull Caddy too while we're at it (so first compose up is fast).
-  - [bash, -c, "docker pull slothcroissant/caddy-cloudflaredns:latest"]
-
-  # ── Seed /var/lib/hermes-state from the image, only when empty.
-  #
-  # The image's Dockerfile runs `python3 webui/bootstrap.py --install-only`
-  # at build time which clones hermes-agent INTO /opt/hermes/.hermes/
-  # hermes-agent/ and bakes it into the image layer.
-  #
-  # BUT docker-compose.yml mounts the host path /var/lib/hermes-state at
-  # /opt/hermes/.hermes via a BIND MOUNT. Bind mounts (unlike named
-  # volumes) DO NOT copy the image's contents into the mounted directory
-  # on first attach — they just hide the image's directory entirely.
-  #
-  # Symptom without this seed step: container starts, bootstrap.py runs,
-  # doesn't find hermes-agent (the bind mount is empty), tries to git
-  # clone it at runtime, hits `Permission denied` writing to
-  # /opt/hermes/.hermes/hermes-agent/.git, container exits 1 in a loop.
-  #
-  # The `-z "$(ls -A ...)"` guard makes this idempotent: if oss-sync
-  # already pulled state from OSS, we DON'T clobber it (the seed only
-  # fires on truly empty state directories — first-time spawn).
-  # IMPORTANT: --user root inside the docker run. The Hermes image's
-  # default USER is `hermes` (non-root). Without --user root, the cp
-  # can't write into /dst because the host's bind-mount target is
-  # root-owned (created by `mkdir -p` above). With --user root, cp
-  # writes succeed, and the trailing chown re-owns everything to the
-  # hermes uid/gid so the main container can read it back.
-  #
-  # We use `id -u hermes:id -g hermes` instead of hardcoding 1000:1000
-  # — the image actually uses uid 1500 / gid 999 (not the typical 1000),
-  # and may shift again on future image rebuilds. Auto-detect is safer.
-  - [bash, -c, "if [ -z \"$(ls -A /var/lib/hermes-state 2>/dev/null)\" ]; then echo 'Seeding /var/lib/hermes-state from image baseline...'; docker run --rm --user root -v /var/lib/hermes-state:/dst %IMAGE% bash -c 'UID_H=$(id -u hermes); GID_H=$(id -g hermes); cp -ar /opt/hermes/.hermes/. /dst/ && chown -R ${UID_H}:${GID_H} /dst && echo \"chowned to ${UID_H}:${GID_H}\"' && echo 'Seed complete.'; else echo 'hermes-state already populated, skipping image seed.'; fi"]
-
-  # ── Graceful-update apply-watcher script + control dir. The control dir
-  # ── must exist and be writable by the container's hermes user (uid 1500 /
-  # ── gid 999) BEFORE compose up, since it's bind-mounted into the WebUI.
-  - [bash, -c, "curl -fsSL --retry 3 https://raw.githubusercontent.com/feifeixp/hermes-installer/main/docker/apply-update.sh -o /opt/hermes-docker/apply-update.sh && chmod +x /opt/hermes-docker/apply-update.sh"]
-  - [bash, -c, "mkdir -p /opt/hermes-docker/control && chown 1500:999 /opt/hermes-docker/control 2>/dev/null || chmod 0777 /opt/hermes-docker/control"]
-
-  # ── Bring the stack up. compose internally waits for hermes-webui
-  # ── to be healthy before starting Caddy (depends_on condition).
-  - [bash, -c, "cd /opt/hermes-docker && docker compose up -d"]
-
-  # ── Reload cron so /etc/cron.d/hermes-{auto-update,oss-sync} take
-  # ── effect now (otherwise they'd need a system restart).
-  - systemctl reload cron
-
-  # ── Enable the shutdown hook so OSS gets a final push on poweroff.
-  - systemctl daemon-reload
-  - systemctl enable hermes-oss-shutdown.service
-  - systemctl start hermes-oss-shutdown.service
-
-  # ── Ping the broker so it knows this instance is ready. The broker
-  # ── will flip state from 'cloud_init' to 'running'. We deliberately
-  # ── don't fail cloud-init if this curl fails — the broker will
-  # ── eventually detect via its own status polling.
-  #
-  # ── The URL + auth token are templated in by the broker (omitted
-  # ── here for M1 simplicity — broker polls instead). Future M2 can
-  # ── add a callback for instant-ready signaling.
-
-# Skip useless legacy cloud-init modules to shave a few seconds off.
 final_message: "Hermes Phase 2 instance ready (%DOMAIN%)"
