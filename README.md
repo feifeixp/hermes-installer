@@ -27,6 +27,9 @@
 
 ### Neowow Studio 集成
 
+- **内置画布 CLI** — Agent 启动时离线安装 `neowow-canvas` Skill 和 `neowow` 命令。在「设置 → Neowow Studio → NeoWoW 画布」打开官网生成 Key，粘贴后点击「保存并连接」，无需执行命令或在聊天中提供密码／Key。云端镜像已包含 Node.js；桌面端需 Node.js 18+。共享公共实例不保存个人画布 Key，请使用专属实例。详细说明见 [画布连接说明](webui/docs/neowow-canvas-cli.md)。
+- **画布创作与结果提取** — 连接后可选择／新建画布，把分镜、图片、视频、音频或文本任务交给当前聊天中的 Agent；生成前先确认方案与积分，完成后在结果区预览成品、下载文本、打开媒体原文件或导出结果清单。
+
 桌面端与 [app.neowow.studio](https://app.neowow.studio) 双向打通，云端是 SSOT：
 
 - **OAuth 登录** — 桌面端和线上部署均可完成 Neodomain 账号授权；本地回调仅接受当前 Hermes 服务器的 `localhost` / `127.0.0.1` 地址

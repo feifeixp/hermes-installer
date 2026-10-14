@@ -107,6 +107,37 @@ Log file:
 
 ## 3. Runtime Environment
 
+The bundled canvas CLI is seeded by `api/neowow_cli.py` at server startup and
+when resolving a profile's runtime environment. Its pinned archive lives in
+`assets/neowow-canvas-skill.zip`; installation needs no outbound download.
+Skills live outside subscription sync's `_neowow` deletion scope. The process
+PATH includes a launcher in `STATE_DIR/bin`; the launcher resolves Skill and
+credential paths from the agent turn's `HERMES_HOME`. Node.js 18+ is required
+(included in the managed cloud image).
+
+`GET /api/neowow/cli/status` returns booleans only for installation/connection
+state. `POST /api/neowow/cli/key` uses the existing auth and CSRF middleware,
+validates with CLI `whoami` using a child-process environment, and atomically
+saves `<profile home>/neowow-cli/config.json` with POSIX mode 0600. Request
+secrets and subprocess output are never returned or logged by this module.
+Shared `neodomain` deployments without `HERMES_INSTANCE_OWNER_USERID` cannot
+bind keys because the agent filesystem is shared between users. This is a
+settings credential flow, not a vault isolating same-user agent file access.
+
+`api/neowow_canvas.py` adds CLI-backed project listing/selection/creation,
+native chat creation briefs, read-only task inspection, and final result
+extraction. `neowow-canvas.js` presents that workspace. Selection is persisted
+in `<profile home>/neowow-cli/studio-project.json`, tied to a credential digest;
+no CLI secret or digest is returned to the browser. Every operation pins the
+resolved profile home and explicitly scopes commands to the selected sessionId.
+Creation briefs enter the existing `send()` path, which owns the visible user
+turn, model context and SSE; no synthetic assistant messages or alternate run
+state are introduced. Result inspection uses `poll --once` without `--apply`,
+projects remain the upstream source of truth, and result UI is reconstructible
+after reload. Only successful output fields are extracted; reference uploads,
+failed nodes and in-progress old results are excluded. Export returns a JSON
+manifest; remote media remains on its original host and is not server-proxied.
+
 - Python interpreter: <agent-dir>/venv/bin/python
 - The venv has all Hermes agent dependencies (run_agent, tools/*, cron/*)
 - Server binds to 127.0.0.1:8787 (localhost only, not public internet)

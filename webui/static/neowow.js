@@ -904,6 +904,7 @@
     void loadCloudStatus();
     // Skills card too — disk-only read, free.
     void loadSkillsStatus();
+    void window.neowowCanvasRefresh();
     // Identity chip + JWT block are now driven by the rail avatar +
     // settings account block (refreshAccountBlock). The legacy
     // identity card is hidden in the new HTML; we keep loadIdentityChip
@@ -1215,10 +1216,10 @@
   // ~5 minutes; cleared on success.
   function showOAuthWaiting(authUrl) {
     const waiting = `
-      <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(94,96,206,0.10);border:1px solid rgba(94,96,206,0.35);border-radius:8px;font-size:12px;color:var(--accent,#5e60ce)">
+      <div class="neowow-oauth-waiting" style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(94,96,206,0.10);border:1px solid rgba(94,96,206,0.35);border-radius:8px;font-size:12px;color:var(--accent,#5e60ce)">
         <div style="width:16px;height:16px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0"></div>
         <div style="flex:1;line-height:1.5">
-          <div style="font-weight:600">浏览器已打开，等待 OAuth 完成…</div>
+          <div style="font-weight:600">在浏览器中完成登录…</div>
           <div style="color:var(--muted);font-size:11px;margin-top:2px">没自动打开？<a href="${escapeHtml(authUrl)}" target="_blank" rel="noreferrer" style="color:var(--accent)">点这里手动打开 →</a></div>
         </div>
       </div>
@@ -1694,6 +1695,143 @@
   //
   // Also called on panel-open by loadNeowowStatus() to render the
   // status card without a network round-trip.
+
+  let canvasState = null;
+  let canvasBusy = false;
+  let canvasEditing = false;
+
+  function canvasFeedback(message, tone = 'neutral') {
+    const el = $('neowowCanvasStatus');
+    if (!el) return;
+    el.textContent = message;
+    el.dataset.tone = tone;
+  }
+
+  function canvasSetBusy(busy, action = '') {
+    canvasBusy = busy;
+    if (typeof window.neowowCanvasWorkspaceBusy === 'function') window.neowowCanvasWorkspaceBusy(busy);
+    const card = $('neowowCanvasConnection');
+    if (!card) return;
+    card.setAttribute('aria-busy', String(busy));
+    const ready = canvasState && canvasState.bindingAvailable && canvasState.installed && canvasState.runtimeReady;
+    $('neowowCanvasSaveBtn').disabled = busy || !ready;
+    $('neowowCanvasSaveBtn').textContent = busy && action === 'save' ? '正在验证…' : '保存并连接';
+    ['neowowCanvasRefreshBtn', 'neowowCanvasEditBtn', 'neowowCanvasClearBtn'].forEach(id => {
+      $(id).disabled = busy;
+    });
+    $('neowowCanvasKey').disabled = busy;
+  }
+
+  function renderCanvasStatus(data) {
+    const card = $('neowowCanvasConnection');
+    if (!card) return;
+    canvasState = data;
+    const connected = data.bindingAvailable && data.connected;
+    const ready = data.installed && data.runtimeReady;
+    card.dataset.state = !data.bindingAvailable ? 'unsupported'
+      : !ready ? 'unavailable' : connected ? 'connected' : 'disconnected';
+    $('neowowCanvasBadge').textContent = !data.bindingAvailable ? '专属实例可用'
+      : !ready ? '需要准备' : connected ? '已保存连接' : '等待连接';
+    $('neowowCanvasLinked').hidden = !connected;
+    if (typeof window.neowowCanvasWorkspaceConnected === 'function') window.neowowCanvasWorkspaceConnected(connected);
+    $('neowowCanvasSetup').hidden = !data.bindingAvailable || (connected && !canvasEditing);
+    $('neowowCanvasForm').hidden = !data.bindingAvailable;
+    $('neowowCanvasEditBtn').textContent = canvasEditing ? '取消更换' : '更换 Key';
+    $('neowowCanvasEditBtn').setAttribute('aria-expanded', String(canvasEditing));
+    const tool = $('neowowCanvasToolState');
+    tool.textContent = data.installed ? '画布工具 · 已安装' : '画布工具 · 未安装';
+    tool.dataset.ready = String(!!data.installed);
+    const runtime = $('neowowCanvasRuntimeState');
+    runtime.textContent = data.runtimeReady ? '运行环境 · 已就绪' : '运行环境 · 未就绪';
+    runtime.dataset.ready = String(!!data.runtimeReady);
+    canvasFeedback(!data.bindingAvailable ? '进入专属 Agent 实例后，即可连接个人画布。'
+      : !data.installed ? '画布工具尚未安装，请重启应用后刷新状态。'
+      : !data.runtimeReady ? '运行环境尚未就绪，需要 Node.js 18 或更新版本。'
+      : connected ? '凭据已保存。实际账号访问是否有效，以 Agent 检查结果为准。'
+      : '工具已就绪，完成上面的两步即可连接。');
+    canvasSetBusy(canvasBusy);
+  }
+
+  window.neowowCanvasEditKey = function () {
+    if (canvasBusy || !canvasState) return;
+    canvasEditing = !canvasEditing;
+    $('neowowCanvasKey').value = '';
+    renderCanvasStatus(canvasState);
+    if (canvasEditing) $('neowowCanvasKey').focus();
+  };
+
+  window.neowowCanvasRefresh = async function () {
+    if (canvasBusy || !$('neowowCanvasConnection')) return;
+    canvasSetBusy(true);
+    canvasFeedback('正在检查工具与连接状态…');
+    try {
+      const r = await fetch('/api/neowow/cli/status', { cache: 'no-store' });
+      if (!r.ok) throw new Error();
+      renderCanvasStatus(await r.json());
+    } catch (_) {
+      canvasFeedback('暂时无法检查连接，请点击刷新重试。', 'error');
+    } finally {
+      canvasSetBusy(false);
+    }
+  };
+
+  window.neowowCanvasSave = async function (event) {
+    event.preventDefault();
+    if (canvasBusy) return;
+    const input = $('neowowCanvasKey');
+    const key = input.value.trim();
+    input.value = '';
+    if (!key) {
+      canvasFeedback('请先粘贴画布 API Key，再点击「保存并连接」。', 'error');
+      input.focus();
+      return;
+    }
+    if (!canvasState || !canvasState.bindingAvailable || !canvasState.installed || !canvasState.runtimeReady) {
+      canvasFeedback('请先刷新状态，确认工具和运行环境已就绪。', 'error');
+      return;
+    }
+    canvasSetBusy(true, 'save');
+    canvasFeedback('正在验证 Key，验证通过后会自动保存…');
+    try {
+      const r = await fetch('/api/neowow/cli/key', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key }), cache: 'no-store',
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || '连接失败，请稍后重试。');
+      canvasEditing = false;
+      if (typeof window.neowowCanvasResetWorkspace === 'function') window.neowowCanvasResetWorkspace();
+      renderCanvasStatus(data);
+      canvasFeedback('连接已保存。回到聊天，让 Agent 检查账号并开始创作。', 'success');
+    } catch (e) {
+      canvasFeedback(e.message || '连接失败，请稍后重试。', 'error');
+    } finally {
+      canvasSetBusy(false);
+      input.value = '';
+      if (canvasState.connected && !canvasEditing) $('neowowCanvasEditBtn').focus();
+    }
+  };
+
+  window.neowowCanvasClear = async function () {
+    if (canvasBusy) return;
+    canvasSetBusy(true, 'clear');
+    canvasFeedback('正在移除当前 Profile 的连接…');
+    try {
+      const r = await fetch('/api/neowow/cli/key', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear: true }), cache: 'no-store',
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || '断开失败，请稍后重试。');
+      canvasEditing = false;
+      renderCanvasStatus(data);
+      canvasFeedback('本地连接已断开，官网 Key 仍然有效。');
+    } catch (e) {
+      canvasFeedback(e.message || '断开失败，请稍后重试。', 'error');
+    } finally {
+      canvasSetBusy(false);
+    }
+  };
 
   async function loadSkillsStatus() {
     const el = $('neowowSkillsStatus');

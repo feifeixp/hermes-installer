@@ -5,6 +5,18 @@
 
 ### Added
 
+- Added a NeoWoW canvas creation workspace with folder-aware project selection,
+  new canvases, native Agent chat handoff, read-only generation progress, final
+  image/video/audio/text previews, text downloads, and JSON result export.
+  Selection is scoped to the current profile and credentials; creation briefs
+  require the canvas browser to be closed and ask for cost confirmation before
+  paid generation.
+
+- Bundled the NeoWoW canvas CLI and Skill for offline startup installation,
+  including profile-scoped credentials and a settings form that validates and
+  saves API Keys without shell commands or chat messages. Personal key binding
+  is disabled on shared cloud instances.
+
 - Added an optional Laya decision settings panel with off, observation, and
   advisory routing modes, connection and sample tests, and recent decision
   metadata. Disabled by default; service failures and low-confidence results
@@ -31,6 +43,16 @@
 - Added privacy-bounded onboarding, authentication, provider activation, first-message, recovery, and issue-report funnel events using the existing client-event field whitelist.
 
 ### Changed
+
+- Cloud images pin the official Agent installer and checkout to a compatible
+  venv-based revision, fixing the failed bootstrap on upstream PM installs.
+  Pull requests now verify container startup and the bundled canvas CLI before
+  production image publishing.
+
+- Redesigned the NeoWoW canvas connection settings with tool readiness,
+  a two-step connection guide, a dedicated connected view, and accessible
+  loading/error feedback. Saved credentials stay out of the form until the
+  user chooses to replace them; pending verification blocks duplicate submits.
 
 - Desktop Neodomain OAuth no longer has an online-deployment gate; callback validation remains limited to the running local Hermes server.
 - Removed the retired three-step first-run page. The workspace now opens immediately; an explicit Neodomain sign-in from the account avatar prepares Coding Plan in the background and reports any retryable activation failure without blocking the app.
