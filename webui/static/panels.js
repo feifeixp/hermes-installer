@@ -5350,6 +5350,7 @@ async function switchToProfile(name) {
     const data = await api('/api/profile/switch', { method: 'POST', body: JSON.stringify({ name }) });
     if (_switchGen !== _profileSwitchGeneration) return;
     S.activeProfile = data.active || name;
+    if (typeof window.neowowCanvasProfileChanged === 'function') window.neowowCanvasProfileChanged();
 
     // Update composer placeholder and title bar while the core profile-switch
     // state is still close to the profile API response.

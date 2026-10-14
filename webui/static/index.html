@@ -1505,7 +1505,7 @@
             <div class="settings-section-head">
               <div>
                 <div class="settings-section-title">Neowow Studio</div>
-                <div class="settings-section-meta">登录 Neodomain 后即可发布应用 / 同步技能 / 使用云端配置 · 一键登录在左侧栏头像图标</div>
+                <div class="settings-section-meta">管理账号与创作工具，让 Agent 连接你的 NeoWoW 工作区。</div>
               </div>
             </div>
 
@@ -1514,12 +1514,88 @@
             <!-- logged out we show one big OAuth button.  When logged -->
             <!-- in we mirror the avatar's popover content for context. -->
             <!-- Shorter, friendlier than before. -->
-            <div class="settings-field">
-              <label>账号</label>
+            <div class="settings-field neowow-studio-account">
+              <label>Studio 账号</label>
               <div id="neowowAccountBlock" style="padding:14px;background:rgba(94,96,206,0.06);border:1px solid rgba(94,96,206,0.20);border-radius:10px;font-size:13px;line-height:1.6">
                 <span style="color:var(--muted)">加载中…</span>
               </div>
             </div>
+
+            <section class="settings-field canvas-connection" id="neowowCanvasConnection" data-state="checking" aria-labelledby="neowowCanvasTitle">
+              <header class="canvas-header">
+                <div class="canvas-heading">
+                  <svg class="canvas-mark" width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden="true"><rect x="4" y="4" width="20" height="20" rx="4" stroke="currentColor" stroke-width="1.5"/><rect x="12" y="12" width="20" height="20" rx="4" fill="var(--sidebar)" stroke="currentColor" stroke-width="1.5"/><path d="m17 25 4-5 3 3 3-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <div><h2 id="neowowCanvasTitle">NeoWoW 画布</h2><p>从一个想法，到一张画布。</p></div>
+                </div>
+                <span class="canvas-badge" id="neowowCanvasBadge">检查中</span>
+              </header>
+              <p class="canvas-description">让 Agent 为你编排分镜、管理素材，生成图片与视频。</p>
+              <div class="canvas-capabilities" aria-label="画布能力">
+                <span>画布与分镜</span><span>图片生成</span><span>视频与音频</span><span>素材上传</span>
+              </div>
+
+              <div class="canvas-runtime">
+                <div class="canvas-runtime-items">
+                  <span id="neowowCanvasToolState" class="canvas-runtime-item" data-ready="unknown">画布工具 · 检查中</span>
+                  <span id="neowowCanvasRuntimeState" class="canvas-runtime-item" data-ready="unknown">运行环境 · 检查中</span>
+                </div>
+                <button class="canvas-icon-btn" id="neowowCanvasRefreshBtn" type="button" onclick="neowowCanvasRefresh()" aria-label="刷新连接状态" title="刷新连接状态"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.1 7a7 7 0 0 1 11.5-1L20 9M4 15l2.4 3A7 7 0 0 0 17.9 17" stroke-linecap="round"/></svg></button>
+              </div>
+
+              <div class="canvas-linked" id="neowowCanvasLinked" hidden>
+                <div class="canvas-linked-heading"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6" stroke-linecap="round" stroke-linejoin="round"/></svg><strong>连接已保存，开始创作吧</strong></div>
+                <p>选择画布，交给 Agent 创作，再把最终结果带回来。</p>
+                <div class="canvas-linked-actions"><button class="canvas-button" id="neowowCanvasEditBtn" type="button" onclick="neowowCanvasEditKey()" aria-expanded="false" aria-controls="neowowCanvasSetup">更换 Key</button><button class="canvas-text-btn" type="button" id="neowowCanvasClearBtn" onclick="neowowCanvasClear()">断开连接</button></div>
+              </div>
+
+              <div class="canvas-workspace" id="neowowCanvasWorkspace" hidden>
+                <div class="canvas-workspace-head"><h3>创作工作区</h3><button class="canvas-button" id="neowowCanvasLoadProjectsBtn" type="button" onclick="neowowCanvasLoadProjects()">载入我的画布</button></div>
+                <div class="canvas-project-controls" id="neowowCanvasProjects" hidden>
+                  <label for="neowowCanvasFolder">文件夹</label>
+                  <select id="neowowCanvasFolder" onchange="neowowCanvasChangeFolder()"><option value="">根目录</option></select>
+                  <label for="neowowCanvasProject">目标画布</label>
+                  <select id="neowowCanvasProject" onchange="neowowCanvasSelectProject()"><option value="">选择画布…</option></select>
+                  <div class="canvas-project-pages"><button class="canvas-text-btn" id="neowowCanvasPrevPage" type="button" onclick="neowowCanvasProjectPage(-1)" disabled>上一页</button><span id="neowowCanvasProjectPage">第 1 页</span><button class="canvas-text-btn" id="neowowCanvasNextPage" type="button" onclick="neowowCanvasProjectPage(1)" disabled>下一页</button></div>
+                  <form class="canvas-new-project" onsubmit="neowowCanvasCreateProject(event)"><input id="neowowCanvasProjectTitle" type="text" maxlength="120" placeholder="新画布名称" aria-label="新画布名称"><button class="canvas-button" type="submit">新建画布</button></form>
+                </div>
+                <p class="canvas-active-project" id="neowowCanvasActiveProject">先载入并选择一张画布。</p>
+                <label class="canvas-close-check"><input id="neowowCanvasClosed" type="checkbox">开始创作前，我已关闭目标画布网页，并确认协作房间无人。</label>
+                <form class="canvas-create-brief" onsubmit="neowowCanvasStartCreation(event)">
+                  <div class="canvas-create-heading"><label for="neowowCanvasPrompt">创作要求</label><select id="neowowCanvasKind" aria-label="创作类型"><option value="storyboard">分镜画布</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option><option value="text">文本</option></select></div>
+                  <textarea id="neowowCanvasPrompt" rows="3" maxlength="10000" placeholder="例如：为一款便携咖啡机制作 3 个电影感分镜，暖色调，16:9。" aria-describedby="neowowCanvasCreationHint"></textarea>
+                  <div class="canvas-create-actions"><p id="neowowCanvasCreationHint">在当前聊天中制作。Agent 会先展示方案和预估积分，确认后再生成。</p><button class="canvas-button canvas-button-primary" id="neowowCanvasStartBtn" type="submit" disabled>交给 Agent 创作</button></div>
+                </form>
+                <div class="canvas-workspace-feedback" id="neowowCanvasWorkStatus" role="status" aria-live="polite"></div>
+                <div class="canvas-results-head"><h3>最终结果</h3><div><button class="canvas-button" id="neowowCanvasResultsRefreshBtn" type="button" onclick="neowowCanvasRefreshResults()" disabled>提取／刷新结果</button><a class="canvas-button" id="neowowCanvasExport" href="#" hidden>导出结果清单</a></div></div>
+                <p class="canvas-results-summary" id="neowowCanvasResultsSummary">选择画布后，可以提取 Agent 或官网已完成的创作结果。</p>
+                <div class="canvas-result-grid" id="neowowCanvasResults"></div>
+                <p class="canvas-result-note">创作进度在聊天中查看；完成后点击「提取／刷新结果」。原文件在新页面打开后可保存，文本可直接下载。</p>
+              </div>
+
+              <div class="canvas-setup" id="neowowCanvasSetup">
+                <div class="canvas-step canvas-step-get">
+                  <div class="canvas-step-title"><span class="canvas-step-number">01</span><h3>获取画布 Key</h3></div>
+                  <p>打开官网，在「用户中心 → CLI」生成 API Key。</p>
+                  <a class="canvas-button" href="https://neowow.cn" target="_blank" rel="noopener noreferrer">前往官网生成 Key <span aria-hidden="true">↗</span></a>
+                </div>
+                <div class="canvas-step canvas-step-connect">
+                  <div class="canvas-step-title"><span class="canvas-step-number">02</span><h3>连接到 Agent</h3></div>
+                  <form id="neowowCanvasForm" onsubmit="neowowCanvasSave(event)">
+                    <label for="neowowCanvasKey">画布 API Key</label>
+                    <div class="canvas-key-row">
+                      <input type="password" id="neowowCanvasKey" placeholder="在这里粘贴 API Key" aria-label="画布 API Key" aria-describedby="neowowCanvasPrivacy neowowCanvasStatus" autocomplete="off" spellcheck="false" autocapitalize="none">
+                      <button class="canvas-button canvas-button-primary" type="submit" id="neowowCanvasSaveBtn" disabled>保存并连接</button>
+                    </div>
+                    <p class="canvas-form-hint">已有 Key 可以直接粘贴，无需再次生成。</p>
+                  </form>
+                </div>
+              </div>
+              <div class="canvas-feedback" id="neowowCanvasStatus" role="status" aria-live="polite" data-tone="neutral">正在检查连接…</div>
+              <footer class="canvas-footer">
+                <p id="neowowCanvasPrivacy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>密码只在官网登录，Key 无需发送到聊天。</p>
+                <details><summary>连接说明</summary><p>画布 Key 与 Studio 登录分别管理。更换 Key 会使旧 Key 失效；断开连接只移除当前 Profile 保存的凭据，不会撤销官网 Key。</p></details>
+              </footer>
+            </section>
 
             <!-- ── Advanced: Deploy Token (CI / scripts) ────────────── -->
             <!-- Most users don't need this — JWT login already gives -->
@@ -2062,6 +2138,7 @@
 <script src="static/messages.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/panels.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/neowow.js?v=__WEBUI_VERSION__" defer></script>
+<script src="static/neowow-canvas.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/server-admin.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/vendor/qrcode.min.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/messaging.js?v=__WEBUI_VERSION__" defer></script>

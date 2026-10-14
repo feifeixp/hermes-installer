@@ -44,6 +44,10 @@ docs/*
 !docs/ui-ux/**
 !docs/rfcs/
 !docs/rfcs/**
+!docs/evidence/
+docs/evidence/*
+!docs/evidence/neowow-cli/
+!docs/evidence/neowow-cli/*.png
 
 # Local-only AI assistant context — never committed even under docs/.
 docs/AGENTS.md

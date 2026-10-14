@@ -252,9 +252,9 @@ def _build_csp_report_only_policy() -> str:
         "frame-ancestors 'self'; "
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "img-src 'self' data: blob:; "
+        "img-src 'self' data: blob: https:; "
         "font-src 'self' data:; "
-        "media-src 'self' data: blob:; "
+        "media-src 'self' data: blob: https:; "
         f"connect-src {connect_src}; "
         "report-uri /api/csp-report; report-to csp-endpoint"
     )
@@ -642,6 +642,13 @@ def main() -> None:
 
     # Seed bundled default personalities into config.yaml (idempotent, additive).
     _seed_default_personalities()
+
+    # Offline canvas CLI seed, including a PATH launcher for agent tools.
+    try:
+        from api.neowow_cli import ensure_installed
+        ensure_installed()
+    except Exception:
+        logger.warning("Bundled NeoWoW CLI installation failed; check settings")
 
     # Start the gateway session watcher for real-time SSE updates
     try:

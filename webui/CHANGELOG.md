@@ -40,6 +40,31 @@
 
 - Expanded user-report redaction for emails, GitHub tokens, AWS access keys, cookies, client secrets, passwords, and sensitive URL query parameters. Login-page reports are same-origin checked and rate limited.
 
+## [v1.5.33] — 2026-10-14 — NeoWoW canvas creation and delivery
+
+### Added
+
+- Built-in official NeoWoW CLI/Skill, private settings-based Key binding, canvas
+  selection/creation, native Agent creation requests, and final media/text export.
+
+### Changed
+
+- Reworked the connection and creation workspace for desktop/mobile and dark mode.
+- Pinned compatible Agent source for cloud and desktop builds; PRs verify cloud
+  startup and the bundled CLI before production publishing.
+
+### Fixed
+
+- Deliver completed audio tasks with object-shaped results, and query all pending
+  tasks rather than permanently omitting nodes after the first twenty.
+
+### Security
+
+- Disable CLI debug logging; bind HOME/session context across concurrent tool
+  workers and shared terminal snapshots. Legacy Agents require an update before
+  canvas Key binding. Profile switches clear results and discard late responses.
+
+
 ## [v0.51.137] — 2026-05-25 — Release DI (stage-batch19 — 6-PR medium-risk batch)
 
 ### Added

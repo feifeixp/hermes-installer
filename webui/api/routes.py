@@ -4720,6 +4720,33 @@ def handle_get(handler, parsed) -> bool:
     # Companion files: webui/api/neowow.py, webui/static/neowow.js,
     #                  webui/static/index.html (the settings pane).
     # ════════════════════════════════════════════════════════════════════
+    if parsed.path in {"/api/neowow/canvas/projects", "/api/neowow/canvas/results", "/api/neowow/canvas/export"}:
+        try:
+            from api.neowow_canvas import list_projects, get_results
+            qs = parse_qs(parsed.query)
+            if parsed.path.endswith("/projects"):
+                return j(handler, list_projects(qs.get("page", ["1"])[0], qs.get("folder", [""])[0]))
+            result = get_results(qs.get("project", [""])[0])
+            if parsed.path.endswith("/results"):
+                return j(handler, result)
+            payload = json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8")
+            handler.send_response(200)
+            handler.send_header("Content-Type", "application/json; charset=utf-8")
+            handler.send_header("Content-Disposition", 'attachment; filename="neowow-results.json"')
+            handler.send_header("Cache-Control", "no-store")
+            handler.send_header("Content-Length", str(len(payload)))
+            handler.end_headers()
+            handler.wfile.write(payload)
+            return True
+        except ValueError as e:
+            return bad(handler, str(e))
+        except Exception:
+            return bad(handler, "画布暂时无法读取，请稍后重试。", status=500)
+
+    if parsed.path == "/api/neowow/cli/status":
+        from api.neowow_cli import get_status
+        return j(handler, get_status())
+
     if parsed.path == "/api/neowow/status":
         from api.neowow import get_status
         try:
@@ -7323,6 +7350,36 @@ def handle_post(handler, parsed) -> bool:
     # See INTEGRATIONS.md for the conflict-recovery playbook.
     # Last verified working with upstream 9986d2f.
     # ════════════════════════════════════════════════════════════════════
+    if parsed.path in {"/api/neowow/canvas/select", "/api/neowow/canvas/create", "/api/neowow/canvas/brief"}:
+        try:
+            from api.neowow_canvas import select_project, create_project, creation_brief
+            if not isinstance(body, dict):
+                return bad(handler, "画布请求无效。")
+            if parsed.path.endswith("/select"):
+                result = select_project(body.get("projectId"))
+            elif parsed.path.endswith("/create"):
+                result = create_project(body.get("title"), body.get("canvasClosed"))
+            else:
+                result = creation_brief(body)
+            return j(handler, result)
+        except ValueError as e:
+            return bad(handler, str(e))
+        except Exception:
+            return bad(handler, "画布操作未完成，请刷新状态后重试。", status=500)
+
+    if parsed.path == "/api/neowow/cli/key":
+        try:
+            from api.neowow_cli import save_key, clear_key
+            if not isinstance(body, dict):
+                return bad(handler, "请输入画布 API Key。")
+            result = clear_key() if body.get("clear") is True else save_key(body.get("apiKey"))
+            return j(handler, result)
+        except ValueError as e:
+            return bad(handler, str(e))
+        except Exception:
+            # Never log credential-bearing request/CLI error details.
+            return bad(handler, "画布连接暂时无法保存，请稍后重试。", status=500)
+
     if parsed.path == "/api/neowow/token":
         # Save: body { token: "nws_dt_..." }
         # Clear: body { clear: true }

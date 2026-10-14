@@ -681,6 +681,14 @@ def get_profile_runtime_env(home: Path) -> dict[str, str]:
         except Exception:
             logger.debug("Failed to read runtime env from %s", env_path)
 
+    # Seed the same bundled CLI for a newly selected per-client profile.
+    # Keep credential paths scoped to that turn rather than process-global.
+    try:
+        from api.neowow_cli import ensure_installed
+        ensure_installed(home)
+        env['NEOWOW_CONFIG_DIR'] = str(home / 'neowow-cli')
+    except Exception:
+        logger.warning("Bundled NeoWoW CLI unavailable for profile")
     return env
 
 

@@ -39,7 +39,8 @@ def safe_resolve(root: Path, requested: str) -> Path:
 def _security_headers(handler):
     """Add security headers to every response.
 
-    CSP note: the connect-src list must include `https://app.neowow.studio`
+    CSP note: the connect-src list must retain 'self' and include `https://cdn.jsdelivr.net`
+    and `https://app.neowow.studio`
     (and the configurable HERMES_NEODOMAIN_OAUTH_START host if it's a
     different origin) so the WebUI's client-side code can reach the
     dashboard's broker / coding-plan / OAuth endpoints — heartbeat.js's
@@ -54,6 +55,9 @@ def _security_headers(handler):
     with "Refused to connect" in console — quiet for the user but kills
     Phase 2 heartbeat (instance gets stopped for "idle") and any future
     in-browser coding-plan integrations.
+
+    HTTPS media sources allow remote canvas video/audio previews, matching
+    the existing HTTPS image allowance; scripts keep their existing sources.
 
     If you change this list, also update the corresponding CSP set by
     Caddy in docker/Caddyfile.template (Caddy injects its own CSP for
@@ -87,6 +91,7 @@ def _security_headers(handler):
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://static.cloudflareinsights.com; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
         "img-src 'self' data: https: blob:; "
+        "media-src 'self' data: blob: https:; "
         "font-src 'self' data: https://cdn.jsdelivr.net https://fonts.gstatic.com; "
         f"connect-src 'self' {_dash_origin} https://cdn.jsdelivr.net; "
         "manifest-src 'self' https://*.cloudflareaccess.com; "

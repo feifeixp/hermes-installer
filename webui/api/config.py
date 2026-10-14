@@ -4689,10 +4689,38 @@ _thread_ctx = threading.local()
 
 
 def _set_thread_env(**kwargs):
+    _clear_thread_env()
     _thread_ctx.env = kwargs
+    # Official Agent ContextVars are copied into concurrent tool workers and
+    # LocalEnvironment bridges this home into each child process. Process env
+    # alone can belong to a different profile while this turn is still running.
+    try:
+        from hermes_constants import set_hermes_home_override
+    except ImportError:
+        return  # Legacy Agents cannot bind canvas credentials; see CLI status.
+    try:
+        from gateway.session_context import set_session_vars
+        _thread_ctx.session_tokens = set_session_vars(
+            platform=kwargs.get("HERMES_SESSION_PLATFORM", ""),
+            session_key=kwargs.get("HERMES_SESSION_KEY", ""),
+        )
+    except ImportError:
+        pass
+    if kwargs.get("HERMES_HOME"):
+        _thread_ctx.home_token = set_hermes_home_override(kwargs["HERMES_HOME"])
 
 
 def _clear_thread_env():
+    tokens = getattr(_thread_ctx, "session_tokens", None)
+    if tokens is not None:
+        from gateway.session_context import clear_session_vars
+        clear_session_vars(tokens)
+        del _thread_ctx.session_tokens
+    token = getattr(_thread_ctx, "home_token", None)
+    if token is not None:
+        from hermes_constants import reset_hermes_home_override
+        reset_hermes_home_override(token)
+        del _thread_ctx.home_token
     _thread_ctx.env = {}
 
 
