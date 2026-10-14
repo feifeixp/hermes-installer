@@ -200,6 +200,27 @@
     }
   };
 
+  async function fetchGateJSON(request, timeoutMs = 7000) {
+    const controller = new AbortController();
+    let timer;
+    try {
+      // Bound both headers and body. Reject even if a fetch implementation
+      // ignores abort so the gate's retry state is always released.
+      return await Promise.race([
+        (async () => {
+          const response = await request(controller.signal);
+          if (!response.ok) throw new Error('Gate request failed');
+          return await response.json();
+        })(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => { controller.abort(); reject(new Error('Gate request timed out')); }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   window.neowowResolveBootOverlay = async function () {
     if (_bootOverlayHidden || _bootOverlayResolving) return;
     const overlay = document.getElementById('neowowBootOverlay');
@@ -216,12 +237,14 @@
     let nickname = '';
     let networkOk = true;
     try {
-      const r = await fetch('/api/neowow/status', { cache: 'no-store' });
-      if (r.ok) {
-        const j = await r.json();
+      const j = await fetchGateJSON(signal => fetch('/api/neowow/status', { cache: 'no-store', signal }));
+      if (j && typeof j.hasJwt === 'boolean' && typeof j.neowowOnly === 'boolean') {
         hasJwt = !!(j && j.hasJwt);
         neowowOnly = !!(j && j.neowowOnly);
         window._neowowJwtExpired = !!(j && j.jwtExpired);
+        // Login is resolved; readiness/model discovery can take longer than
+        // the HTML startup watchdog and must not be labelled a login failure.
+        overlay.dataset.statusResolved = '1';
       } else {
         networkOk = false;
       }
@@ -243,14 +266,22 @@
         return;
       }
       if (neowowOnly && hasJwt) {
+        const title = $('neowowBootTitle');
+        const hint = $('neowowBootHint');
+        if (title) title.textContent = '正在检查 Coding Plan';
+        if (hint) hint.textContent = '账号已登录，正在检查工作区是否就绪…';
         let ready = false;
         try {
-          const r = await fetch('/api/onboarding/status', { cache: 'no-store' });
-          if (r.ok) {
-            const data = await r.json();
-            ready = !!(data && data.chat_ready);
-          }
-        } catch (_) { /* handled as not ready below */ }
+          const data = await fetchGateJSON(signal => fetch('/api/onboarding/status', { cache: 'no-store', signal }), 20000);
+          ready = !!(data && data.chat_ready === true);
+        } catch (_) {
+          window.neowowShowLoginRequired({
+            title: 'Coding Plan 状态检查未完成',
+            message: '账号已登录，就绪检查暂未完成。请重试；登录信息会保留。',
+            retry: true,
+          });
+          return;
+        }
         if (!ready) {
           window.neowowShowLoginRequired({
             title: 'Coding Plan 尚未就绪',
@@ -260,15 +291,29 @@
           return;
         }
         if (typeof populateModelDropdown === 'function') {
-          await populateModelDropdown({ force: true });
+          let timer;
+          try {
+            await Promise.race([
+              populateModelDropdown({ force: true }),
+              new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Model list timed out')), 20000); }),
+            ]);
+          } catch (_) {
+            window.neowowShowLoginRequired({
+              title: '模型列表加载未完成',
+              message: '账号已登录，模型列表暂未加载完成。请重试。',
+              retry: true,
+            });
+            return;
+          } finally {
+            clearTimeout(timer);
+          }
         }
       }
 
       if (hasJwt) {
         try {
-          const r = await fetch('/api/neowow/whoami', { cache: 'no-store' });
-          if (r.ok) {
-            const j = await r.json();
+          const j = await fetchGateJSON(signal => fetch('/api/neowow/whoami', { cache: 'no-store', signal }), 3000);
+          if (j) {
             nickname = (j && (j.nickname || j.contact || j.email)) || '';
           }
         } catch (_) { /* fall through with empty nickname */ }

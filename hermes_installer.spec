@@ -54,6 +54,12 @@ if IS_WIN:
 # Build selective webui file list — exclude tests, docs, Docker, and heavy
 # markdown docs that are never read at runtime.
 _webui_root = Path("webui")
+# Frozen bundles have no .git. Stamp the same build version used by the native
+# app so static URLs change across releases instead of caching v=unknown for
+# a year. Write before collecting WebUI data files.
+(_webui_root / "api" / "_version.py").write_text(
+    f"__version__ = {('v' + VERSION.lstrip('v'))!r}\n", encoding="utf-8"
+)
 _webui_datas: list[tuple[str, str]] = []
 for _f in _webui_root.rglob("*"):
     if _f.is_file():
