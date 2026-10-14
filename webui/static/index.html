@@ -1600,7 +1600,7 @@
                   <label for="neowowCanvasScript" class="canvas-script-source" id="neowowCanvasScriptSource">当前逐字稿 · 尚未载入</label>
                   <textarea id="neowowCanvasScript" rows="8" maxlength="20000" oninput="neowowCanvasScriptChanged()" placeholder="包含完整故事、分场动作，以及每一句对白和旁白。可以在这里直接修改。"></textarea>
                   <label for="neowowCanvasRevision" class="canvas-script-source">修改意见（可选）</label>
-                  <textarea id="neowowCanvasRevision" rows="2" maxlength="10000" placeholder="例如：强化第二场的冲突，让对白更口语化，保留结尾。"></textarea>
+                  <textarea id="neowowCanvasRevision" rows="2" maxlength="10000" oninput="neowowCanvasScriptChanged()" placeholder="例如：强化第二场的冲突，让对白更口语化，保留结尾。"></textarea>
                   <div class="canvas-create-actions"><p>修改后需要重新确认逐字稿。剧本确认后，Agent 会先列分镜与积分，确认费用后再生成。</p><button class="canvas-button" id="neowowCanvasReviseBtn" type="button" onclick="neowowCanvasReviseScript()" disabled>请 Agent 修改剧本</button></div>
                   <label class="canvas-close-check"><input id="neowowCanvasScriptConfirmed" type="checkbox" onchange="neowowCanvasScriptApprovalChanged()">我已审阅当前逐字稿，按这份文字准备分镜方案。</label>
                   <div class="canvas-create-actions"><p id="neowowCanvasScriptApprovalStatus" role="status" aria-live="polite">先载入或填写逐字稿，再确认内容。</p><button class="canvas-button canvas-button-primary" id="neowowCanvasClipsBtn" type="button" onclick="neowowCanvasPrepareClips()" disabled>准备分镜与视频方案</button></div>

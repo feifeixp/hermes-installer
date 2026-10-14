@@ -168,6 +168,8 @@ def creation_brief(body: dict) -> dict:
         if stage == "clips" and body.get("scriptConfirmed") is not True:
             raise ValueError("请先审阅并确认当前逐字稿，再准备分镜与视频片段。")
         revision = body.get("revision", "")
+        if stage == "clips" and revision:
+            raise ValueError("请先处理修改意见并载入修订稿，或清空意见后重新确认。")
         if stage == "revise" and (not isinstance(revision, str) or not revision.strip() or len(revision) > 10000):
             raise ValueError("请填写不超过 10000 字的修改意见。")
         requirements = f"创作要求：\n{prompt.strip()}\n\n目标总时长：{duration} 秒；画幅：{aspect}。\n"

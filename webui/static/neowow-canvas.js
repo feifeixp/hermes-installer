@@ -19,7 +19,8 @@
   window.neowowCanvasScriptApprovalChanged = function () {
     const hasScript = !!$('neowowCanvasScript').value.trim();
     if (!hasScript) $('neowowCanvasScriptConfirmed').checked = false;
-    $('neowowCanvasScriptApprovalStatus').textContent = !hasScript ? '先载入或填写逐字稿，再确认内容。'
+    $('neowowCanvasScriptApprovalStatus').textContent = $('neowowCanvasRevision').value.trim() ? '有待处理的修改意见，请先修订并载入新稿，或清空意见。'
+      : !hasScript ? '先载入或填写逐字稿，再确认内容。'
       : $('neowowCanvasScriptConfirmed').checked ? '逐字稿已确认；下一步先审阅分镜与积分。' : '逐字稿待确认，请审阅后勾选。';
     controls();
   };
@@ -60,7 +61,7 @@
     $('neowowCanvasLoadScriptBtn').disabled = disabled || !active;
     $('neowowCanvasReviseBtn').disabled = disabled || !active || !storyMode() || !$('neowowCanvasScript').value.trim();
     $('neowowCanvasScriptConfirmed').disabled = disabled || !active || !$('neowowCanvasScript').value.trim();
-    $('neowowCanvasClipsBtn').disabled = disabled || !active || !storyMode() || !$('neowowCanvasScript').value.trim() || !$('neowowCanvasScriptConfirmed').checked;
+    $('neowowCanvasClipsBtn').disabled = disabled || !active || !storyMode() || !$('neowowCanvasScript').value.trim() || !$('neowowCanvasScriptConfirmed').checked || !!$('neowowCanvasRevision').value.trim();
     $('neowowCanvasResultsRefreshBtn').disabled = disabled || !active;
     $('neowowCanvasPrevPage').disabled = disabled || page <= 1;
     $('neowowCanvasNextPage').disabled = disabled || $('neowowCanvasNextPage').dataset.hasMore !== 'true';
@@ -195,6 +196,7 @@
     const script = $('neowowCanvasScript').value.trim();
     if (story && ['revise', 'clips'].includes(stage) && !script) { feedback('请先载入或填写逐字稿。', true); return; }
     if (story && stage === 'clips' && !$('neowowCanvasScriptConfirmed').checked) { feedback('请先审阅并确认当前逐字稿。', true); return; }
+    if (story && stage === 'clips' && $('neowowCanvasRevision').value.trim()) { feedback('请先处理修改意见并载入修订稿，或清空意见后重新确认。', true); return; }
     const duration = Number($('neowowCanvasDuration').value), aspect = $('neowowCanvasAspect').value;
     if (story && (!Number.isInteger(duration) || duration < 10 || duration > 600)) { feedback('目标总时长应为 10–600 秒的整数。', true); return; }
     if (story && stage === 'revise' && !$('neowowCanvasRevision').value.trim()) { feedback('请填写修改意见。', true); return; }

@@ -90,6 +90,7 @@ def test_video_defaults_to_script_writing_before_media(canvas, monkeypatch):
 @pytest.mark.parametrize("change", [
     {"stage": "clips"}, {"stage": "clips", "script": "逐字台词", "scriptConfirmed": "true"},
     {"stage": "clips", "script": "逐字台词", "scriptConfirmed": 1},
+    {"stage": "clips", "script": "逐字台词", "scriptConfirmed": True, "revision": "还要修改"},
     {"stage": "revise", "script": "逐字台词"}, {"stage": "revise", "revision": "强化冲突"},
     {"script": "字" * 20001}, {"script": []}, {"stage": []}, {"stage": "generate"},
     {"duration": True}, {"duration": 9}, {"duration": 601}, {"duration": "60"},
