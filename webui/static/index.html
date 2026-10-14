@@ -1588,10 +1588,23 @@
                 <p class="canvas-active-project" id="neowowCanvasActiveProject">先载入并选择一张画布。</p>
                 <label class="canvas-close-check"><input id="neowowCanvasClosed" type="checkbox">开始创作前，我已关闭目标画布网页，并确认协作房间无人。</label>
                 <form class="canvas-create-brief" onsubmit="neowowCanvasStartCreation(event)">
-                  <div class="canvas-create-heading"><label for="neowowCanvasPrompt">创作要求</label><select id="neowowCanvasKind" aria-label="创作类型"><option value="storyboard">分镜画布</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option><option value="text">文本</option></select></div>
-                  <textarea id="neowowCanvasPrompt" rows="3" maxlength="10000" placeholder="例如：为一款便携咖啡机制作 3 个电影感分镜，暖色调，16:9。" aria-describedby="neowowCanvasCreationHint"></textarea>
-                  <div class="canvas-create-actions"><p id="neowowCanvasCreationHint">在当前聊天中制作。Agent 会先展示方案和预估积分，确认后再生成。</p><button class="canvas-button canvas-button-primary" id="neowowCanvasStartBtn" type="submit" disabled>交给 Agent 创作</button></div>
+                  <div class="canvas-create-heading"><label for="neowowCanvasPrompt">创作要求</label><select id="neowowCanvasKind" aria-label="创作类型" onchange="neowowCanvasKindChanged()"><option value="video">视频</option><option value="storyboard">分镜画布</option><option value="image">图片</option><option value="audio">音频</option><option value="text">文本</option></select></div>
+                  <ol class="canvas-story-steps" id="neowowCanvasStorySteps" aria-label="视频创作流程"><li><span>01</span>完善剧本</li><li><span>02</span>审阅逐字稿</li><li><span>03</span>分镜与片段</li></ol>
+                  <textarea id="neowowCanvasPrompt" rows="3" maxlength="10000" oninput="neowowCanvasScriptChanged()" placeholder="例如：写一段咖啡师与加班女孩的温暖故事。先有误会，再有转折，用自然对白推动剧情，最后介绍便携咖啡机。" aria-describedby="neowowCanvasCreationHint"></textarea>
+                  <div class="canvas-story-options" id="neowowCanvasStoryOptions"><label for="neowowCanvasDuration">目标总时长 <input id="neowowCanvasDuration" type="number" min="10" max="600" step="1" value="60" oninput="neowowCanvasScriptChanged()"> 秒</label><label for="neowowCanvasAspect">画幅 <select id="neowowCanvasAspect" onchange="neowowCanvasScriptChanged()"><option value="16:9">16:9 横屏</option><option value="9:16">9:16 竖屏</option><option value="1:1">1:1 方形</option></select></label></div>
+                  <div class="canvas-create-actions"><p id="neowowCanvasCreationHint">使用当前聊天的大模型写剧本与完整对白／旁白，先审阅文字，再创作视频。</p><button class="canvas-button canvas-button-primary" id="neowowCanvasStartBtn" type="submit" disabled>生成剧本逐字稿</button></div>
                 </form>
+                <section class="canvas-script-review" id="neowowCanvasScriptReview" aria-labelledby="neowowCanvasScriptTitle">
+                  <div class="canvas-create-heading"><h4 id="neowowCanvasScriptTitle">审阅与修改逐字稿</h4><button class="canvas-button" type="button" id="neowowCanvasLoadScriptBtn" onclick="neowowCanvasRefreshResults()" disabled>提取剧本</button></div>
+                  <p class="canvas-result-note">Agent 写完后，点击「提取剧本」，在文本结果中选择「载入逐字稿」。也可以直接填写已有剧本。</p>
+                  <label for="neowowCanvasScript" class="canvas-script-source" id="neowowCanvasScriptSource">当前逐字稿 · 尚未载入</label>
+                  <textarea id="neowowCanvasScript" rows="8" maxlength="20000" oninput="neowowCanvasScriptChanged()" placeholder="包含完整故事、分场动作，以及每一句对白和旁白。可以在这里直接修改。"></textarea>
+                  <label for="neowowCanvasRevision" class="canvas-script-source">修改意见（可选）</label>
+                  <textarea id="neowowCanvasRevision" rows="2" maxlength="10000" placeholder="例如：强化第二场的冲突，让对白更口语化，保留结尾。"></textarea>
+                  <div class="canvas-create-actions"><p>修改后需要重新确认逐字稿。剧本确认后，Agent 会先列分镜与积分，确认费用后再生成。</p><button class="canvas-button" id="neowowCanvasReviseBtn" type="button" onclick="neowowCanvasReviseScript()" disabled>请 Agent 修改剧本</button></div>
+                  <label class="canvas-close-check"><input id="neowowCanvasScriptConfirmed" type="checkbox" onchange="neowowCanvasScriptApprovalChanged()">我已审阅当前逐字稿，按这份文字准备分镜方案。</label>
+                  <div class="canvas-create-actions"><p id="neowowCanvasScriptApprovalStatus" role="status" aria-live="polite">先载入或填写逐字稿，再确认内容。</p><button class="canvas-button canvas-button-primary" id="neowowCanvasClipsBtn" type="button" onclick="neowowCanvasPrepareClips()" disabled>准备分镜与视频方案</button></div>
+                </section>
                 <div class="canvas-workspace-feedback" id="neowowCanvasWorkStatus" role="status" aria-live="polite"></div>
                 <div class="canvas-results-head"><h3>最终结果</h3><div><button class="canvas-button" id="neowowCanvasResultsRefreshBtn" type="button" onclick="neowowCanvasRefreshResults()" disabled>提取／刷新结果</button><a class="canvas-button" id="neowowCanvasExport" href="#" hidden>导出结果清单</a></div></div>
                 <p class="canvas-results-summary" id="neowowCanvasResultsSummary">选择画布后，可以提取 Agent 或官网已完成的创作结果。</p>
