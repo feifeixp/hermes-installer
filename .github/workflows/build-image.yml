@@ -32,6 +32,9 @@ name: build-image
 # instead of rebuilding from source.
 
 on:
+  pull_request:
+    branches: [main]
+    paths: ['webui/**', 'docker/Dockerfile.webui', '.github/workflows/build-image.yml']
   push:
     branches: [main]
     # Version-tag pushes (e.g. `git tag v1.4.9 && git push origin v1.4.9`)
@@ -168,6 +171,7 @@ jobs:
       # the previous "build twice" approach.
 
       - name: Login to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -175,6 +179,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check Aliyun ACR credentials
+        if: github.event_name != 'pull_request'
         id: check_acr
         run: |
           if [[ -n "${{ secrets.ALIYUN_ACR_USERNAME }}" && -n "${{ secrets.ALIYUN_ACR_PASSWORD }}" ]]; then
@@ -209,6 +214,7 @@ jobs:
       # (never the master account weilikeji2021 — sub-account so a
       # leaked token can be revoked without nuking the org).
       - name: Check Enterprise ACR credentials
+        if: github.event_name != 'pull_request'
         id: check_enterprise_acr
         run: |
           if [[ -n "${{ secrets.ENTERPRISE_ACR_USERNAME }}" \
@@ -263,7 +269,8 @@ jobs:
           # Rosetta + buildx (`docker build --platform linux/amd64`).
           # Add `linux/arm64` back here when Phase 2 lands ARM ECS.
           platforms: linux/amd64
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           # Pass the union of GHCR + ACR tags. docker buildx pushes the
           # SAME built image to all listed tags — single build, multi
           # destination. ~half the time of "build, push, build, push".
@@ -278,9 +285,24 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false   # cleaner image; no SBOM/attestation file
 
+      - name: Verify image startup and bundled CLI
+        if: github.event_name == 'pull_request'
+        run: |
+          IMAGE="ghcr.io/feifeixp/hermes-webui:main-${{ steps.meta.outputs.short_sha }}"
+          docker run -d --name canvas-smoke -e HERMES_WEBUI_AUTH_MODE=none "$IMAGE"
+          trap 'docker rm -f canvas-smoke >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 60); do
+            if docker exec canvas-smoke curl -fsS http://127.0.0.1:7891/health; then break; fi
+            sleep 2
+          done
+          docker exec canvas-smoke curl -fsS http://127.0.0.1:7891/health
+          docker exec canvas-smoke /opt/hermes/.hermes/webui/bin/neowow --help
+          docker exec canvas-smoke curl -fsS http://127.0.0.1:7891/api/neowow/cli/status
+          docker exec canvas-smoke sh -c 'curl -fsS http://127.0.0.1:7891/static/neowow-canvas.js | head -c 100'
+
       # ── Summary ──────────────────────────────────────────────────────
       - name: Summary
-        if: success()
+        if: success() && github.event_name != 'pull_request'
         run: |
           {
             echo "## ✅ Image push complete"

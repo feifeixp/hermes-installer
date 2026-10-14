@@ -161,7 +161,16 @@ WORKDIR /opt/hermes/hermes-installer
 # install.sh is interactive about ripgrep/ffmpeg — neutralize via setsid
 # (same trick we use in app.py:467 for the Windows / WSL install path).
 # Output goes to stdout so docker build logs show progress.
-RUN python3 webui/bootstrap.py --install-only --no-browser
+# Pin the installer AND checkout to the compatible venv-based Agent used at
+# the time of our last successful image build. Upstream main now uses PM's
+# generation store, which this distribution's bootstrap does not yet support.
+# Upgrade this pin only alongside a verified bootstrap/runtime migration.
+ARG HERMES_AGENT_COMMIT=6cf572c9e5d88a33e0e51cfc5bcfe47f02682731
+RUN curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_AGENT_COMMIT}/scripts/install.sh" \
+        -o /tmp/hermes-install.sh \
+    && bash /tmp/hermes-install.sh --commit "${HERMES_AGENT_COMMIT}" \
+    && rm /tmp/hermes-install.sh \
+    && python3 webui/bootstrap.py --install-only --skip-agent-install --no-browser
 
 # Post-install patch: inject the `neowow-coding-plan` provider into
 # the upstream hermes-agent that bootstrap.py just cloned. Without
