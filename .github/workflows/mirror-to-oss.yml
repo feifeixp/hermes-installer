@@ -132,10 +132,11 @@ jobs:
         run: |
           DEST="oss://${BUCKET}/hermes/latest/"
           echo "Refreshing /latest/ alias → $DEST"
-          # Wipe old files first so renamed assets don't leave stale copies.
-          # (Use --recursive + delete-only — we replace with same-name uploads next.)
-          ossutil rm -r -f "$DEST" || true
-          ossutil cp -r -f --update assets/ "$DEST" \
+          # Copy completed objects within OSS. Replacing an alias must not
+          # first remove the existing download or retransmit release bytes.
+          # The trailing slash copies directory contents without nesting TAG.
+          ossutil cp -r -f "oss://${BUCKET}/hermes/${TAG}/" "$DEST" \
+            --disable-ignore-error \
             --meta="Cache-Control:public, max-age=300"
 
       - name: Print download URLs
