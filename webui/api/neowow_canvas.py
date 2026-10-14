@@ -28,6 +28,7 @@ def identifier(value) -> str:
 
 
 def _credentials(home: Path) -> dict:
+    cli._require_profile_context()
     if not cli._binding_available():
         raise ValueError("请在专属 Agent 实例中使用个人画布。")
     try:
@@ -50,8 +51,9 @@ def _run(args: list[str], home: Path) -> dict:
     if not node:
         raise ValueError("画布工具需要 Node.js 18 或更新版本。")
     env = dict(os.environ)
+    env.pop("NEOWOW_DEBUG", None)
     env.update(NEOWOW_API_KEY=config["apiKey"], NEOWOW_BASE="https://neowow.cn",
-               NEOWOW_CONFIG_DIR=str(cli._config_dir(home)), NEOWOW_DEBUG="0",
+               NEOWOW_CONFIG_DIR=str(cli._config_dir(home)),
                NEOWOW_NO_UPDATE_CHECK="1", HERMES_HOME=str(home))
     try:
         result = subprocess.run([node, str(skill / "bin/neowow.mjs"), *args],
@@ -199,6 +201,8 @@ def extract_results(project: dict, tasks: dict | None = None) -> dict:
             if isinstance(content, str) and content.strip():
                 results.append({"nodeKey": node_id, "kind": kind, "label": label, "text": content[:200000]})
         else:
+            if kind == "audio" and isinstance(content, dict):
+                content = content.get("audioUrl")
             if isinstance(content, str):
                 content = [content]
             if isinstance(content, list):
@@ -230,7 +234,7 @@ def get_results(project_id: str) -> dict:
     task_data, warning = None, ""
     if pending:
         try:
-            task_data = _run(["poll", *list(dict.fromkeys(pending))[:20], "--once", "-p", project_id], home)
+            task_data = _run(["poll", *list(dict.fromkeys(pending)), "--once", "-p", project_id], home)
         except ValueError:
             warning = "任务进度暂时无法刷新，以下为画布已保存的状态。"
     return {"active": active, **extract_results(project, task_data), "warning": warning}

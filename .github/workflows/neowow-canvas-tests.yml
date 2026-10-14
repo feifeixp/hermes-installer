@@ -35,7 +35,7 @@ jobs:
       - name: Canvas, credentials, profiles and CSRF regression checks
         run: >-
           python -m pytest tests/test_neowow_canvas.py tests/test_neowow_canvas_ui.py
-          tests/test_neowow_canvas_handoff.py tests/test_neowow_cli.py
+          tests/test_neowow_canvas_handoff.py tests/test_neowow_cli.py tests/test_neowow_profile_context.py
           tests/test_neodomain_csrf_bypass.py tests/test_profile_terminal_env.py
           tests/test_profile_env_isolation.py tests/test_issue1909_csp_report_only.py
           tests/test_issue1850_csp_connect_src_jsdelivr.py

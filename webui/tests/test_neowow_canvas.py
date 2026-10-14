@@ -10,6 +10,7 @@ import pytest
 @pytest.fixture
 def canvas(monkeypatch, tmp_path):
     from api import neowow_canvas as module
+    monkeypatch.setattr(module.cli, "_supports_profile_context", lambda: True)
     home = tmp_path / "home"
     directory = home / "neowow-cli"
     directory.mkdir(parents=True)
@@ -109,12 +110,14 @@ def test_result_poll_is_read_only_and_failed_tasks_are_not_success(canvas, monke
 
 
 def test_cli_credentials_never_in_arguments_or_error(canvas, monkeypatch, tmp_path):
+    monkeypatch.setenv("NEOWOW_DEBUG", "1")
     skill = tmp_path / "skill"
     monkeypatch.setattr(canvas.cli, "ensure_installed", lambda home: skill)
     monkeypatch.setattr(canvas.shutil, "which", lambda name: "/mock/node")
     def run(args, **kwargs):
         assert "dummy-private-key" not in " ".join(args)
         assert kwargs["env"]["NEOWOW_API_KEY"] == "dummy-private-key"
+        assert "NEOWOW_DEBUG" not in kwargs["env"]
         return SimpleNamespace(returncode=3, stdout="", stderr="dummy-private-key password errCode=2001")
     monkeypatch.setattr(canvas.subprocess, "run", run)
     with pytest.raises(ValueError) as error:
@@ -164,3 +167,27 @@ def test_canvas_media_allowed_without_opening_script_sources():
     assert "https://cdn.jsdelivr.net" in connect and "'self'" in connect
     assert "'unsafe-eval'" not in enforced
     assert "media-src 'self' data: blob: https:" in Handler.csp_report_only_policy()
+
+
+def test_completed_audio_task_object_is_delivered(canvas):
+    project = {"nodes": [{"id": "audio1", "type": "audio", "data": {"status": "PENDING", "taskId": "task1"}}]}
+    tasks = {"tasks": [{"taskId": "task1", "status": "SUCCESS", "resultData": {"audioUrl": "https://media.example/final.mp3"}}]}
+    result = canvas.extract_results(project, tasks)
+    assert result["counts"]["success"] == 1
+    assert result["results"][0]["url"] == "https://media.example/final.mp3"
+    tasks["tasks"][0]["resultData"]["audioUrl"] = "javascript:alert(1)"
+    assert canvas.extract_results(project, tasks)["results"] == []
+
+
+def test_result_refresh_queries_more_than_twenty_pending_tasks(canvas, monkeypatch):
+    home = canvas.cli._home()
+    canvas._save_active(home, {"sessionId": "123", "title": "作品"}, canvas._credentials(home))
+    calls = []
+    def run(args, home):
+        calls.append(args)
+        if args[0] == "project":
+            return {"sessionId": "123", "nodes": [{"id": f"node{i}", "type": "image", "data": {"status": "PENDING", "taskId": f"task{i}"}} for i in range(21)]}
+        return {"tasks": [{"taskId": f"task{i}", "status": "SUCCESS", "resultData": [f"https://media.example/{i}.png"]} for i in range(21)]}
+    monkeypatch.setattr(canvas, "_run", run)
+    assert len(canvas.get_results("123")["results"]) == 21
+    assert "task20" in calls[-1]

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+import functools
 import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -47,6 +49,49 @@ def _home() -> Path:
     return get_active_hermes_home()
 
 
+def _supports_profile_context() -> bool:
+    try:
+        import hermes_constants
+        from tools.environments import local
+        from gateway import session_context
+        return (callable(getattr(hermes_constants, "set_hermes_home_override", None))
+                and callable(getattr(local, "_inject_context_hermes_home", None))
+                and callable(getattr(session_context, "set_session_vars", None))
+                and getattr(local.LocalEnvironment.execute, "_neowow_profile_bridge", False))
+    except ImportError:
+        return False
+
+
+def _install_terminal_profile_bridge() -> None:
+    """Reassert the turn's home after the terminal sources its shared snapshot."""
+    try:
+        from hermes_constants import get_hermes_home_override, set_hermes_home_override
+        from tools.environments.local import LocalEnvironment, _inject_context_hermes_home
+    except ImportError:
+        return
+    original = LocalEnvironment.execute
+    if getattr(original, "_neowow_profile_bridge", False):
+        return
+
+    @functools.wraps(original)
+    def execute(self, command, *args, **kwargs):
+        home = get_hermes_home_override()
+        if home:
+            # BaseEnvironment sources its persisted exports BEFORE this body.
+            # Explicitly bind the authoritative home without serializing turns
+            # or changing process-global state. No secret is passed in argv.
+            command = "export HERMES_HOME=" + shlex.quote(str(home)) + "; " + command
+        return original(self, command, *args, **kwargs)
+
+    execute._neowow_profile_bridge = True
+    LocalEnvironment.execute = execute
+
+
+def _require_profile_context() -> None:
+    if not _supports_profile_context():
+        raise ValueError("当前 Agent 版本不支持安全的画布账号隔离，请更新 Agent 后连接。")
+
+
 def _binding_available() -> bool:
     # A shared cloud process must never save one user's key for everyone.
     return (os.getenv("HERMES_WEBUI_AUTH_MODE", "").strip().lower() != "neodomain"
@@ -63,6 +108,7 @@ def ensure_installed(home: Path | None = None) -> Path:
     root = Path(os.getenv("HERMES_SKILLS_PATH") or home / "skills").expanduser()
     target = root / "neowow-canvas"
     with _LOCK:
+        _install_terminal_profile_bridge()
         if not (target / "bin/neowow.mjs").is_file():
             if target.exists():
                 raise RuntimeError("NeoWoW 技能目录已存在但不完整，请检查后重试。")
@@ -104,12 +150,13 @@ def ensure_installed(home: Path | None = None) -> Path:
         # Use the active profile inherited by the agent subprocess. No key is
         # ever embedded in the launcher, shell profile, or generated skill.
         code = ("import os, pathlib, shutil, sys\n"
+                f"if not {_supports_profile_context()!r} and sys.argv[1:] != ['--help']: sys.exit('Update Hermes Agent before using canvas credentials')\n"
                 "home = pathlib.Path(os.environ.get('HERMES_HOME', pathlib.Path.home() / '.hermes'))\n"
                 "root = pathlib.Path(os.environ.get('HERMES_SKILLS_PATH', home / 'skills'))\n"
                 "os.environ['NEOWOW_CONFIG_DIR'] = str(home / 'neowow-cli')\n"
                 "os.environ.pop('NEOWOW_API_KEY', None)\n"
                 "os.environ['NEOWOW_BASE'] = 'https://neowow.cn'\n"
-                "os.environ['NEOWOW_DEBUG'] = '0'\n"
+                "os.environ.pop('NEOWOW_DEBUG', None)\n"
                 "node = shutil.which('node')\n"
                 "if not node: sys.exit('NeoWoW CLI requires Node.js >= 18')\n"
                 "os.execv(node, [node, str(root / 'neowow-canvas/bin/neowow.mjs'), *sys.argv[1:]])\n")
@@ -147,11 +194,12 @@ def get_status() -> dict:
             pass
     root = Path(os.getenv("HERMES_SKILLS_PATH") or home / "skills").expanduser()
     return {"installed": (root / "neowow-canvas/bin/neowow.mjs").is_file(),
-            "runtimeReady": bool(shutil.which("node")), "connected": connected,
-            "bindingAvailable": available, "keyPageUrl": "https://neowow.cn"}
+            "runtimeReady": bool(shutil.which("node")) and _supports_profile_context(), "connected": connected,
+            "profileContextReady": _supports_profile_context(), "bindingAvailable": available, "keyPageUrl": "https://neowow.cn"}
 
 
 def save_key(key: str) -> dict:
+    _require_profile_context()
     if not _binding_available():
         raise ValueError("共享实例不能保存个人画布 Key，请使用专属 Agent 实例。")
     if not isinstance(key, str) or not key.strip() or len(key) > 4096 or any(c.isspace() for c in key.strip()):
@@ -163,8 +211,9 @@ def save_key(key: str) -> dict:
     if not node:
         raise ValueError("NeoWoW CLI 需要 Node.js 18 或更新版本。")
     env = dict(os.environ)
+    env.pop("NEOWOW_DEBUG", None)
     env.update(NEOWOW_API_KEY=key, NEOWOW_BASE="https://neowow.cn",
-               NEOWOW_CONFIG_DIR=str(_config_dir(home)), NEOWOW_DEBUG="0",
+               NEOWOW_CONFIG_DIR=str(_config_dir(home)),
                NEOWOW_NO_UPDATE_CHECK="1")
     try:
         result = subprocess.run([node, str(skill / "bin/neowow.mjs"), "whoami"],

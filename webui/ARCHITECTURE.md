@@ -108,7 +108,9 @@ Log file:
 ## 3. Runtime Environment
 
 The bundled canvas CLI is seeded by `api/neowow_cli.py` at server startup and
-when resolving a profile's runtime environment. Its pinned archive lives in
+when resolving a profile's runtime environment. The official Agent HOME/session ContextVars scope terminal workers; the local
+terminal bridge reasserts the current turn HOME after sourcing shared snapshots.
+Legacy Agents without this capability cannot bind canvas keys. Its pinned archive lives in
 `assets/neowow-canvas-skill.zip`; installation needs no outbound download.
 Skills live outside subscription sync's `_neowow` deletion scope. The process
 PATH includes a launcher in `STATE_DIR/bin`; the launcher resolves Skill and

@@ -296,6 +296,7 @@ jobs:
             sleep 2
           done
           docker exec canvas-smoke curl -fsS http://127.0.0.1:7891/health
+          docker exec canvas-smoke /opt/hermes/.hermes/hermes-agent/venv/bin/python /opt/hermes/hermes-installer/webui/tests/verify_neowow_profile_context.py
           docker exec canvas-smoke /opt/hermes/.hermes/webui/bin/neowow --help
           docker exec canvas-smoke curl -fsS http://127.0.0.1:7891/api/neowow/cli/status
           docker exec canvas-smoke sh -c 'curl -fsS http://127.0.0.1:7891/static/neowow-canvas.js | head -c 100'

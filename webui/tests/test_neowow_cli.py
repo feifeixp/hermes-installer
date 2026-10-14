@@ -15,6 +15,7 @@ import pytest
 @pytest.fixture
 def cli(monkeypatch, tmp_path):
     from api import neowow_cli
+    monkeypatch.setattr(neowow_cli, "_supports_profile_context", lambda: True)
     home = tmp_path / "profile"
     monkeypatch.setattr(neowow_cli, "STATE_DIR", tmp_path / "state")
     monkeypatch.setattr(neowow_cli, "_home", lambda: home)
@@ -50,13 +51,14 @@ def test_bundle_integrity_before_install(cli, monkeypatch):
 
 
 def test_save_uses_environment_and_never_returns_key(cli, monkeypatch):
+    monkeypatch.setenv("NEOWOW_DEBUG", "1")
     key = "test-canvas-secret-do-not-disclose"
     calls = []
     def run(argv, **kwargs):
         calls.append((argv, kwargs))
         assert key not in " ".join(argv)
         assert kwargs["env"]["NEOWOW_API_KEY"] == key
-        assert kwargs["env"]["NEOWOW_DEBUG"] == "0"
+        assert "NEOWOW_DEBUG" not in kwargs["env"]
         return SimpleNamespace(returncode=0, stdout=json.dumps({"userId": "123", "apiKey": key}), stderr=key)
     monkeypatch.setattr(cli.subprocess, "run", run)
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/mock/node")
@@ -170,3 +172,13 @@ def test_http_status_and_invalid_key_response(test_server):
         urllib.request.urlopen(request)
     assert error.value.code == 400
     assert "invalid secret key" not in error.value.read().decode()
+
+
+def test_legacy_agent_cannot_bind_canvas_credentials(cli, monkeypatch):
+    monkeypatch.setattr(cli, "_supports_profile_context", lambda: False)
+    called = []
+    monkeypatch.setattr(cli.subprocess, "run", lambda *args, **kw: called.append(args))
+    assert not cli.get_status()["runtimeReady"]
+    with pytest.raises(ValueError, match="账号隔离"):
+        cli.save_key("test-private-key")
+    assert not called

@@ -1699,6 +1699,27 @@
   let canvasState = null;
   let canvasBusy = false;
   let canvasEditing = false;
+  let canvasEpoch = 0;
+  const canvasProfile = () => typeof S !== 'undefined' ? S.activeProfile || 'default' : 'default';
+  function canvasRequestCurrent() {
+    const token = canvasEpoch, profile = canvasProfile();
+    return () => token === canvasEpoch && profile === canvasProfile();
+  }
+
+  window.neowowCanvasProfileChanged = function () {
+    canvasEpoch++;
+    canvasState = null;
+    canvasEditing = false;
+    if (typeof window.neowowCanvasWorkspaceConnected === 'function') window.neowowCanvasWorkspaceConnected(false);
+    if (!$('neowowCanvasConnection')) return;
+    $('neowowCanvasKey').value = '';
+    $('neowowCanvasConnection').dataset.state = 'checking';
+    $('neowowCanvasBadge').textContent = '检查中';
+    $('neowowCanvasLinked').hidden = true;
+    $('neowowCanvasSetup').hidden = true;
+    canvasSetBusy(false);
+    void window.neowowCanvasRefresh();
+  };
 
   function canvasFeedback(message, tone = 'neutral') {
     const el = $('neowowCanvasStatus');
@@ -1746,6 +1767,7 @@
     runtime.dataset.ready = String(!!data.runtimeReady);
     canvasFeedback(!data.bindingAvailable ? '进入专属 Agent 实例后，即可连接个人画布。'
       : !data.installed ? '画布工具尚未安装，请重启应用后刷新状态。'
+      : data.profileContextReady === false ? '当前 Agent 版本不支持安全的画布账号隔离，请更新 Agent 后连接。'
       : !data.runtimeReady ? '运行环境尚未就绪，需要 Node.js 18 或更新版本。'
       : connected ? '凭据已保存。实际账号访问是否有效，以 Agent 检查结果为准。'
       : '工具已就绪，完成上面的两步即可连接。');
@@ -1762,16 +1784,18 @@
 
   window.neowowCanvasRefresh = async function () {
     if (canvasBusy || !$('neowowCanvasConnection')) return;
+    const current = canvasRequestCurrent();
     canvasSetBusy(true);
     canvasFeedback('正在检查工具与连接状态…');
     try {
       const r = await fetch('/api/neowow/cli/status', { cache: 'no-store' });
       if (!r.ok) throw new Error();
-      renderCanvasStatus(await r.json());
+      const data = await r.json();
+      if (current()) renderCanvasStatus(data);
     } catch (_) {
-      canvasFeedback('暂时无法检查连接，请点击刷新重试。', 'error');
+      if (current()) canvasFeedback('暂时无法检查连接，请点击刷新重试。', 'error');
     } finally {
-      canvasSetBusy(false);
+      if (current()) canvasSetBusy(false);
     }
   };
 
@@ -1790,6 +1814,7 @@
       canvasFeedback('请先刷新状态，确认工具和运行环境已就绪。', 'error');
       return;
     }
+    const current = canvasRequestCurrent();
     canvasSetBusy(true, 'save');
     canvasFeedback('正在验证 Key，验证通过后会自动保存…');
     try {
@@ -1798,22 +1823,26 @@
         body: JSON.stringify({ apiKey: key }), cache: 'no-store',
       });
       const data = await r.json();
+      if (!current()) return;
       if (!r.ok) throw new Error(data.error || '连接失败，请稍后重试。');
       canvasEditing = false;
       if (typeof window.neowowCanvasResetWorkspace === 'function') window.neowowCanvasResetWorkspace();
       renderCanvasStatus(data);
       canvasFeedback('连接已保存。回到聊天，让 Agent 检查账号并开始创作。', 'success');
     } catch (e) {
-      canvasFeedback(e.message || '连接失败，请稍后重试。', 'error');
+      if (current()) canvasFeedback(e.message || '连接失败，请稍后重试。', 'error');
     } finally {
-      canvasSetBusy(false);
-      input.value = '';
-      if (canvasState.connected && !canvasEditing) $('neowowCanvasEditBtn').focus();
+      if (current()) {
+        canvasSetBusy(false);
+        input.value = '';
+        if (canvasState && canvasState.connected && !canvasEditing) $('neowowCanvasEditBtn').focus();
+      }
     }
   };
 
   window.neowowCanvasClear = async function () {
     if (canvasBusy) return;
+    const current = canvasRequestCurrent();
     canvasSetBusy(true, 'clear');
     canvasFeedback('正在移除当前 Profile 的连接…');
     try {
@@ -1822,14 +1851,15 @@
         body: JSON.stringify({ clear: true }), cache: 'no-store',
       });
       const data = await r.json();
+      if (!current()) return;
       if (!r.ok) throw new Error(data.error || '断开失败，请稍后重试。');
       canvasEditing = false;
       renderCanvasStatus(data);
       canvasFeedback('本地连接已断开，官网 Key 仍然有效。');
     } catch (e) {
-      canvasFeedback(e.message || '断开失败，请稍后重试。', 'error');
+      if (current()) canvasFeedback(e.message || '断开失败，请稍后重试。', 'error');
     } finally {
-      canvasSetBusy(false);
+      if (current()) canvasSetBusy(false);
     }
   };
 

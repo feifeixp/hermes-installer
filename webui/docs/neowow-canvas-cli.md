@@ -5,7 +5,8 @@ https://wlpaas.oss-cn-shanghai.aliyuncs.com/agent/neowow-canvas/neowow-canvas-sk
 
 当前内置版本为 `v0.5.0+cef7cd13.20261003T040441Z`。随应用发布更新，首次
 启动无需联网下载安装；已有 CLI 文件保留，Studio 的创作和凭据指引会同步更新。Docker 镜像已有
-Node.js，桌面端需要 Node.js 18 或更新版本。
+Node.js，桌面端需要 Node.js 18 或更新版本，以及支持 HOME 会话上下文的
+新版 Hermes Agent。旧版 Agent 暂停 Key 绑定并提示更新。
 
 ## 用户操作
 
@@ -49,7 +50,9 @@ Key 验证后保存在当前 Profile 的私有配置中；输入框在提交时�
 
 画布 Key 与 Studio 部署 Token、Coding Plan Key 不同，不能互换。公共共享
 实例不提供个人 Key 绑定；专属 Agent 实例或桌面端可以绑定。每个 Profile
-分别连接账号。CLI 运行在同一个操作系统用户下，文件权限与 Skill 指引防止
+分别连接账号。聊天使用官方 HOME／session ContextVars，并在终端读取共享
+快照后重新绑定本轮 HOME，防止并发 Profile 误用另一个账号；已有网页在 Profile
+切换时清除结果并丢弃迟到响应。CLI 运行在同一个操作系统用户下，文件权限与 Skill 指引防止
 误泄漏；这不是对 Agent 文件访问的强制密钥隔离。
 
 ## 一键生成并绑定的下一步
