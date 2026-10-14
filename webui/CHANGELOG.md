@@ -40,6 +40,18 @@
 
 - Expanded user-report redaction for emails, GitHub tokens, AWS access keys, cookies, client secrets, passwords, and sensitive URL query parameters. Login-page reports are same-origin checked and rate limited.
 
+## [v1.5.34] — 2026-10-14 — Desktop login startup repair
+
+### Fixed
+
+- Optional CDN syntax highlighting, terminal libraries and styles no longer
+  block local login scripts or trigger the eight-second startup timeout.
+- Mark login status as resolved before Coding Plan/model discovery. Bound
+  login, readiness and identity requests, and expose retryable readiness/model
+  failures without erasing credentials or bypassing activation.
+- Stamp WebUI version into desktop bundles so upgrades request new script URLs
+  instead of caching `v=unknown` resources indefinitely.
+
 ## [v1.5.33] — 2026-10-14 — NeoWoW canvas creation and delivery
 
 ### Added

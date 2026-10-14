@@ -36,7 +36,7 @@ HOMEPAGE         = "https://neowow.studio"
 SUPPORT_URL      = "https://neowow.studio"
 
 # ── Fallback version (updated manually when there's no CI / git) ────────────
-_FALLBACK_VERSION = "1.5.33"
+_FALLBACK_VERSION = "1.5.34"
 
 
 def _resolve_version() -> str:
