@@ -32,6 +32,9 @@ except Exception:  # pragma: no cover — defensive for older Python
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 REPO_PATH = "NousResearch/hermes-agent"
+# Keep desktop bundles compatible with bootstrap's venv contract and the
+# context-safe canvas terminal bridge. Match docker/Dockerfile.webui.
+AGENT_REF = os.environ.get("HERMES_AGENT_REF", "6cf572c9e5d88a33e0e51cfc5bcfe47f02682731")
 
 # Mirror list — tried in order until one succeeds
 CLONE_URLS = [
@@ -81,6 +84,19 @@ def _try_clone() -> bool:
             timeout=120,
         )
         if result.returncode == 0:
+            fetched = subprocess.run(
+                ["git", "-C", str(CLONE_DIR), "fetch", "--depth=1", "origin", AGENT_REF],
+                check=False, timeout=120,
+            )
+            if fetched.returncode != 0:
+                print(f"  ✗ 无法取得固定 Agent 版本（{label}），尝试下一个...")
+                continue
+            checked = subprocess.run(
+                ["git", "-C", str(CLONE_DIR), "checkout", "--detach", "FETCH_HEAD"],
+                check=False, timeout=60,
+            )
+            if checked.returncode != 0:
+                continue
             print(f"  ✓ 克隆成功（{label}）")
             return True
         print(f"  ✗ {label} 失败，尝试下一个...")
