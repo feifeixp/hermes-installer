@@ -40,6 +40,26 @@
 
 - Expanded user-report redaction for emails, GitHub tokens, AWS access keys, cookies, client secrets, passwords, and sensitive URL query parameters. Login-page reports are same-origin checked and rate limited.
 
+## [v1.5.35] — 2026-10-14 — Script-first video creation
+
+### Added
+
+- Video and storyboard requests now start with story development and a complete
+  dialogue/narration script using the current chat model, saved to canvas text
+  nodes for review before media generation.
+- Editable script review, revision requests, target duration/aspect controls and
+  loading completed text nodes into the script editor. Text or brief changes
+  invalidate approval; project/account switches discard drafts and stale results.
+
+### Changed
+
+- Confirmed scripts become numbered shots with exact lines, feasible durations,
+  varied action/camera and continuity. Per-shot/reference-media cost approval is
+  separate from script approval. Delivery reports ordered clips and their actual
+  status; it does not claim automatic composition into a final movie.
+- Installed Studio Skill guidance also applies script-first review to chat video
+  requests. Image, audio and standalone text workflows keep their existing path.
+
 ## [v1.5.34] — 2026-10-14 — Desktop login startup repair
 
 ### Fixed

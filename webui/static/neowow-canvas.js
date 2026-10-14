@@ -7,6 +7,37 @@
   let connectionBusy = false;
   const blobUrls = [];
   const profileNow = () => typeof S !== 'undefined' ? S.activeProfile || 'default' : 'default';
+  const storyMode = () => ['video', 'storyboard'].includes($('neowowCanvasKind').value);
+  let scriptSource = '';
+
+  function resetScript() {
+    $('neowowCanvasScript').value = '';
+    $('neowowCanvasRevision').value = '';
+    scriptSource = '';
+    window.neowowCanvasScriptChanged();
+  }
+  window.neowowCanvasScriptApprovalChanged = function () {
+    const hasScript = !!$('neowowCanvasScript').value.trim();
+    if (!hasScript) $('neowowCanvasScriptConfirmed').checked = false;
+    $('neowowCanvasScriptApprovalStatus').textContent = $('neowowCanvasRevision').value.trim() ? '有待处理的修改意见，请先修订并载入新稿，或清空意见。'
+      : !hasScript ? '先载入或填写逐字稿，再确认内容。'
+      : $('neowowCanvasScriptConfirmed').checked ? '逐字稿已确认；下一步先审阅分镜与积分。' : '逐字稿待确认，请审阅后勾选。';
+    controls();
+  };
+  window.neowowCanvasScriptChanged = function () {
+    $('neowowCanvasScriptConfirmed').checked = false;
+    $('neowowCanvasScriptSource').textContent = scriptSource ? '当前逐字稿 · 来自 ' + scriptSource + '（可编辑）' : '当前逐字稿 · 手动填写或待载入';
+    window.neowowCanvasScriptApprovalChanged();
+  };
+  window.neowowCanvasKindChanged = function (invalidate = true) {
+    const story = storyMode();
+    ['neowowCanvasStorySteps', 'neowowCanvasStoryOptions', 'neowowCanvasScriptReview'].forEach(id => { $(id).hidden = !story; });
+    $('neowowCanvasStartBtn').textContent = story ? '生成剧本逐字稿' : '交给 Agent 创作';
+    $('neowowCanvasClipsBtn').textContent = $('neowowCanvasKind').value === 'storyboard' ? '准备分镜图片方案' : '准备分镜与视频方案';
+    $('neowowCanvasCreationHint').textContent = story ? '使用当前聊天的大模型写剧本与完整对白／旁白，先审阅文字，再创作片段。'
+      : '在当前聊天中制作。Agent 会先展示方案和预估积分，确认后再生成。';
+    if (invalidate) window.neowowCanvasScriptChanged();
+  };
 
   function feedback(message, error = false) {
     const el = $('neowowCanvasWorkStatus');
@@ -27,12 +58,17 @@
     root.setAttribute('aria-busy', String(disabled));
     root.querySelectorAll('button,input,select,textarea').forEach(el => { el.disabled = disabled; });
     $('neowowCanvasStartBtn').disabled = disabled || !active;
+    $('neowowCanvasLoadScriptBtn').disabled = disabled || !active;
+    $('neowowCanvasReviseBtn').disabled = disabled || !active || !storyMode() || !$('neowowCanvasScript').value.trim();
+    $('neowowCanvasScriptConfirmed').disabled = disabled || !active || !$('neowowCanvasScript').value.trim();
+    $('neowowCanvasClipsBtn').disabled = disabled || !active || !storyMode() || !$('neowowCanvasScript').value.trim() || !$('neowowCanvasScriptConfirmed').checked || !!$('neowowCanvasRevision').value.trim();
     $('neowowCanvasResultsRefreshBtn').disabled = disabled || !active;
     $('neowowCanvasPrevPage').disabled = disabled || page <= 1;
     $('neowowCanvasNextPage').disabled = disabled || $('neowowCanvasNextPage').dataset.hasMore !== 'true';
   }
   function setActive(value) {
     active = value;
+    resetScript();
     clearResults();
     $('neowowCanvasClosed').checked = false;
     $('neowowCanvasActiveProject').textContent = active ? '当前画布：' + active.title : '先载入并选择一张画布。';
@@ -58,6 +94,7 @@
     connected = !!value;
     profile = profileNow();
     root.hidden = !connected;
+    window.neowowCanvasKindChanged(false);
   };
   window.neowowCanvasWorkspaceBusy = function (value) {
     connectionBusy = !!value;
@@ -150,15 +187,24 @@
     if (S.session && (S.session.profile || 'default') !== profileNow()) throw new Error('当前聊天使用其他 Profile，请在当前 Profile 新建聊天后创作。');
     if (typeof isCompressionUiRunning === 'function' && isCompressionUiRunning()) throw new Error('聊天正在整理上下文，请稍后再发起创作。');
   }
-  window.neowowCanvasStartCreation = async function (event) {
-    event.preventDefault();
+  async function submitCreation(stage) {
     if (!active) { feedback('请先选择目标画布。', true); return; }
-    const prompt = $('neowowCanvasPrompt').value.trim();
+    const story = storyMode();
+    const prompt = $('neowowCanvasPrompt').value.trim() || (story && ['revise', 'clips'].includes(stage) ? '按现有剧本创作。' : '');
     const canvasClosed = $('neowowCanvasClosed').checked;
     if (!prompt || !canvasClosed) { feedback('请填写创作要求，并确认目标画布网页已关闭。', true); return; }
-    await action('正在准备创作任务…', async current => {
+    const script = $('neowowCanvasScript').value.trim();
+    if (story && ['revise', 'clips'].includes(stage) && !script) { feedback('请先载入或填写逐字稿。', true); return; }
+    if (story && stage === 'clips' && !$('neowowCanvasScriptConfirmed').checked) { feedback('请先审阅并确认当前逐字稿。', true); return; }
+    if (story && stage === 'clips' && $('neowowCanvasRevision').value.trim()) { feedback('请先处理修改意见并载入修订稿，或清空意见后重新确认。', true); return; }
+    const duration = Number($('neowowCanvasDuration').value), aspect = $('neowowCanvasAspect').value;
+    if (story && (!Number.isInteger(duration) || duration < 10 || duration > 600)) { feedback('目标总时长应为 10–600 秒的整数。', true); return; }
+    if (story && stage === 'revise' && !$('neowowCanvasRevision').value.trim()) { feedback('请填写修改意见。', true); return; }
+    await action('正在准备' + (story && stage !== 'clips' ? '剧本写作' : '创作') + '任务…', async current => {
       chatAvailable();
-      const data = await request('brief', { prompt, canvasClosed, projectId: active.sessionId, kind: $('neowowCanvasKind').value });
+      const data = await request('brief', { prompt,
+        canvasClosed, projectId: active.sessionId, kind: $('neowowCanvasKind').value,
+        ...(story ? { stage, duration, aspect, script, revision: $('neowowCanvasRevision').value.trim(), scriptConfirmed: $('neowowCanvasScriptConfirmed').checked } : {}) });
       if (!current()) return;
       chatAvailable();
       if (typeof switchPanel !== 'function' || await switchPanel('chat') === false) throw new Error('请先完成当前设置，再切换到聊天创作。');
@@ -171,9 +217,35 @@
       Promise.resolve(send()).catch(() => {
         if (typeof showToast === 'function') showToast('创作任务未发送成功，请在聊天中重试。', 3000, 'error');
       });
-      $('neowowCanvasPrompt').value = '';
-      feedback('任务已交给当前聊天。生成前请确认方案与积分，完成后回来提取结果。');
+      if (!story) $('neowowCanvasPrompt').value = '';
+      if (story && stage !== 'clips') window.neowowCanvasScriptChanged();
+      feedback(story && stage !== 'clips' ? '剧本任务已交给当前聊天。写完后回来提取文本，载入、修改并确认逐字稿。'
+        : '任务已交给当前聊天。请确认分镜方案与积分，完成后回来提取结果。');
     });
+  }
+  window.neowowCanvasStartCreation = function (event) {
+    event.preventDefault();
+    return submitCreation('script');
+  };
+  window.neowowCanvasReviseScript = function () { return submitCreation('revise'); };
+  window.neowowCanvasPrepareClips = function () { return submitCreation('clips'); };
+
+  function loadScript(item, projectId, resultEpoch) {
+    if (busy || connectionBusy || !connected || resultEpoch !== epoch || !active || active.sessionId !== projectId) return;
+    if (item.text.length > 20000) { feedback('该文本超过 20000 字，请先精简后填写逐字稿。', true); return; }
+    if ($('neowowCanvasScript').value.trim() && $('neowowCanvasScript').value !== item.text) {
+      // Keep unsent edits unless the user explicitly chooses replacement.
+      if (!window.confirm('载入此文本会替换当前逐字稿和修改意见，是否继续？')) return;
+    }
+    if (!storyMode()) { $('neowowCanvasKind').value = 'video'; window.neowowCanvasKindChanged(); }
+    $('neowowCanvasScript').value = item.text;
+    $('neowowCanvasRevision').value = '';
+    scriptSource = item.label + ' · ' + item.nodeKey;
+    window.neowowCanvasScriptChanged();
+    $('neowowCanvasScript').focus();
+    $('neowowCanvasScript').scrollTop = 0;
+    if (typeof $('neowowCanvasScript').setSelectionRange === 'function') $('neowowCanvasScript').setSelectionRange(0, 0);
+    feedback('已载入逐字稿。请审阅修改，确认文字后再准备分镜。');
   };
   function node(tag, className, text) {
     const el = document.createElement(tag);
@@ -184,14 +256,20 @@
   function renderResults(data) {
     clearResults();
     const grid = $('neowowCanvasResults');
+    const projectId = active.sessionId, resultEpoch = epoch;
     for (const item of data.results) {
       const card = node('article', 'canvas-result');
       card.append(node('h4', '', item.label));
       const link = node('a', 'canvas-button', item.kind === 'text' ? '下载文本' : '打开原文件 ↗');
+      const actions = node('div', 'canvas-result-actions');
       if (item.kind === 'text') {
         card.append(node('pre', 'canvas-result-text', item.text));
         const url = URL.createObjectURL(new Blob([item.text], { type: 'text/plain;charset=utf-8' }));
         blobUrls.push(url); link.href = url; link.download = 'canvas-' + item.nodeKey + '.txt';
+        const use = node('button', 'canvas-button', '载入逐字稿');
+        use.type = 'button';
+        use.addEventListener('click', () => loadScript(item, projectId, resultEpoch));
+        actions.append(use);
       } else {
         let url;
         try { url = new URL(item.url); } catch (_) { continue; }
@@ -207,7 +285,7 @@
         card.append(media);
         link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
       }
-      card.append(link); grid.append(card);
+      actions.append(link); card.append(actions); grid.append(card);
     }
     const counts = data.counts;
     $('neowowCanvasResultsSummary').textContent = `已完成 ${counts.success} 个节点 · 生成中 ${counts.pending} · 失败 ${counts.failed}`;

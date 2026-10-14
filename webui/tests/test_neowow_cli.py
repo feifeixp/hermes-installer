@@ -32,6 +32,8 @@ def test_offline_bundle_and_launcher(cli):
     text = (target / "SKILL.md").read_text()
     assert text.startswith("---\nname: neowow-canvas")
     assert "Never ask for passwords or API keys in chat" in text
+    assert "script-first by default" in text
+    assert "Script approval is separate from cost approval" in text
     (target / "custom-note.txt").write_text("preserve")
     cli.ensure_installed()
     assert (target / "custom-note.txt").read_text() == "preserve"

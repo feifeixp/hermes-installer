@@ -61,7 +61,7 @@ def test_create_requires_literal_ack_before_cli_write(canvas, monkeypatch):
 
 def test_creation_brief_requires_current_scope_and_cost_confirmation(canvas):
     canvas._save_active(canvas.cli._home(), {"sessionId": "123", "title": "作品"}, canvas._credentials(canvas.cli._home()))
-    body = {"projectId": "123", "canvasClosed": True, "kind": "video", "prompt": "雨夜街头"}
+    body = {"projectId": "123", "canvasClosed": True, "kind": "image", "prompt": "雨夜街头"}
     brief = canvas.creation_brief(body)
     assert "sessionId：123" in brief["message"]
     assert "确认后再提交付费生成" in brief["message"]
@@ -70,6 +70,54 @@ def test_creation_brief_requires_current_scope_and_cost_confirmation(canvas):
     for change in ({"canvasClosed": "true"}, {"projectId": "456"}, {"kind": "command"}):
         with pytest.raises(ValueError):
             canvas.creation_brief({**body, **change})
+
+
+def _story_body(canvas):
+    canvas._save_active(canvas.cli._home(), {"sessionId": "123", "title": "作品"}, canvas._credentials(canvas.cli._home()))
+    return {"projectId": "123", "canvasClosed": True, "kind": "video", "prompt": "雨夜街头"}
+
+
+def test_video_defaults_to_script_writing_before_media(canvas, monkeypatch):
+    # Preparing the writing request itself must never invoke CLI generation.
+    monkeypatch.setattr(canvas, "_run", lambda *args: pytest.fail("No CLI during brief preparation"))
+    brief = canvas.creation_brief(_story_body(canvas))
+    assert brief["stage"] == "script"
+    for expected in ("当前聊天的大模型", "逐字对白／旁白", "node create -t text --content", "停止并请我审阅修改", "不要执行 gen text", "sessionId：123"):
+        assert expected in brief["message"]
+    assert "dummy-private-key" not in json.dumps(brief)
+
+
+@pytest.mark.parametrize("change", [
+    {"stage": "clips"}, {"stage": "clips", "script": "逐字台词", "scriptConfirmed": "true"},
+    {"stage": "clips", "script": "逐字台词", "scriptConfirmed": 1},
+    {"stage": "clips", "script": "逐字台词", "scriptConfirmed": True, "revision": "还要修改"},
+    {"stage": "revise", "script": "逐字台词"}, {"stage": "revise", "revision": "强化冲突"},
+    {"script": "字" * 20001}, {"script": []}, {"stage": []}, {"stage": "generate"},
+    {"duration": True}, {"duration": 9}, {"duration": 601}, {"duration": "60"},
+    {"aspect": []}, {"aspect": "4:3"},
+])
+def test_script_workflow_rejects_missing_approval_and_invalid_inputs(canvas, change):
+    with pytest.raises(ValueError):
+        canvas.creation_brief({**_story_body(canvas), **change})
+
+
+def test_revise_preserves_exact_script_and_stops_for_review(canvas):
+    script = '女孩：「你还记得我吗？」\n旁白：雨忽然停了。'
+    message = canvas.creation_brief({**_story_body(canvas), "stage": "revise", "script": script,
+                                    "revision": "加强冲突，保留旁白", "duration": 30, "aspect": "9:16"})["message"]
+    for expected in (script, "加强冲突，保留旁白", "30 秒", "9:16", "保留旧版本", "停止并请我审阅修改"):
+        assert expected in message
+
+
+@pytest.mark.parametrize("kind", ["video", "storyboard"])
+def test_confirmed_script_builds_ordered_shots_with_separate_cost_approval(canvas, kind):
+    script = '甲：「等等！」\n乙：「我会回来。」'
+    brief = canvas.creation_brief({**_story_body(canvas), "kind": kind, "stage": "clips", "script": script,
+                                   "scriptConfirmed": True})
+    for expected in (script, "每句台词必须有对应片段", "不擅自增删", "每个片段", "总计", "等我确认方案与积分",
+                     "--universal --model neo-video-2-0", "实际状态", "不是单条生成时长", "不把分镜片段宣称为已拼接成片"):
+        assert expected in brief["message"]
+    assert ("逐个生成视频片段" in brief["message"]) == (kind == "video")
 
 
 def test_only_final_node_outputs_are_extracted(canvas):

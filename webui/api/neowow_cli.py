@@ -41,6 +41,19 @@ Report actual status, model, nodeKey, and final result URLs/text. Never label
 PENDING or FAILED work as delivered. Display image/video/audio results in the
 chat with Markdown previews when supported, plus usable original-file links.
 The settings result panel can then extract the same completed nodes.
+
+Video/storyboard creation is script-first by default. Use the current chat model
+to develop the story and a complete verbatim dialogue/narration script with
+timing, action and emotion; save it as a text node using node create --content.
+Show the full script and stop for review. A script/revise stage must not run any
+gen command. User-approved existing scripts can proceed without rewriting.
+Only after script approval, map every line to numbered shots with feasible
+durations, varied camera/action and consistent characters, locations and voices.
+Script approval is separate from cost approval: discover supported model limits,
+dry-run all clips/reference media, show per-shot and total costs, then wait for
+explicit approval before paid generation. Preserve approved dialogue exactly.
+Deliver ordered clips with matching lines, actual status, node keys and URLs.
+Do not claim the clips are a stitched movie: CLI composition is not documented.
 """
 
 
